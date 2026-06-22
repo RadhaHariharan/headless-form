@@ -3,14 +3,15 @@ import { CommonModule } from '@angular/common';
 import { ContactFormComponent } from './contact-form.component.js';
 import { UncontrolledFormComponent } from './uncontrolled-form.component.js';
 import { ListFormComponent } from './list-form.component.js';
+import { LargeFormComponent } from './large-form.component.js';
 
-type TabId = 'controlled' | 'uncontrolled' | 'list';
+type TabId = 'controlled' | 'uncontrolled' | 'list' | 'large';
 
 @Component({
   standalone: true,
   selector: 'app-root',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, ContactFormComponent, UncontrolledFormComponent, ListFormComponent],
+  imports: [CommonModule, ContactFormComponent, UncontrolledFormComponent, ListFormComponent, LargeFormComponent],
   template: `
     <h1>&#64;headless-form/angular <span class="badge">Angular 18</span></h1>
 
@@ -27,6 +28,7 @@ type TabId = 'controlled' | 'uncontrolled' | 'list';
       <app-contact-form *ngIf="activeTab === 'controlled'" />
       <app-uncontrolled-form *ngIf="activeTab === 'uncontrolled'" />
       <app-list-form *ngIf="activeTab === 'list'" />
+      <app-large-form *ngIf="activeTab === 'large'" />
     </div>
   `,
 })
@@ -36,5 +38,6 @@ export class AppComponent {
     { id: 'controlled', label: 'Controlled' },
     { id: 'uncontrolled', label: 'Uncontrolled' },
     { id: 'list', label: 'List Fields' },
+    { id: 'large', label: 'Large Form (120 fields)' },
   ];
 }

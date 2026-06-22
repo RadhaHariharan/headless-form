@@ -240,14 +240,22 @@ preserves the exact UTC moment. Use those when you genuinely mean an absolute ti
 
 ---
 
-## Using with a form
+## Using with the form's `validate` (existing validators)
 
-The field validators have signature `(value, fieldName) => string | null`, while a form's
-`validate` rule expects `(value, values, path) => error | null`. Bridge them with a one-line
-adapter:
+Yes — the field validators compose with the existing form-rule validators (`isNotEmpty`,
+`isEmail`, …) in the same `validate` object. The only difference is signature: field
+validators are `(value, fieldName) => string | null`, while form rules are
+`(value, values, path) => error | null`. Core ships a first-class adapter,
+**`toValidationRule`**, so you don't have to hand-roll the bridge:
 
 ```tsx
-import { useForm, createStringValidator, createNumberValidator } from '@headless-form/react';
+import {
+  useForm,
+  isEmail,                 // existing form-rule validator
+  createStringValidator,   // new field validator
+  createNumberValidator,
+  toValidationRule,        // the bridge
+} from '@headless-form/react';
 
 const nameRule = createStringValidator({ minLength: 3, allowedCharacters: 'alphabetic', allowSpaces: true });
 const ageRule = createNumberValidator({ min: 18, max: 120, integer: true });
@@ -255,10 +263,11 @@ const ageRule = createNumberValidator({ min: 18, max: 120, integer: true });
 function SignupForm() {
   const form = useForm({
     mode: 'uncontrolled',
-    initialValues: { name: '', age: '' },
+    initialValues: { name: '', age: '', email: '' },
     validate: {
-      name: (value) => nameRule(value as string, 'Name'),
-      age: (value) => ageRule(value, 'Age'),
+      name: toValidationRule(nameRule, 'Name'),
+      age: toValidationRule(ageRule),       // fieldName inferred from the path → "Age"
+      email: isEmail('Invalid email'),       // existing validators still work side-by-side
     },
   });
 
@@ -272,19 +281,17 @@ function SignupForm() {
 }
 ```
 
-If you bridge often, wrap it once:
+`toValidationRule(validator, fieldName?)`:
 
-```typescript
-import type { FieldValidatorFunction } from '@headless-form/core';
+- Forwards the field value to your validator and supplies the `fieldName`.
+- When `fieldName` is omitted, it derives one from the field's **path** via `humanizeFieldName`
+  (`'user.email'` → `'Email'`, `'items.0.qty'` → `'Qty'`, `'firstName'` → `'First Name'`).
+- Returns a standard `ValidationRule`, so it sits next to `isNotEmpty`, `isEmail`,
+  `schemaResolver`, or any custom `(value, values, path) => …` rule.
 
-/** Adapt a field validator into a form `validate` rule. */
-export const asRule =
-  <T,>(validator: FieldValidatorFunction<T>, fieldName: string) =>
-  (value: T) =>
-    validator(value, fieldName);
-
-// validate: { name: asRule(nameRule, 'Name') }
-```
+> **It's available everywhere.** `toValidationRule` (and every `create*Validator`) is exported
+> from `@headless-form/core`, **and** re-exported from `@headless-form/react` and
+> `@headless-form/angular`, so you import from whichever package you already use.
 
 ### Standalone (no form store)
 

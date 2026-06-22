@@ -3,9 +3,13 @@ import {
   createFormStore,
   isEmail,
   isNotEmpty,
+  matchesField,
   createNumberValidator,
+  createStringValidator,
   createDateValidator,
+  toValidationRule,
 } from '@headless-form/core';
+import type { FormRulesRecord } from '@headless-form/core';
 
 /**
  * Vanilla example for `@headless-form`.
@@ -48,6 +52,7 @@ const docs: Doc[] = Object.entries(modules)
   .sort((a, b) => a.slug.localeCompare(b.slug));
 
 const DEMO_SLUG = 'live-demo';
+const LARGE_SLUG = 'large-form';
 
 const navEl = document.querySelector<HTMLElement>('#nav')!;
 const contentEl = document.querySelector<HTMLElement>('#content')!;
@@ -59,6 +64,9 @@ function buildNav(): void {
   const demoLink =
     `<a href="#${DEMO_SLUG}" data-slug="${DEMO_SLUG}" class="demo-link">` +
     `<span class="num">▶</span>Live Demo</a>`;
+  const largeLink =
+    `<a href="#${LARGE_SLUG}" data-slug="${LARGE_SLUG}" class="demo-link">` +
+    `<span class="num">▶</span>Large Form (120 fields)</a>`;
   const docLinks = docs
     .map((doc) => {
       const num = doc.slug.split('-')[0] ?? '';
@@ -66,7 +74,7 @@ function buildNav(): void {
         `<span class="num">${num}</span>${doc.title}</a>`;
     })
     .join('');
-  navEl.innerHTML = demoLink + docLinks;
+  navEl.innerHTML = demoLink + largeLink + docLinks;
 }
 
 function setActive(slug: string): void {
@@ -166,10 +174,12 @@ function wireDemo(): void {
     initialValues: { name: '', email: '', age: '', dob: '' },
     validateInputOnBlur: true,
     validate: {
+      // Existing form-rule validators and the new field validators (bridged with
+      // `toValidationRule`) live side by side in the same `validate` object.
       name: isNotEmpty('Name is required'),
       email: isEmail('Invalid email address'),
-      age: (value) => ageRule(value, 'Age'),
-      dob: (value) => dobRule(value, 'Date of birth'),
+      age: toValidationRule(ageRule, 'Age'),
+      dob: toValidationRule(dobRule, 'Date of birth'),
     },
   });
 
@@ -224,17 +234,190 @@ function wireDemo(): void {
   stateEl.textContent = JSON.stringify(form.getValues(), null, 2);
 }
 
+// ── Large form (120 fields) — re-render / notification benchmark ──────────────
+
+const LARGE_FIELD_COUNT = 120;
+/** Keys f0…f119. The first six have special roles with complex validators. */
+const LARGE_KEYS = Array.from({ length: LARGE_FIELD_COUNT }, (_, i) => `f${i}`);
+
+const LARGE_LABELS: Record<string, string> = {
+  f0: 'Email',
+  f1: 'Confirm email',
+  f2: 'Age',
+  f3: 'Username',
+  f4: 'Birth date',
+  f5: 'Promo code (async)',
+};
+const LARGE_TYPES: Record<string, string> = { f2: 'number', f4: 'date' };
+
+function renderLargeForm(): void {
+  const cells = LARGE_KEYS.map((k, i) => {
+    const label = LARGE_LABELS[k] ?? `Field ${i}`;
+    const type = LARGE_TYPES[k] ?? 'text';
+    const special = LARGE_LABELS[k] ? ' lf-special' : '';
+    return (
+      `<div class="lf-cell${special}">` +
+      `<label for="lf-${k}">${label}</label>` +
+      `<input id="lf-${k}" data-key="${k}" type="${type}" />` +
+      `<div class="lf-err" id="lf-${k}-err"></div>` +
+      `</div>`
+    );
+  }).join('');
+
+  contentEl.innerHTML = `
+    <h1>Large Form — ${LARGE_FIELD_COUNT} fields</h1>
+    <p>
+      An <strong>uncontrolled</strong> form with ${LARGE_FIELD_COUNT} fields. The first six use
+      complex validators (email, cross-field email match, number, string, date, and an
+      <em>async</em> promo-code check). The rest are plain text fields. The counters below are
+      the whole point: in uncontrolled mode, <strong>typing never notifies subscribers</strong>
+      — so a UI framework bound to the store does <strong>zero re-renders per keystroke</strong>,
+      no matter how many fields there are.
+    </p>
+    <div class="lf-stats">
+      <span>Keystrokes: <b id="lf-keystrokes">0</b></span>
+      <span>Store notifications: <b id="lf-notifs">0</b></span>
+      <span>Validations run: <b id="lf-valruns">0</b></span>
+    </div>
+    <div class="lf-actions">
+      <button type="button" id="lf-simulate">Simulate 500 keystrokes</button>
+      <button type="button" id="lf-validate">Validate all</button>
+      <button type="button" id="lf-reset" class="secondary">Reset</button>
+    </div>
+    <p id="lf-result" class="lf-result"></p>
+    <form id="lf-form" novalidate><div class="lf-grid">${cells}</div></form>
+  `;
+  setActive(LARGE_SLUG);
+  wireLargeForm();
+  mainEl.scrollTo({ top: 0 });
+}
+
+function wireLargeForm(): void {
+  let valRuns = 0;
+  const ageRule = createNumberValidator({ min: 18, max: 120, integer: true });
+  const userRule = createStringValidator({ minLength: 3, allowedCharacters: 'alphanumeric' });
+  const dobRule = createDateValidator({ inPast: true });
+
+  // Mix of existing form-rule validators, bridged field validators, a cross-field rule,
+  // and an async rule — all on a single store.
+  const validate: FormRulesRecord<Record<string, string>, string> = {
+    f0: isEmail('Enter a valid email'),
+    f1: matchesField('f0', 'Emails must match'),
+    f2: toValidationRule(ageRule, 'Age'),
+    f3: toValidationRule(userRule, 'Username'),
+    f4: toValidationRule(dobRule, 'Birth date'),
+    f5: async (value) => {
+      valRuns += 1;
+      await new Promise((r) => setTimeout(r, 120));
+      return String(value ?? '').toLowerCase() === 'taken' ? 'Promo code already used' : null;
+    },
+  };
+  // Make every 10th plain field required, to show validators scaling across the form.
+  for (let i = 6; i < LARGE_FIELD_COUNT; i += 10) {
+    validate[`f${i}`] = isNotEmpty(`Field ${i} is required`);
+  }
+
+  const initialValues = Object.fromEntries(LARGE_KEYS.map((k) => [k, ''])) as Record<string, string>;
+  const form = createFormStore<Record<string, string>, Record<string, string>, string>({
+    mode: 'uncontrolled',
+    initialValues,
+    validate,
+    validateInputOnBlur: true,
+  });
+
+  const keystrokesEl = document.querySelector<HTMLElement>('#lf-keystrokes')!;
+  const notifsEl = document.querySelector<HTMLElement>('#lf-notifs')!;
+  const valRunsEl = document.querySelector<HTMLElement>('#lf-valruns')!;
+  const resultEl = document.querySelector<HTMLElement>('#lf-result')!;
+  const formEl = document.querySelector<HTMLFormElement>('#lf-form')!;
+
+  let keystrokes = 0;
+  let notifs = 0;
+  form.subscribe(() => {
+    notifs += 1;
+    notifsEl.textContent = String(notifs);
+    const snap = form.getSnapshot();
+    // Paint errors only for fields that have one (cheap even with 120 fields).
+    for (const k of LARGE_KEYS) {
+      const errEl = document.querySelector<HTMLElement>(`#lf-${k}-err`);
+      if (!errEl) continue;
+      const err = snap.errors[k] as string | undefined;
+      errEl.textContent = err ?? '';
+    }
+  });
+
+  for (const k of LARGE_KEYS) {
+    const input = document.querySelector<HTMLInputElement>(`#lf-${k}`)!;
+    const props = form.getInputProps(k);
+    input.addEventListener('input', (e) => {
+      keystrokes += 1;
+      keystrokesEl.textContent = String(keystrokes);
+      props.onChange(e);
+    });
+    input.addEventListener('blur', () => props.onBlur?.());
+  }
+
+  // Programmatically type 10 chars into 50 fields = 500 input events, and report the
+  // change in store notifications (should be ~0 in uncontrolled mode).
+  document.querySelector<HTMLButtonElement>('#lf-simulate')!.addEventListener('click', () => {
+    const before = notifs;
+    for (let i = 0; i < 50; i++) {
+      const input = document.querySelector<HTMLInputElement>(`#lf-f${i}`)!;
+      for (let c = 0; c < 10; c++) {
+        input.value += 'x';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    }
+    const delta = notifs - before;
+    resultEl.textContent =
+      `Typed 500 characters across 50 fields → ${delta} store notification(s). ` +
+      `Uncontrolled mode means a bound framework would re-render ${delta} time(s) for all that typing.`;
+  });
+
+  document.querySelector<HTMLButtonElement>('#lf-validate')!.addEventListener('click', () => {
+    valRuns += 1;
+    valRunsEl.textContent = String(valRuns);
+    const result = form.validate();
+    Promise.resolve(result).then((r) => {
+      resultEl.textContent = r.hasErrors
+        ? `Validation finished: ${Object.keys(r.errors).length} field(s) have errors.`
+        : 'Validation finished: all fields valid.';
+    });
+  });
+
+  document.querySelector<HTMLButtonElement>('#lf-reset')!.addEventListener('click', () => {
+    form.reset();
+    for (const k of LARGE_KEYS) {
+      document.querySelector<HTMLInputElement>(`#lf-${k}`)!.value = '';
+    }
+    keystrokes = 0;
+    keystrokesEl.textContent = '0';
+    resultEl.textContent = '';
+  });
+
+  formEl.addEventListener(
+    'submit',
+    form.onSubmit(
+      (values) => window.alert(`Submitted ${Object.keys(values).length} fields.`),
+      () => {
+        /* inline errors */
+      },
+    ),
+  );
+}
+
 // ── Routing ──────────────────────────────────────────────────────────────────
 
 function currentSlug(): string {
   const hash = location.hash.replace(/^#/, '');
-  if (hash === DEMO_SLUG) return DEMO_SLUG;
+  if (hash === DEMO_SLUG || hash === LARGE_SLUG) return hash;
   return docs.some((d) => d.slug === hash) ? hash : DEMO_SLUG;
 }
 
 function route(): void {
   const slug = currentSlug();
   if (slug === DEMO_SLUG) renderDemo();
+  else if (slug === LARGE_SLUG) renderLargeForm();
   else renderDoc(slug);
 }
 

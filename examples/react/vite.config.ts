@@ -10,4 +10,8 @@ export default defineConfig({
       '@headless-form/react': resolve(__dirname, '../../packages/react/src/index.ts'),
     },
   },
+  server: {
+    port: 5175,
+    strictPort: true,
+  },
 });

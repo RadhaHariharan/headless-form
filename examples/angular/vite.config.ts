@@ -11,4 +11,8 @@ export default defineConfig({
   esbuild: {
     target: 'ES2022',
   },
+  server: {
+    port: 5174,
+    strictPort: true,
+  },
 });

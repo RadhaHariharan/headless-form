@@ -56,6 +56,9 @@ importers:
       '@angular/common':
         specifier: ^18.0.0
         version: 18.2.14(@angular/core@18.2.14(rxjs@7.8.2)(zone.js@0.14.10))(rxjs@7.8.2)
+      '@angular/compiler':
+        specifier: ^18.0.0
+        version: 18.2.14(@angular/core@18.2.14(rxjs@7.8.2)(zone.js@0.14.10))
       '@angular/core':
         specifier: ^18.0.0
         version: 18.2.14(rxjs@7.8.2)(zone.js@0.14.10)

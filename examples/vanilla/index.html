@@ -85,6 +85,28 @@
       padding: 1rem 1.25rem; border-radius: 8px; font-size: .825rem; margin-top: .75rem;
     }
 
+    /* ── Large form ──────────────────────────────────────────── */
+    .lf-stats { display: flex; gap: 1.5rem; flex-wrap: wrap; font-size: .9rem; margin: 1rem 0; }
+    .lf-stats b { color: var(--accent); font-variant-numeric: tabular-nums; }
+    .lf-actions { display: flex; gap: .5rem; flex-wrap: wrap; margin: .75rem 0; }
+    .lf-actions button {
+      padding: .5rem 1rem; background: var(--accent); color: #fff;
+      border: none; border-radius: 6px; cursor: pointer; font-size: .875rem;
+    }
+    .lf-actions button.secondary { background: #718096; }
+    .lf-result { font-size: .875rem; color: var(--text); min-height: 1.25rem; font-weight: 600; }
+    .lf-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: .5rem .75rem; margin-top: 1rem;
+    }
+    .lf-cell { display: flex; flex-direction: column; }
+    .lf-cell label { font-size: .7rem; color: var(--muted); margin-bottom: .15rem; }
+    .lf-cell.lf-special label { color: var(--accent); font-weight: 700; }
+    .lf-cell input {
+      padding: .35rem .45rem; border: 1px solid var(--border); border-radius: 5px; font-size: .85rem;
+    }
+    .lf-err { color: #e53e3e; font-size: .7rem; min-height: .8rem; }
+
     /* ── Content ─────────────────────────────────────────────── */
     main {
       overflow-y: auto;

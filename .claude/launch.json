@@ -6,6 +6,18 @@
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--filter", "@headless-form/example-vanilla", "dev"],
       "port": 5173
+    },
+    {
+      "name": "angular",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@headless-form/example-angular", "dev"],
+      "port": 5174
+    },
+    {
+      "name": "react",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@headless-form/example-react", "dev"],
+      "port": 5175
     }
   ]
 }

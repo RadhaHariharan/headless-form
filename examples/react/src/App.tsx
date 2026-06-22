@@ -4,6 +4,7 @@ import { UncontrolledForm } from './examples/UncontrolledForm.js';
 import { ListForm } from './examples/ListForm.js';
 import { AsyncValidationForm } from './examples/AsyncValidationForm.js';
 import { NestedForm } from './examples/NestedForm.js';
+import { LargeForm } from './examples/LargeForm.js';
 
 const TABS = [
   { id: 'controlled', label: 'Controlled' },
@@ -11,6 +12,7 @@ const TABS = [
   { id: 'list', label: 'List Fields' },
   { id: 'async', label: 'Async Validation' },
   { id: 'nested', label: 'Nested Values' },
+  { id: 'large', label: 'Large Form (120 fields)' },
 ] as const;
 
 type TabId = (typeof TABS)[number]['id'];
@@ -51,6 +53,7 @@ export function App() {
         {tab === 'list' && <ListForm />}
         {tab === 'async' && <AsyncValidationForm />}
         {tab === 'nested' && <NestedForm />}
+        {tab === 'large' && <LargeForm />}
       </div>
     </div>
   );

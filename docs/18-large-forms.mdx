@@ -1,0 +1,284 @@
+# Large Forms & Performance (100+ fields)
+
+`headless-form` is built for large forms. This page explains **how re-renders work**, why the
+cost stays flat as field count grows, and shows runnable patterns for **100+ field** forms with
+**custom and complex validators** in React, Angular, and vanilla JS.
+
+> There is a live, runnable **Large Form (120 fields)** demo in the vanilla example — open it
+> from the sidebar. Typing 500 characters across 50 of its fields produces **0 store
+> notifications**, i.e. a bound framework would do **0 re-renders** for all that typing.
+
+---
+
+## The re-render model
+
+A form store keeps two kinds of state:
+
+1. **Values** — what the user types. Held in a mutable ref.
+2. **Observable state** — `errors`, `touched`, `dirty`, `validating`, `submitting`,
+   `initialized`, plus `fieldKeys` / `formKey`. This is the **snapshot** that UI bindings
+   subscribe to.
+
+**Values are deliberately not in the snapshot.** Subscribers are only notified when observable
+state changes. The mode decides whether typing touches observable state:
+
+| Mode | Per keystroke | Re-renders while typing | Input value source |
+|------|---------------|-------------------------|--------------------|
+| `uncontrolled` (default rec.) | updates the value ref only, **no notification** | **0** | DOM (`defaultValue`) |
+| `controlled` | updates value **and** notifies | 1 per keystroke | store (`value`) |
+
+In uncontrolled mode, `setFieldValue` is called with `forceUpdate: false`, which skips the
+subscriber notification entirely (the one exception: if the keystroke *clears an existing
+error*, that's an observable change, so it notifies once). Validation on blur/submit updates
+`errors`, which notifies once — but because inputs are uncontrolled, that re-render does **not**
+reset what the user typed.
+
+**Why this scales:** notification cost is O(subscribers), not O(fields). A 30-field form and a
+300-field form both cost **zero** notifications per keystroke in uncontrolled mode. Adding
+fields adds DOM nodes, but not per-keystroke framework work.
+
+### Choosing a mode
+
+- **Uncontrolled** — the default recommendation for large forms. Near-zero render cost; read
+  values with `form.getValues()` / on submit. Use `key={form.key(path)}` (React) only when you
+  programmatically change a value and need the input to reflect it.
+- **Controlled** — use when the UI must react to every keystroke (live preview, dependent
+  fields, char counters). Each keystroke re-renders the subscribing component; for large forms,
+  keep that component small (see [Controlled at scale](#controlled-at-scale)).
+
+---
+
+## Complex validators
+
+All examples below reuse these. Validators are plain functions, so "complex" just means
+ordinary code: cross-field, async, conditional, or composed from the
+[field-validator toolkit](17-field-validators.mdx).
+
+```typescript
+import {
+  isEmail, isNotEmpty, matchesField,
+  createNumberValidator, createStringValidator, createDateValidator,
+  toValidationRule,
+} from '@headless-form/core'; // also re-exported from /react and /angular
+
+const ageRule  = toValidationRule(createNumberValidator({ min: 18, max: 120, integer: true }), 'Age');
+const userRule = toValidationRule(createStringValidator({ minLength: 3, allowedCharacters: 'alphanumeric' }), 'Username');
+const dobRule  = toValidationRule(createDateValidator({ inPast: true }), 'Birth date');
+
+// Cross-field: confirm must equal the email field
+const confirmEmail = matchesField('email', 'Emails must match');
+
+// Async with debounce-friendly shape (the store debounces via `validateDebounce`)
+const uniqueUsername = async (value: unknown) => {
+  const res = await fetch(`/api/username-available?u=${encodeURIComponent(String(value))}`);
+  const { available } = await res.json();
+  return available ? null : 'Username is taken';
+};
+
+// Conditional: only required when another field has a value
+const requiredIfBilling = (value: unknown, values: Record<string, unknown>) =>
+  values.billingEnabled && !value ? 'Required when billing is on' : null;
+```
+
+You can freely mix the built-in form rules (`isEmail`, `matchesField`, …), bridged field
+validators (`toValidationRule(...)`), inline custom functions, and `schemaResolver` (Zod/Valibot/
+Arktype) — all in the same `validate` object.
+
+---
+
+## React — 100+ fields
+
+Generate fields from data and stay in **uncontrolled** mode. Typing causes **no re-renders**;
+errors render on blur/submit.
+
+```tsx
+import { useForm, isEmail, matchesField, toValidationRule, createNumberValidator } from '@headless-form/react';
+
+const FIELDS = Array.from({ length: 120 }, (_, i) => `field_${i}`);
+const ageRule = toValidationRule(createNumberValidator({ min: 18, max: 120, integer: true }), 'Age');
+
+export function BigForm() {
+  const form = useForm({
+    mode: 'uncontrolled',
+    initialValues: Object.fromEntries(FIELDS.map((f) => [f, ''])),
+    validateInputOnBlur: true,
+    validateDebounce: 200, // debounce async/expensive rules
+    validate: {
+      field_0: isEmail('Enter a valid email'),
+      field_1: matchesField('field_0', 'Emails must match'),
+      field_2: ageRule,
+      // …attach rules only to the fields that need them
+    },
+  });
+
+  return (
+    <form onSubmit={form.onSubmit((values) => console.log(values))}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 8 }}>
+        {FIELDS.map((f) => (
+          <label key={f}>
+            {f}
+            {/* uncontrolled: getInputProps returns defaultValue, not value → no re-render on type */}
+            <input {...form.getInputProps(f)} />
+            <span style={{ color: 'crimson' }}>{form.errors[f] as string}</span>
+          </label>
+        ))}
+      </div>
+      <button type="submit">Submit</button>
+    </form>
+  );
+}
+```
+
+**Re-render behavior:** typing in any of the 120 inputs → **0 renders**. A blur that produces or
+clears an error → **1 render** of `BigForm` (cheap; inputs are uncontrolled so nothing resets).
+Submit → 1 render for the error pass.
+
+### Controlled at scale
+
+If you need controlled inputs (every keystroke re-renders), don't put 120 controlled inputs in
+one component — isolate each field so only the typed field re-renders:
+
+```tsx
+import { createFormContext } from '@headless-form/react';
+const [FormProvider, useFormContext] = createFormContext<Record<string, string>>();
+
+const Field = React.memo(function Field({ name }: { name: string }) {
+  const form = useFormContext();
+  return <input {...form.getInputProps(name)} />; // controlled, but isolated
+});
+```
+
+`React.memo` + context means a keystroke in `field_7` re-renders only `Field("field_7")`, not the
+other 119. (Uncontrolled mode avoids even this — prefer it unless you truly need controlled.)
+
+---
+
+## Angular — 100+ fields
+
+Angular bindings are **signal-based**, so they work great under `OnPush` and zoneless. The
+`HfFieldDirective` wires each `<input>` to the store; per-keystroke work is **O(1) for the typed
+field** (it updates that field's value and, only if its error changes, its error signal) — not a
+whole-form change-detection pass.
+
+```typescript
+import { Component, ChangeDetectionStrategy } from '@angular/core';
+import { injectForm, HfFieldDirective, isEmail, matchesField, toValidationRule, createNumberValidator } from '@headless-form/angular';
+
+const FIELDS = Array.from({ length: 120 }, (_, i) => `field_${i}`);
+const ageRule = toValidationRule(createNumberValidator({ min: 18, max: 120, integer: true }), 'Age');
+
+@Component({
+  selector: 'app-big-form',
+  standalone: true,
+  imports: [HfFieldDirective],
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  template: `
+    <form (submit)="form.onSubmit(onValid)($event)">
+      <div class="grid">
+        @for (name of fields; track name) {
+          <label>
+            {{ name }}
+            <input [hfField]="form" [path]="name" />
+            <span class="err">{{ form.errors()[name] }}</span>
+          </label>
+        }
+      </div>
+      <button type="submit">Submit</button>
+    </form>
+  `,
+})
+export class BigFormComponent {
+  fields = FIELDS;
+  form = injectForm<Record<string, string>, Record<string, string>, string>({
+    mode: 'uncontrolled',
+    initialValues: Object.fromEntries(FIELDS.map((f) => [f, ''])),
+    validateInputOnBlur: true,
+    validate: {
+      field_0: isEmail('Enter a valid email'),
+      field_1: matchesField('field_0', 'Emails must match'),
+      field_2: ageRule,
+    },
+  });
+  onValid = (values: Record<string, string>) => console.log(values);
+}
+```
+
+**Re-render behavior (measured):** `form.errors()` is a signal, so the template only recomputes
+a field's slot when its error changes, and the store does **0 notifications** while typing.
+Under **zone.js**, each keystroke event still schedules **one bounded change-detection pass of
+this single OnPush component** — not the whole app, and independent of the 120-field count. The
+runnable example shows this in its "CD passes" counter: typing 10 characters adds ~10 passes,
+and the count is the same whether the form has 12 fields or 120. Going **zoneless** removes even
+that per-keystroke pass. With `*ngFor`/`@for` + `track`, the rows are created once and never
+recreated on typing.
+
+> **Why this is still cheap:** an OnPush + signals component only re-evaluates its own bindings,
+> and `form.errors()[k]` returns the same reference until that field's error actually changes —
+> so a CD pass over 120 fields is a fast reference-equality sweep, not 120 re-renders. For the
+> absolute minimum, run zoneless (`provideExperimentalZonelessChangeDetection()`), after which
+> typing triggers **no** change detection at all.
+
+---
+
+## Vanilla — 100+ fields
+
+You own the DOM, so you decide exactly what updates. Subscribe once; the callback fires only on
+observable-state changes (in uncontrolled mode: not on typing).
+
+```typescript
+import { createFormStore, isEmail, matchesField, toValidationRule, createNumberValidator } from '@headless-form/core';
+
+const FIELDS = Array.from({ length: 120 }, (_, i) => `field_${i}`);
+const ageRule = toValidationRule(createNumberValidator({ min: 18, max: 120, integer: true }), 'Age');
+
+const form = createFormStore<Record<string, string>, Record<string, string>, string>({
+  mode: 'uncontrolled',
+  initialValues: Object.fromEntries(FIELDS.map((f) => [f, ''])),
+  validateInputOnBlur: true,
+  validate: {
+    field_0: isEmail('Enter a valid email'),
+    field_1: matchesField('field_0', 'Emails must match'),
+    field_2: ageRule,
+  },
+});
+
+// One subscription paints errors; it does NOT fire while typing.
+form.subscribe(() => {
+  const { errors } = form.getSnapshot();
+  for (const f of FIELDS) {
+    const el = document.querySelector(`#${f}-err`);
+    if (el) el.textContent = (errors[f] as string) ?? '';
+  }
+});
+
+for (const f of FIELDS) {
+  const input = document.querySelector<HTMLInputElement>(`#${f}`)!;
+  const props = form.getInputProps(f);
+  input.addEventListener('input', props.onChange);   // updates ref, no notification
+  input.addEventListener('blur', () => props.onBlur?.());
+}
+```
+
+This is exactly what the **Large Form (120 fields)** demo does. Its measured result: 500
+keystrokes across 50 fields → **0 subscriber notifications**; errors appear only after blur or
+"Validate all".
+
+---
+
+## Performance checklist
+
+- **Prefer `mode: 'uncontrolled'`** for large forms — zero render cost per keystroke.
+- **Attach validators only where needed.** Unvalidated fields cost nothing at validation time.
+- **Validate on blur, not on every change**, for expensive rules: `validateInputOnBlur: true`.
+  Use `validateInputOnChange` only for fields that need instant feedback.
+- **Debounce async/expensive validation** with `validateDebounce` (ms) so rapid typing doesn't
+  fire a network call per keystroke.
+- **Async validators** are awaited; `form.validating` / `form.isValidating(path)` expose
+  in-flight state for spinners without extra wiring.
+- **Controlled React:** isolate fields into `React.memo` child components via
+  `createFormContext`, so a keystroke re-renders one field, not the whole form.
+- **Angular:** use `ChangeDetectionStrategy.OnPush` (or go zoneless) and `@for` with `track` —
+  the bindings are signal-driven and don't need Zone.js.
+- **Reading values:** in uncontrolled mode use `form.getValues()` (or the submit callback) rather
+  than reading `form.values` on every render.
+```

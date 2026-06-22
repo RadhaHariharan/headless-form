@@ -7,6 +7,8 @@ import {
   createDateValidator,
   parseLocalDate,
   formatLocalDate,
+  toValidationRule,
+  humanizeFieldName,
 } from './index.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -575,5 +577,61 @@ describe('parseLocalDate', () => {
   });
   it('returns an Invalid Date for unparsable strings', () => {
     expect(isNaN(parseLocalDate('not-a-date').getTime())).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// humanizeFieldName
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('humanizeFieldName', () => {
+  it('uses the last path segment', () => {
+    expect(humanizeFieldName('user.email')).toBe('Email');
+    expect(humanizeFieldName('a.b.c')).toBe('C');
+  });
+  it('strips array indices', () => {
+    expect(humanizeFieldName('items.0.qty')).toBe('Qty');
+    expect(humanizeFieldName('rows.12.name')).toBe('Name');
+  });
+  it('splits camelCase and title-cases', () => {
+    expect(humanizeFieldName('firstName')).toBe('First Name');
+    expect(humanizeFieldName('dateOfBirth')).toBe('Date Of Birth');
+  });
+  it('replaces underscores and dashes with spaces', () => {
+    expect(humanizeFieldName('postal_code')).toBe('Postal code');
+    expect(humanizeFieldName('home-phone')).toBe('Home phone');
+  });
+  it('handles a plain single-word path', () => {
+    expect(humanizeFieldName('email')).toBe('Email');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// toValidationRule — bridge field validators into a form's `validate`
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('toValidationRule', () => {
+  it('adapts a field validator into a (value, values, path) rule', () => {
+    const rule = toValidationRule(createStringValidator({ minLength: 3 }), 'Name');
+    expect(rule('ab', {}, 'name')).toBe('Name should be at least 3 characters long');
+    expect(rule('abc', {}, 'name')).toBeNull();
+  });
+  it('infers fieldName from the path when not provided', () => {
+    const rule = toValidationRule(createNumberValidator({ min: 18 }));
+    expect(rule(15, {}, 'user.age')).toBe('Age must be at least 18');
+    expect(rule(20, {}, 'user.age')).toBeNull();
+  });
+  it('infers a humanized name from a nested/array path', () => {
+    const rule = toValidationRule(createStringValidator({ minLength: 2 }));
+    expect(rule('x', {}, 'items.0.productName')).toBe('Product Name should be at least 2 characters long');
+  });
+  it('works with the date validator and explicit name', () => {
+    const rule = toValidationRule(createDateValidator({ required: true }), 'Birth date');
+    expect(rule('', {}, 'dob')).toBe('Please select birth date');
+  });
+  it('returns null (valid) and is shaped like a ValidationRule', () => {
+    const rule = toValidationRule(createCheckboxValidator({ mustBeTrue: true }), 'Terms');
+    expect(rule(true, {}, 'terms')).toBeNull();
+    expect(rule(false, {}, 'terms')).toBe('Terms must be accepted');
   });
 });

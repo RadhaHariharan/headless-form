@@ -14,3 +14,5 @@ export type { BooleanValidationRule } from './checkbox-validator.js';
 
 export { createDateValidator, parseLocalDate, formatLocalDate } from './date-validator.js';
 export type { DateValidationRule } from './date-validator.js';
+
+export { toValidationRule, humanizeFieldName } from './to-rule.js';
