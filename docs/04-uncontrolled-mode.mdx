@@ -1,0 +1,322 @@
+# Uncontrolled Mode
+
+`headless-form` supports two modes: **controlled** and **uncontrolled**.
+Uncontrolled mode is the recommended default for production forms because it causes
+**zero re-renders on typing**, which dramatically improves performance in large forms.
+
+---
+
+## Controlled vs Uncontrolled
+
+| | Controlled (`mode: 'controlled'`) | Uncontrolled (`mode: 'uncontrolled'`) |
+|---|---|---|
+| Values stored in | Reactive state | Internal ref |
+| Re-renders on typing | Yes — every keystroke | No — only error/status changes |
+| `form.values` | Always current | Stable ref snapshot |
+| `form.getValues()` | Returns latest | Returns latest |
+| DOM value source | `value` prop | `defaultValue` prop |
+| Key prop needed? | No | Yes, for programmatic resets |
+
+---
+
+## Setting the Mode
+
+```tsx
+// React
+const form = useForm({
+  mode: 'uncontrolled', // recommended
+  initialValues: { name: '', email: '' },
+});
+
+// Angular
+const form = injectForm({
+  mode: 'uncontrolled',
+  initialValues: { name: '', email: '' },
+});
+
+// Vanilla
+const form = createFormStore({
+  mode: 'uncontrolled',
+  initialValues: { name: '', email: '' },
+});
+```
+
+---
+
+## getValues vs values
+
+In **uncontrolled** mode, `form.values` is a stable object reference that does **not** change
+when the user types. Always use `form.getValues()` to read the latest form state:
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+function Demo() {
+  const form = useForm({
+    mode: 'uncontrolled',
+    initialValues: { name: '' },
+  });
+
+  return (
+    <form onSubmit={form.onSubmit((values) => {
+      // ✅ values is correct here — onSubmit reads from getValues() internally
+      console.log(values);
+    })}>
+      <input key={form.key('name')} {...form.getInputProps('name')} />
+      <button
+        type="button"
+        onClick={() => {
+          // ✅ Use getValues() to read the latest value
+          console.log(form.getValues().name);
+
+          // ❌ form.values.name may be stale in uncontrolled mode
+          // console.log(form.values.name);
+        }}
+      >
+        Read name
+      </button>
+      <button type="submit">Submit</button>
+    </form>
+  );
+}
+```
+
+In **controlled** mode, `form.values` is always current and equivalent to `form.getValues()`.
+
+---
+
+## getInputProps in Each Mode
+
+In controlled mode, `getInputProps` returns a `value` prop:
+
+```tsx
+form.getInputProps('name')
+// -> { value: 'John', onChange, onFocus, onBlur, error, 'data-path': 'name' }
+```
+
+In uncontrolled mode, `getInputProps` returns `defaultValue` instead:
+
+```tsx
+form.getInputProps('name')
+// -> { defaultValue: 'John', onChange, onFocus, onBlur, error, 'data-path': 'name' }
+```
+
+Similarly for checkboxes:
+- Controlled: `{ checked: true, ... }`
+- Uncontrolled: `{ defaultChecked: true, ... }`
+
+---
+
+## The key Prop
+
+In uncontrolled mode, when you **programmatically** change a value (e.g., via `setFieldValue`,
+`reset`, or `initialize`), the DOM input must remount to pick up the new `defaultValue`.
+The `form.key(path)` method provides a stable string key that is bumped on programmatic changes:
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+function Demo() {
+  const form = useForm({
+    mode: 'uncontrolled',
+    initialValues: { name: '' },
+  });
+
+  return (
+    <form onSubmit={form.onSubmit(console.log)} onReset={form.onReset}>
+      {/* key causes remount when value is programmatically changed */}
+      <input
+        key={form.key('name')}
+        {...form.getInputProps('name')}
+        placeholder="Name"
+      />
+      <button type="button" onClick={() => form.setFieldValue('name', 'John')}>
+        Set to John
+      </button>
+      <button type="reset">Reset</button>
+      <button type="submit">Submit</button>
+    </form>
+  );
+}
+```
+
+The key is **not** bumped when the user types — only when you call:
+- `setFieldValue(path, value)` (with default `forceUpdate: true`)
+- `setValues(values)`
+- `reset()`
+- `initialize(values)`
+
+---
+
+## List Fields in Uncontrolled Mode
+
+When using list fields (`insertListItem`, `removeListItem`, `reorderListItem`), always spread
+`form.key(path)` on the list item container so that inputs remount correctly:
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+interface User {
+  name: string;
+  email: string;
+}
+
+function UsersForm() {
+  const form = useForm({
+    mode: 'uncontrolled',
+    initialValues: {
+      users: [{ name: '', email: '' }],
+    },
+  });
+
+  const fields = form.getValues().users.map((_, index) => (
+    <div key={form.key(`users.${index}`)}>
+      <input
+        key={form.key(`users.${index}.name`)}
+        {...form.getInputProps(`users.${index}.name`)}
+        placeholder="Name"
+      />
+      <input
+        key={form.key(`users.${index}.email`)}
+        {...form.getInputProps(`users.${index}.email`)}
+        placeholder="Email"
+      />
+      <button
+        type="button"
+        onClick={() => form.removeListItem('users', index)}
+      >
+        Remove
+      </button>
+    </div>
+  ));
+
+  return (
+    <form onSubmit={form.onSubmit(console.log)}>
+      {fields}
+      <button
+        type="button"
+        onClick={() => form.insertListItem('users', { name: '', email: '' })}
+      >
+        Add user
+      </button>
+      <button type="submit">Submit</button>
+    </form>
+  );
+}
+```
+
+---
+
+## Custom Components with defaultValue
+
+If you build custom components that wrap native inputs, make sure they accept and pass through
+`defaultValue` (for uncontrolled mode) in addition to `value`:
+
+```tsx
+interface CustomInputProps {
+  value?: string;
+  defaultValue?: string;
+  onChange?: (event: React.ChangeEvent<HTMLInputElement>) => void;
+  onFocus?: (event: React.FocusEvent<HTMLInputElement>) => void;
+  onBlur?: (event: React.FocusEvent<HTMLInputElement>) => void;
+  error?: string;
+}
+
+function CustomInput({ value, defaultValue, onChange, onFocus, onBlur, error }: CustomInputProps) {
+  return (
+    <div>
+      <input
+        value={value}
+        defaultValue={defaultValue}
+        onChange={onChange}
+        onFocus={onFocus}
+        onBlur={onBlur}
+      />
+      {error && <span style={{ color: 'red' }}>{error}</span>}
+    </div>
+  );
+}
+
+// Usage with uncontrolled mode — spread getInputProps to get defaultValue
+function Form() {
+  const form = useForm({
+    mode: 'uncontrolled',
+    initialValues: { name: '' },
+  });
+
+  return (
+    <form onSubmit={form.onSubmit(console.log)}>
+      <CustomInput
+        key={form.key('name')}
+        {...form.getInputProps('name')}
+      />
+      <button type="submit">Submit</button>
+    </form>
+  );
+}
+```
+
+---
+
+## Performance Benefits
+
+In a form with 20 fields in controlled mode, typing in any field re-renders the entire form
+component. In uncontrolled mode, only the state that changes (errors, submitting, validating)
+triggers re-renders:
+
+```tsx
+// ❌ Controlled — typing re-renders everything
+const form = useForm({
+  mode: 'controlled',
+  initialValues: { name: '', email: '', phone: '', address: '' /* ...20 fields */ },
+});
+
+// ✅ Uncontrolled — typing causes zero re-renders
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: { name: '', email: '', phone: '', address: '' /* ...20 fields */ },
+});
+```
+
+---
+
+## Angular Uncontrolled Mode
+
+In Angular, `HfFieldDirective` handles uncontrolled mode automatically.
+The directive sets `defaultValue` on the native input and subscribes to value changes:
+
+```typescript
+import { Component, ChangeDetectionStrategy } from '@angular/core';
+import { injectForm, HfFieldDirective } from '@headless-form/angular';
+
+@Component({
+  standalone: true,
+  imports: [HfFieldDirective],
+  changeDetection: ChangeDetectionStrategy.OnPush, // only re-render on signal changes
+  template: `
+    <form (ngSubmit)="submit($event)">
+      <!-- HfFieldDirective manages defaultValue in uncontrolled mode -->
+      <input [hfField]="form" path="name" placeholder="Name" />
+
+      <!-- Read latest values with getValues() when needed -->
+      <button type="button" (click)="logValues()">Log</button>
+      <button type="submit">Submit</button>
+    </form>
+  `,
+})
+export class MyFormComponent {
+  form = injectForm({
+    mode: 'uncontrolled',
+    initialValues: { name: '' },
+  });
+
+  submit(event: Event) {
+    this.form.onSubmit((values) => console.log(values))(event);
+  }
+
+  logValues() {
+    // Use getValues() — not form.values — in uncontrolled mode
+    console.log(this.form.getValues());
+  }
+}
+```

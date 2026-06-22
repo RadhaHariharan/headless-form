@@ -1,0 +1,315 @@
+# useField / injectField
+
+A standalone single-field hook (React) or injection function (Angular) for managing
+field-level state without a full form. Useful for composing custom inputs, building
+field-as-a-component patterns, or isolating field logic in a library.
+
+---
+
+## React: useField
+
+```tsx
+import { useField } from '@headless-form/react';
+
+function EmailInput() {
+  const field = useField({
+    initialValue: '',
+    validate: (value) => (/^\S+@\S+\.\S+$/.test(value) ? null : 'Invalid email'),
+    validateOnChange: true,
+  });
+
+  return (
+    <div>
+      <input
+        key={field.key}
+        {...field.getInputProps()}
+        type="email"
+        placeholder="Email"
+      />
+      {field.error && <span style={{ color: 'red' }}>{field.error}</span>}
+    </div>
+  );
+}
+```
+
+## Angular: injectField
+
+```typescript
+import { Component, ChangeDetectionStrategy } from '@angular/core';
+import { injectField } from '@headless-form/angular';
+
+@Component({
+  standalone: true,
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  template: `
+    <div>
+      <input
+        [value]="field.value()"
+        (input)="field.onChange($event)"
+        (blur)="field.onBlur()"
+        type="email"
+        placeholder="Email"
+      />
+      @if (field.error()) {
+        <span style="color:red">{{ field.error() }}</span>
+      }
+    </div>
+  `,
+})
+export class EmailInputComponent {
+  field = injectField({
+    initialValue: '',
+    validate: (value: string) => (/^\S+@\S+\.\S+$/.test(value) ? null : 'Invalid email'),
+    validateOnChange: true,
+  });
+}
+```
+
+---
+
+## UseFieldOptions
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `initialValue` | `Value` | **required** | The starting value for the field. |
+| `validate` | `(value) => error \| null \| Promise<error \| null>` | — | Validation rule; return `null` or `undefined` when valid. |
+| `validateOnChange` | `boolean` | `false` | Run validation on every value change. |
+| `validateOnBlur` | `boolean` | `false` | Run validation on blur. |
+| `type` | `'input' \| 'checkbox' \| 'radio'` | `'input'` | Input type hint forwarded to `getInputProps`. |
+| `mode` | `'controlled' \| 'uncontrolled'` | `'controlled'` | Same semantics as `useForm`. |
+| `resolveValidationError` | `(error: unknown) => TError` | — | Maps thrown async errors to the error type. |
+
+---
+
+## UseFieldReturnType
+
+| Property / Method | Type | Description |
+|-------------------|------|-------------|
+| `key` | `string` | Stable key for uncontrolled remounting (`<input key={field.key} />`) |
+| `getValue()` | `() => Value` | Returns the latest field value |
+| `setValue(value)` | `(value \| updater) => void` | Sets the field value |
+| `reset()` | `() => void` | Resets field to `initialValue` |
+| `getInputProps()` | `() => InputProps` | Returns props to spread onto an input element |
+| `error` | `TError \| null` | Current error, or `null` when valid |
+| `validate()` | `() => Promise<TError \| null>` | Manually trigger validation |
+| `isValidating` | `boolean` | `true` while async validation is pending |
+| `isDirty` | `boolean` | `true` when value differs from `initialValue` |
+| `isTouched` | `boolean` | `true` when the field has been interacted with |
+| `setError(error)` | `(TError) => void` | Manually set an error |
+| `clearError()` | `() => void` | Clear the current error |
+
+---
+
+## Validation
+
+### validateOnChange
+
+Validates the field on every keystroke:
+
+```tsx
+import { useField } from '@headless-form/react';
+
+function Demo() {
+  const field = useField({
+    initialValue: '',
+    validate: (value) => value.trim().length < 2 ? 'Too short' : null,
+    validateOnChange: true,
+  });
+
+  return (
+    <div>
+      <input key={field.key} {...field.getInputProps()} />
+      {field.error && <p style={{ color: 'red' }}>{field.error}</p>}
+    </div>
+  );
+}
+```
+
+### validateOnBlur
+
+Validates the field when focus leaves:
+
+```tsx
+import { useField } from '@headless-form/react';
+
+function Demo() {
+  const field = useField({
+    initialValue: '',
+    validate: (value) => value.trim().length < 2 ? 'Too short' : null,
+    validateOnBlur: true,
+  });
+
+  return (
+    <div>
+      <input key={field.key} {...field.getInputProps()} />
+      {field.error && <p style={{ color: 'red' }}>{field.error}</p>}
+    </div>
+  );
+}
+```
+
+### Async Validation
+
+The `validate` function may return a `Promise`:
+
+```tsx
+import { useField } from '@headless-form/react';
+
+function UsernameInput() {
+  const field = useField({
+    initialValue: '',
+    validateOnChange: true,
+    validate: async (value) => {
+      if (value.trim().length < 3) return 'Too short';
+      const taken = await checkUsernameAvailability(value);
+      return taken ? 'Username is already taken' : null;
+    },
+  });
+
+  return (
+    <div>
+      <input key={field.key} {...field.getInputProps()} placeholder="Username" />
+      {field.isValidating && <span>Checking...</span>}
+      {field.error && <p style={{ color: 'red' }}>{field.error}</p>}
+    </div>
+  );
+}
+```
+
+---
+
+## Touched and Dirty
+
+```tsx
+import { useField } from '@headless-form/react';
+
+function Demo() {
+  const field = useField({
+    initialValue: '',
+  });
+
+  return (
+    <div>
+      <input key={field.key} {...field.getInputProps()} />
+      <p>Touched: {String(field.isTouched)}</p>
+      <p>Dirty: {String(field.isDirty)}</p>
+    </div>
+  );
+}
+```
+
+---
+
+## Uncontrolled Mode
+
+Use `mode: 'uncontrolled'` to prevent re-renders on every keystroke:
+
+```tsx
+import { useField } from '@headless-form/react';
+
+function Demo() {
+  const field = useField({
+    initialValue: '',
+    mode: 'uncontrolled',
+    validateOnBlur: true,
+    validate: (value) => value.trim().length < 2 ? 'Too short' : null,
+  });
+
+  return (
+    <div>
+      {/* key prop ensures remount when value is programmatically set */}
+      <input key={field.key} {...field.getInputProps()} />
+      {field.error && <p style={{ color: 'red' }}>{field.error}</p>}
+      <button onClick={() => field.setValue('preset')}>Set preset</button>
+      <button onClick={field.reset}>Reset</button>
+    </div>
+  );
+}
+```
+
+---
+
+## Manually Triggering Validation
+
+Call `field.validate()` programmatically:
+
+```tsx
+import { useField } from '@headless-form/react';
+
+function Demo() {
+  const field = useField({
+    initialValue: '',
+    validate: (value) => value.trim().length < 2 ? 'Too short' : null,
+  });
+
+  const handleCheck = async () => {
+    const error = await field.validate();
+    if (error) {
+      console.log('Validation failed:', error);
+    } else {
+      console.log('Valid!');
+    }
+  };
+
+  return (
+    <div>
+      <input key={field.key} {...field.getInputProps()} />
+      {field.error && <p style={{ color: 'red' }}>{field.error}</p>}
+      <button onClick={handleCheck}>Check</button>
+    </div>
+  );
+}
+```
+
+---
+
+## Checkbox Field
+
+```tsx
+import { useField } from '@headless-form/react';
+
+function Demo() {
+  const field = useField({
+    initialValue: false,
+    type: 'checkbox',
+    validate: (value) => value ? null : 'You must accept the terms',
+  });
+
+  return (
+    <label>
+      <input key={field.key} {...field.getInputProps()} type="checkbox" />
+      I accept the terms
+      {field.error && <p style={{ color: 'red' }}>{field.error}</p>}
+    </label>
+  );
+}
+```
+
+---
+
+## Angular injectField Return Type
+
+In Angular, `injectField` returns signals instead of plain values:
+
+```typescript
+import { injectField, type InjectFieldReturnType } from '@headless-form/angular';
+
+export class MyComponent {
+  field = injectField({
+    initialValue: '',
+    validateOnChange: true,
+    validate: (value: string) => value.trim().length < 2 ? 'Too short' : null,
+  });
+
+  // field.value() — Signal<string>
+  // field.error() — Signal<string | null>
+  // field.isValidating() — Signal<boolean>
+  // field.isDirty() — Signal<boolean>
+  // field.isTouched() — Signal<boolean>
+  // field.setValue('new value')
+  // field.reset()
+  // field.validate() — Promise<error | null>
+  // field.setError('message')
+  // field.clearError()
+}
+```

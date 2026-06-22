@@ -1,0 +1,443 @@
+# Nested Fields
+
+Most form handlers accept a **dot-notation property path** as their first argument.
+Paths support deep object traversal and array indexing, and are fully typed via TypeScript.
+
+---
+
+## Property Paths
+
+A path describes the location of a value in the form values tree using `.` as a separator
+and array indices as numeric path segments:
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: {
+    user: {
+      firstName: 'John',
+      lastName: 'Doe',
+    },
+    fruits: [
+      { name: 'Banana', available: true },
+      { name: 'Orange', available: false },
+    ],
+    deeply: {
+      nested: {
+        object: [{ item: 1 }, { item: 2 }],
+      },
+    },
+  },
+});
+
+// Input props for a nested object field
+form.getInputProps('user.firstName');
+
+// Set the name of the second fruit
+form.setFieldValue('fruits.1.name', 'Carrot');
+
+// Validate a deeply nested field
+await form.validateField('deeply.nested.object.0.item');
+```
+
+---
+
+## Nested Objects
+
+Build forms with nested object structure:
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+function AddressForm() {
+  const form = useForm({
+    mode: 'uncontrolled',
+    initialValues: {
+      user: {
+        name: '',
+        contact: {
+          email: '',
+          phone: '',
+        },
+      },
+    },
+    validate: {
+      user: {
+        name: (value) => value.trim().length < 2 ? 'Name too short' : null,
+        contact: {
+          email: (value) => !/^\S+@\S+/.test(value) ? 'Invalid email' : null,
+          phone: (value) => !value.trim() ? 'Phone is required' : null,
+        },
+      },
+    },
+  });
+
+  return (
+    <form onSubmit={form.onSubmit(console.log)}>
+      <input
+        key={form.key('user.name')}
+        {...form.getInputProps('user.name')}
+        placeholder="Full name"
+      />
+      {form.errors['user.name'] && <p>{form.errors['user.name']}</p>}
+
+      <input
+        key={form.key('user.contact.email')}
+        {...form.getInputProps('user.contact.email')}
+        type="email"
+        placeholder="Email"
+      />
+      {form.errors['user.contact.email'] && <p>{form.errors['user.contact.email']}</p>}
+
+      <input
+        key={form.key('user.contact.phone')}
+        {...form.getInputProps('user.contact.phone')}
+        placeholder="Phone"
+      />
+      {form.errors['user.contact.phone'] && <p>{form.errors['user.contact.phone']}</p>}
+
+      <button type="submit">Submit</button>
+    </form>
+  );
+}
+```
+
+---
+
+## Set Nested Object Value
+
+Set individual nested fields or the entire object at once:
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: {
+    user: {
+      name: '',
+      occupation: '',
+    },
+  },
+});
+
+// Set each field individually
+form.setFieldValue('user.name', 'John');
+form.setFieldValue('user.occupation', 'Engineer');
+
+// Set the entire object at once
+form.setFieldValue('user', { name: 'Jane', occupation: 'Architect' });
+```
+
+---
+
+## Nested Object Validation
+
+Define nested validation rules matching the object structure:
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: {
+    user: {
+      name: '',
+      occupation: '',
+    },
+  },
+  validate: {
+    user: {
+      name: (value) => value.length < 2 ? 'Name is too short' : null,
+      occupation: (value) => value.length < 2 ? 'Occupation is too short' : null,
+    },
+  },
+});
+
+await form.validate();
+form.errors;
+// -> {
+//   'user.name': 'Name is too short',
+//   'user.occupation': 'Occupation is too short',
+// }
+```
+
+---
+
+## Nested Arrays (Dynamic List Fields)
+
+Manage arrays of items with the list helpers:
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+interface Job {
+  company: string;
+  role: string;
+  years: number;
+}
+
+function JobsForm() {
+  const form = useForm({
+    mode: 'uncontrolled',
+    initialValues: {
+      jobs: [{ company: '', role: '', years: 1 }] as Job[],
+    },
+    validate: {
+      jobs: {
+        company: (v) => !v.trim() ? 'Company is required' : null,
+        role: (v) => !v.trim() ? 'Role is required' : null,
+        years: (v) => v < 0 ? 'Must be non-negative' : null,
+      },
+    },
+  });
+
+  // In uncontrolled mode, read current values from getValues()
+  const jobs = form.getValues().jobs;
+
+  const fields = jobs.map((_, index) => (
+    <div key={form.key(`jobs.${index}`)}>
+      <input
+        key={form.key(`jobs.${index}.company`)}
+        {...form.getInputProps(`jobs.${index}.company`)}
+        placeholder="Company"
+      />
+      {form.errors[`jobs.${index}.company`] && (
+        <p>{form.errors[`jobs.${index}.company`]}</p>
+      )}
+
+      <input
+        key={form.key(`jobs.${index}.role`)}
+        {...form.getInputProps(`jobs.${index}.role`)}
+        placeholder="Role"
+      />
+      {form.errors[`jobs.${index}.role`] && (
+        <p>{form.errors[`jobs.${index}.role`]}</p>
+      )}
+
+      <input
+        key={form.key(`jobs.${index}.years`)}
+        {...form.getInputProps(`jobs.${index}.years`)}
+        type="number"
+        placeholder="Years"
+      />
+
+      <button type="button" onClick={() => form.removeListItem('jobs', index)}>
+        Remove
+      </button>
+    </div>
+  ));
+
+  return (
+    <form onSubmit={form.onSubmit(console.log)}>
+      {fields}
+      <button
+        type="button"
+        onClick={() => form.insertListItem('jobs', { company: '', role: '', years: 1 })}
+      >
+        Add job
+      </button>
+      <button type="submit">Submit</button>
+    </form>
+  );
+}
+```
+
+---
+
+## List Handlers
+
+| Handler | Description |
+|---------|-------------|
+| `form.insertListItem(path, item, index?)` | Appends `item` to the array at `path`, or inserts at `index` |
+| `form.removeListItem(path, index)` | Removes the item at `index` |
+| `form.replaceListItem(path, index, item)` | Replaces the item at `index` with `item` |
+| `form.reorderListItem(path, { from, to })` | Moves the item at `from` to `to` |
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: {
+    tags: ['react', 'typescript', 'forms'],
+  },
+});
+
+// Append to end
+form.insertListItem('tags', 'headless');
+
+// Insert at position 0
+form.insertListItem('tags', 'new-tag', 0);
+
+// Remove the second item
+form.removeListItem('tags', 1);
+
+// Replace item at index 0
+form.replaceListItem('tags', 0, 'updated-tag');
+
+// Move item from index 2 to index 0
+form.reorderListItem('tags', { from: 2, to: 0 });
+```
+
+---
+
+## List Value Validation
+
+Validation errors for list items use dot-notation with the item index:
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: {
+    users: [
+      { name: 'John', age: 12 },
+      { name: '', age: 22 },
+    ],
+  },
+  validate: {
+    users: {
+      name: (value) => value.length < 2 ? 'Name must have at least 2 letters' : null,
+      age: (value) => value < 18 ? 'User must be 18 or older' : null,
+    },
+  },
+});
+
+// Validate a single list item field
+await form.validateField('users.1.name');
+
+// Or validate everything
+await form.validate();
+
+form.errors;
+// -> {
+//   'users.0.age': 'User must be 18 or older',
+//   'users.1.name': 'Name must have at least 2 letters',
+// }
+```
+
+---
+
+## formRootRule for Arrays
+
+Use `formRootRule` to validate the array itself (e.g., minimum length) alongside validating
+its items:
+
+```tsx
+import { useForm, formRootRule } from '@headless-form/react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: {
+    skills: [] as string[],
+  },
+  validate: {
+    skills: {
+      [formRootRule]: (value) =>
+        value.length === 0 ? 'Add at least one skill' : null,
+    },
+  },
+});
+
+await form.validate();
+form.errors;
+// -> { skills: 'Add at least one skill' }
+```
+
+---
+
+## Deeply Nested Paths
+
+Paths work at any depth:
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: {
+    company: {
+      departments: [
+        {
+          name: 'Engineering',
+          teams: [
+            { name: 'Frontend', members: [{ name: '' }] },
+          ],
+        },
+      ],
+    },
+  },
+});
+
+// Very deep path
+form.getInputProps('company.departments.0.teams.0.members.0.name');
+form.setFieldValue('company.departments.0.teams.0.members.0.name', 'Alice');
+await form.validateField('company.departments.0.teams.0.members.0.name');
+```
+
+---
+
+## Angular: Nested Fields
+
+The `HfFieldDirective` accepts any dot-notation path in the `path` input:
+
+```typescript
+import { Component, ChangeDetectionStrategy } from '@angular/core';
+import { injectForm, HfFieldDirective } from '@headless-form/angular';
+import { NgFor } from '@angular/common';
+
+@Component({
+  standalone: true,
+  imports: [HfFieldDirective, NgFor],
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  template: `
+    <form (ngSubmit)="submit($event)">
+      <!-- Nested object -->
+      <input [hfField]="form" path="user.name" placeholder="Name" />
+      @if (form.errors()['user.name']) {
+        <p>{{ form.errors()['user.name'] }}</p>
+      }
+
+      <!-- Nested array items -->
+      @for (job of form.getValues().jobs; track $index) {
+        <div>
+          <input [hfField]="form" [path]="'jobs.' + $index + '.company'" placeholder="Company" />
+          <button type="button" (click)="form.removeListItem('jobs', $index)">Remove</button>
+        </div>
+      }
+
+      <button type="button" (click)="addJob()">Add Job</button>
+      <button type="submit">Submit</button>
+    </form>
+  `,
+})
+export class NestedFormComponent {
+  form = injectForm({
+    mode: 'uncontrolled',
+    initialValues: {
+      user: { name: '' },
+      jobs: [{ company: '' }],
+    },
+    validate: {
+      user: {
+        name: (v: string) => v.trim().length < 2 ? 'Too short' : null,
+      },
+      jobs: {
+        company: (v: string) => !v.trim() ? 'Required' : null,
+      },
+    },
+  });
+
+  addJob() {
+    this.form.insertListItem('jobs', { company: '' });
+  }
+
+  submit(event: Event) {
+    this.form.onSubmit((values) => console.log(values))(event);
+  }
+}
+```

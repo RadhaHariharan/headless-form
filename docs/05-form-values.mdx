@@ -1,0 +1,473 @@
+# Form Values
+
+All value-related APIs: reading, setting, watching, transforming, and initializing form values.
+
+---
+
+## initialValues
+
+`initialValues` sets the starting state of the form. All path-typed APIs infer their types
+from this object's shape:
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+const form = useForm({
+  initialValues: {
+    name: '',
+    email: '',
+    age: 18,
+    active: false,
+    address: {
+      street: '',
+      city: '',
+    },
+    tags: [] as string[],
+  },
+});
+```
+
+---
+
+## setValues
+
+Shallow-merges a partial object into the current values, or calls an updater function:
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+const form = useForm({
+  initialValues: { name: '', email: '', age: 0 },
+});
+
+// Partial object — only the provided keys are changed
+form.setValues({ name: 'John' });
+
+// Updater function — receives current values, returns partial update
+form.setValues((current) => ({
+  name: current.name.toUpperCase(),
+}));
+```
+
+---
+
+## form.initialize
+
+`form.initialize` sets both `values` **and** `initialValues` to the provided object, and marks
+the form as `initialized`. It can only be called **once** — subsequent calls are silently ignored.
+This makes it safe to call in a `useEffect` that may run multiple times (e.g., from a data-fetching hook):
+
+```tsx
+import { useEffect } from 'react';
+import { useForm } from '@headless-form/react';
+
+interface UserValues {
+  name: string;
+  email: string;
+}
+
+function EditProfileForm() {
+  const form = useForm<UserValues>({
+    mode: 'uncontrolled',
+    initialValues: { name: '', email: '' },
+  });
+
+  useEffect(() => {
+    // Simulated API response
+    fetchUser().then((user) => {
+      // Safe to call multiple times — only the first call takes effect
+      form.initialize({ name: user.name, email: user.email });
+    });
+  }, []);
+
+  return (
+    <form onSubmit={form.onSubmit(console.log)}>
+      <input key={form.key('name')} {...form.getInputProps('name')} placeholder="Name" />
+      <input key={form.key('email')} {...form.getInputProps('email')} placeholder="Email" />
+      <button type="submit" disabled={!form.initialized}>
+        {form.initialized ? 'Save' : 'Loading...'}
+      </button>
+    </form>
+  );
+}
+```
+
+### Use with TanStack Query
+
+```tsx
+import { useEffect } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { useForm } from '@headless-form/react';
+
+function Demo() {
+  const query = useQuery({
+    queryKey: ['current-user'],
+    queryFn: () => fetch('/api/users/me').then((res) => res.json()),
+  });
+
+  const form = useForm({
+    mode: 'uncontrolled',
+    initialValues: {
+      name: '',
+      email: '',
+    },
+  });
+
+  useEffect(() => {
+    if (query.data) {
+      // Even if query.data changes, the form is initialized only once
+      form.initialize(query.data);
+    }
+  }, [query.data]);
+
+  return (
+    <form onSubmit={form.onSubmit(console.log)}>
+      <input key={form.key('name')} {...form.getInputProps('name')} placeholder="Name" />
+      <input key={form.key('email')} {...form.getInputProps('email')} placeholder="Email" />
+      <button type="submit" disabled={!form.initialized}>Save</button>
+    </form>
+  );
+}
+```
+
+### Use with enhanceGetInputProps to disable until initialized
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: { name: '', email: '' },
+  enhanceGetInputProps: (_payload) => {
+    if (!form.initialized) {
+      return { disabled: true };
+    }
+  },
+});
+```
+
+---
+
+## setFieldValue
+
+Sets the value of a single field at the given dot-notation path:
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+const form = useForm({
+  initialValues: {
+    name: '',
+    user: { age: 0 },
+    tags: ['a', 'b', 'c'],
+  },
+});
+
+// Scalar field
+form.setFieldValue('name', 'Jane');
+
+// Nested field
+form.setFieldValue('user.age', 25);
+
+// Array item
+form.setFieldValue('tags.1', 'B');
+
+// Updater function
+form.setFieldValue('name', (current) => current.trim());
+```
+
+In uncontrolled mode, `setFieldValue` bumps the field's key by default, causing the bound input
+to remount. Pass `{ forceUpdate: false }` to skip the remount (what `getInputProps().onChange` does internally):
+
+```tsx
+form.setFieldValue('name', 'John', { forceUpdate: false });
+```
+
+---
+
+## reset
+
+Resets all values to `initialValues` and clears errors, touched, dirty, and validating state:
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+function Demo() {
+  const form = useForm({
+    initialValues: { name: 'John', email: 'john@example.com' },
+  });
+
+  return (
+    <form onSubmit={form.onSubmit(console.log)} onReset={form.onReset}>
+      <input key={form.key('name')} {...form.getInputProps('name')} />
+      <input key={form.key('email')} {...form.getInputProps('email')} />
+      <button type="submit">Submit</button>
+      <button type="reset">Reset</button>
+    </form>
+  );
+}
+```
+
+---
+
+## setInitialValues
+
+Replaces the initial-values reference used for dirty comparisons without changing the current values:
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+const form = useForm({
+  initialValues: { name: 'John' },
+});
+
+// After saving, update the baseline so the form is no longer dirty
+form.setInitialValues({ name: form.getValues().name });
+```
+
+---
+
+## transformValues
+
+`transformValues` is called before `onSubmit` delivers values to `onValid`, and before
+`getTransformedValues`. Use it to derive or reshape the submission payload:
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+interface FormValues {
+  firstName: string;
+  lastName: string;
+  birthYear: string;
+}
+
+interface SubmitPayload {
+  fullName: string;
+  age: number;
+}
+
+const form = useForm<FormValues, SubmitPayload>({
+  initialValues: {
+    firstName: '',
+    lastName: '',
+    birthYear: '',
+  },
+  transformValues: (values): SubmitPayload => ({
+    fullName: `${values.firstName} ${values.lastName}`.trim(),
+    age: new Date().getFullYear() - parseInt(values.birthYear, 10),
+  }),
+});
+
+// onSubmit receives the transformed values
+form.onSubmit((transformed) => {
+  // transformed: { fullName: string, age: number }
+  console.log(transformed.fullName, transformed.age);
+});
+```
+
+### TypeScript: Transformed Values Type
+
+```typescript
+import { useForm } from '@headless-form/react';
+import type { TransformedValues } from '@headless-form/react';
+
+const form = useForm({
+  initialValues: { first: '', last: '' },
+  transformValues: (v) => ({ fullName: `${v.first} ${v.last}` }),
+});
+
+// Extract the transformed type
+type Transformed = TransformedValues<typeof form>;
+// -> { fullName: string }
+```
+
+---
+
+## getTransformedValues
+
+Applies `transformValues` to the current (or provided) values:
+
+```tsx
+const form = useForm({
+  initialValues: { firstName: '', lastName: '' },
+  transformValues: (v) => ({ fullName: `${v.firstName} ${v.lastName}` }),
+});
+
+// Get transformed current values
+const payload = form.getTransformedValues();
+
+// Transform specific values
+const preview = form.getTransformedValues({ firstName: 'John', lastName: 'Doe' });
+```
+
+---
+
+## onValuesChange
+
+Called on every value change with the new and previous values. Useful for side-effects
+or cross-field dependencies:
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+const form = useForm({
+  initialValues: { country: '', state: '' },
+  onValuesChange: (values, previous) => {
+    // Clear state when country changes
+    if (values.country !== previous.country) {
+      form.setFieldValue('state', '');
+    }
+  },
+});
+```
+
+---
+
+## form.watch
+
+Subscribes to changes on a single field. Returns an unsubscribe function:
+
+```tsx
+import { useEffect } from 'react';
+import { useForm } from '@headless-form/react';
+
+function Demo() {
+  const form = useForm({
+    initialValues: { email: '', country: '', state: '' },
+  });
+
+  // Basic watch
+  useEffect(() => {
+    return form.watch('email', ({ value, previousValue }) => {
+      console.log('Email changed from', previousValue, 'to', value);
+    });
+  }, []);
+
+  // Watch and react to changes
+  useEffect(() => {
+    return form.watch('country', ({ value }) => {
+      // Clear state when country changes
+      form.setFieldValue('state', '');
+    });
+  }, []);
+
+  return (
+    <form onSubmit={form.onSubmit(console.log)}>
+      <input key={form.key('email')} {...form.getInputProps('email')} placeholder="Email" />
+      <input key={form.key('country')} {...form.getInputProps('country')} placeholder="Country" />
+      <input key={form.key('state')} {...form.getInputProps('state')} placeholder="State" />
+      <button type="submit">Submit</button>
+    </form>
+  );
+}
+```
+
+### Watch Array Items
+
+Use a path with array index notation to watch specific list items:
+
+```tsx
+useEffect(() => {
+  return form.watch('users.0.name', ({ value }) => {
+    console.log('First user name changed to:', value);
+  });
+}, []);
+```
+
+### Cascade Updates
+
+When `cascadeUpdates: true`, changing `a.b.c` also notifies watchers on `a.b` and `a`:
+
+```tsx
+const form = useForm({
+  initialValues: { user: { address: { city: '' } } },
+  cascadeUpdates: true,
+});
+
+// This fires when any field under 'user' changes
+form.watch('user', ({ value }) => {
+  console.log('User changed:', value);
+});
+```
+
+---
+
+## TypeScript: Values Type
+
+```typescript
+import { useForm } from '@headless-form/react';
+
+// Explicitly typed form
+interface FormValues {
+  name: string;
+  age: number;
+  active: boolean;
+}
+
+const form = useForm<FormValues>({
+  initialValues: { name: '', age: 0, active: false },
+});
+
+// form.values is typed as FormValues
+// form.getValues() returns FormValues
+// form.setFieldValue('name', ...) — 'name' is constrained to DeepKeys<FormValues>
+// form.setFieldValue('nonexistent', ...) — TypeScript error!
+```
+
+### Setting Values Type Explicitly for Re-export
+
+When you need to reuse the form type elsewhere:
+
+```typescript
+import { useForm } from '@headless-form/react';
+import type { UseFormReturnType } from '@headless-form/react';
+
+type MyForm = UseFormReturnType<
+  { name: string; email: string },  // Values
+  { name: string; email: string },  // TransformedValues (same by default)
+  string                            // TError
+>;
+
+// Can be passed as a prop
+function FormField({ form }: { form: MyForm }) {
+  return <input key={form.key('name')} {...form.getInputProps('name')} />;
+}
+```
+
+---
+
+## Angular: Values
+
+In Angular, the `FormApi` wraps values in signals where reactive reads are needed:
+
+```typescript
+import { Component, ChangeDetectionStrategy } from '@angular/core';
+import { injectForm, HfFieldDirective } from '@headless-form/angular';
+
+@Component({
+  standalone: true,
+  imports: [HfFieldDirective],
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  template: `
+    <form (ngSubmit)="submit($event)">
+      <input [hfField]="form" path="country" placeholder="Country" />
+      <input [hfField]="form" path="state" placeholder="State" />
+      <button type="submit">Submit</button>
+    </form>
+  `,
+})
+export class MyFormComponent {
+  form = injectForm({
+    initialValues: { country: '', state: '' },
+    onValuesChange: (values, previous) => {
+      if (values.country !== previous.country) {
+        this.form.setFieldValue('state', '');
+      }
+    },
+  });
+
+  submit(event: Event) {
+    this.form.onSubmit((values) => console.log(values))(event);
+  }
+}
+```

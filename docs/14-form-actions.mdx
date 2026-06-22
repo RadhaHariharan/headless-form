@@ -1,0 +1,355 @@
+# Form Actions
+
+Form actions allow you to update form state from anywhere in your application —
+outside of the component tree that renders the form. This is useful for patterns like:
+
+- Pre-filling a form after an API response in a different component
+- Resetting a form from a "Cancel" button in a sibling component
+- Updating form values in response to a global event
+
+---
+
+## How It Works
+
+1. **Name your form** by setting the `name` option in `useForm`/`injectForm`
+2. **Create actions** by calling `createFormActions` with the same name
+3. **Call actions** from anywhere — they update the named form's state
+
+---
+
+## Setup
+
+### Step 1: Name the Form
+
+Add a `name` to your form options. The name must contain only letters, numbers, and hyphens:
+
+```tsx
+// DemoForm.tsx
+import { useForm } from '@headless-form/react';
+
+export interface DemoFormValues {
+  name: string;
+  email: string;
+  age: number;
+}
+
+function DemoForm() {
+  const form = useForm<DemoFormValues>({
+    mode: 'uncontrolled',
+    name: 'demo-form', // ← registers in global registry
+    initialValues: {
+      name: '',
+      email: '',
+      age: 0,
+    },
+  });
+
+  return (
+    <form onSubmit={form.onSubmit(console.log)}>
+      <input key={form.key('name')} {...form.getInputProps('name')} placeholder="Name" />
+      <input key={form.key('email')} {...form.getInputProps('email')} placeholder="Email" />
+      <input key={form.key('age')} {...form.getInputProps('age')} type="number" />
+      <button type="submit">Submit</button>
+    </form>
+  );
+}
+```
+
+### Step 2: Create Actions
+
+Call `createFormActions` with the form name. The form does **not** need to be mounted yet:
+
+```typescript
+// demoFormActions.ts
+import { createFormActions } from '@headless-form/react';
+import type { DemoFormValues } from './DemoForm';
+
+export const demoFormActions = createFormActions<DemoFormValues>('demo-form');
+```
+
+### Step 3: Use Actions
+
+Call actions from any component or module — they dispatch to the registered form:
+
+```tsx
+// ExternalControls.tsx
+import { useEffect } from 'react';
+import { demoFormActions } from './demoFormActions';
+
+function ExternalControls() {
+  useEffect(() => {
+    // Pre-fill the form when the component mounts
+    fetch('/api/user')
+      .then((res) => res.json())
+      .then((user) => {
+        demoFormActions.setValues({
+          name: user.name,
+          email: user.email,
+          age: user.age,
+        });
+      });
+  }, []);
+
+  return (
+    <div>
+      <button onClick={() => demoFormActions.reset()}>
+        Reset Form
+      </button>
+      <button onClick={() => demoFormActions.setFieldValue('name', 'Guest')}>
+        Set Guest Name
+      </button>
+      <button onClick={() => demoFormActions.validate()}>
+        Validate Now
+      </button>
+    </div>
+  );
+}
+```
+
+---
+
+## Form Name Rules
+
+Names must consist of only `[a-zA-Z0-9-]` characters — no spaces, underscores, or
+special characters:
+
+```typescript
+// ✅ Valid names
+useForm({ name: 'contact-form' })
+useForm({ name: 'userProfile' })
+useForm({ name: 'checkout-step-1' })
+useForm({ name: 'FORM123' })
+
+// ❌ Invalid names
+useForm({ name: 'my form' })        // spaces not allowed
+useForm({ name: 'user_profile' })   // underscore not allowed
+useForm({ name: 'form@2024' })      // special chars not allowed
+```
+
+Names must be **unique**. If multiple forms share the same name, actions will update
+all of them simultaneously.
+
+---
+
+## Available Actions
+
+`createFormActions` returns an object with the following methods. They accept the same
+arguments as the corresponding `form` methods:
+
+| Action | Description |
+|--------|-------------|
+| `setFieldValue(path, value)` | Set the value of a field |
+| `setValues(values)` | Merge partial values into the form |
+| `setInitialValues(values)` | Update the initial values baseline |
+| `setErrors(errors)` | Replace all errors |
+| `setFieldError(path, error)` | Set an error for a single field |
+| `clearFieldError(path)` | Clear error for a single field |
+| `clearErrors()` | Clear all errors |
+| `reset()` | Reset the form to initial values |
+| `validate()` | Validate all fields |
+| `validateField(path)` | Validate a single field |
+| `reorderListItem(path, payload)` | Reorder a list item |
+| `removeListItem(path, index)` | Remove a list item |
+| `insertListItem(path, item, index?)` | Insert a list item |
+| `setDirty(dirty)` | Set the dirty record |
+| `setTouched(touched)` | Set the touched record |
+| `resetDirty(values?)` | Reset dirty state |
+| `resetTouched()` | Reset touched state |
+
+---
+
+## Full Example
+
+```tsx
+// form-context.ts
+import { createFormActions } from '@headless-form/react';
+
+export interface CheckoutValues {
+  email: string;
+  address: string;
+  paymentMethod: 'card' | 'paypal';
+}
+
+export const checkoutActions = createFormActions<CheckoutValues>('checkout');
+```
+
+```tsx
+// CheckoutForm.tsx
+import { useForm } from '@headless-form/react';
+import { isEmail, isNotEmpty } from '@headless-form/react';
+import type { CheckoutValues } from './form-context';
+
+export function CheckoutForm() {
+  const form = useForm<CheckoutValues>({
+    mode: 'uncontrolled',
+    name: 'checkout',
+    initialValues: {
+      email: '',
+      address: '',
+      paymentMethod: 'card',
+    },
+    validate: {
+      email: isEmail('Invalid email'),
+      address: isNotEmpty('Address is required'),
+    },
+  });
+
+  return (
+    <form onSubmit={form.onSubmit(console.log)}>
+      <input key={form.key('email')} {...form.getInputProps('email')} placeholder="Email" />
+      {form.errors.email && <p>{form.errors.email}</p>}
+
+      <input key={form.key('address')} {...form.getInputProps('address')} placeholder="Address" />
+      {form.errors.address && <p>{form.errors.address}</p>}
+
+      <label>
+        <input
+          key={form.key('paymentMethod')}
+          type="radio"
+          {...form.getInputProps('paymentMethod', { type: 'radio', value: 'card' })}
+        />
+        Credit Card
+      </label>
+      <label>
+        <input
+          key={form.key('paymentMethod')}
+          type="radio"
+          {...form.getInputProps('paymentMethod', { type: 'radio', value: 'paypal' })}
+        />
+        PayPal
+      </label>
+
+      <button type="submit">Place Order</button>
+    </form>
+  );
+}
+```
+
+```tsx
+// UserProfileLoader.tsx — pre-fill form from API
+import { useEffect } from 'react';
+import { checkoutActions } from './form-context';
+
+export function UserProfileLoader() {
+  useEffect(() => {
+    fetch('/api/me')
+      .then((res) => res.json())
+      .then((user) => {
+        checkoutActions.setValues({
+          email: user.email,
+          address: user.defaultAddress,
+        });
+      });
+  }, []);
+
+  return null;
+}
+```
+
+```tsx
+// OrderSummary.tsx — reset form on cancel
+import { checkoutActions } from './form-context';
+
+export function OrderSummary() {
+  return (
+    <div>
+      <h2>Your Order</h2>
+      {/* ... order details ... */}
+      <button onClick={() => checkoutActions.reset()}>Cancel & Reset</button>
+    </div>
+  );
+}
+```
+
+---
+
+## Angular: Named Forms
+
+The same named form / actions pattern works in Angular:
+
+```typescript
+// checkout-form-actions.ts
+import { createFormActions } from '@headless-form/angular';
+
+export interface CheckoutValues {
+  email: string;
+  address: string;
+}
+
+export const checkoutActions = createFormActions<CheckoutValues>('checkout-form');
+```
+
+```typescript
+// checkout-form.component.ts
+import { Component, ChangeDetectionStrategy } from '@angular/core';
+import { injectForm, HfFieldDirective } from '@headless-form/angular';
+import type { CheckoutValues } from './checkout-form-actions';
+
+@Component({
+  standalone: true,
+  imports: [HfFieldDirective],
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  template: `
+    <form (ngSubmit)="submit($event)">
+      <input [hfField]="form" path="email" type="email" />
+      <input [hfField]="form" path="address" />
+      <button type="submit">Submit</button>
+    </form>
+  `,
+})
+export class CheckoutFormComponent {
+  form = injectForm<CheckoutValues>({
+    mode: 'uncontrolled',
+    name: 'checkout-form', // ← must match createFormActions name
+    initialValues: { email: '', address: '' },
+  });
+
+  submit(event: Event) {
+    this.form.onSubmit((values) => console.log(values))(event);
+  }
+}
+```
+
+```typescript
+// profile-loader.service.ts
+import { Injectable } from '@angular/core';
+import { HttpClient } from '@angular/common/http';
+import { checkoutActions } from './checkout-form-actions';
+
+@Injectable({ providedIn: 'root' })
+export class ProfileLoaderService {
+  constructor(private http: HttpClient) {}
+
+  prefillCheckout() {
+    this.http.get('/api/me').subscribe((user: any) => {
+      checkoutActions.setValues({
+        email: user.email,
+        address: user.address,
+      });
+    });
+  }
+}
+```
+
+---
+
+## Vanilla / Core
+
+`createFormActions` is also exported from `@headless-form/core`:
+
+```typescript
+import { createFormStore, createFormActions } from '@headless-form/core';
+
+// Named form
+const form = createFormStore({
+  name: 'search-form',
+  initialValues: { query: '', category: 'all' },
+});
+
+// Actions from anywhere
+const searchActions = createFormActions<{ query: string; category: string }>('search-form');
+
+// Use in a different module
+searchActions.setFieldValue('query', 'headless forms');
+searchActions.validate();
+```

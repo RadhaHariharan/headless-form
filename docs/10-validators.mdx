@@ -1,0 +1,380 @@
+# Form Validators
+
+`@headless-form/react` and `@headless-form/core` export several built-in validator functions
+that can be used directly in the `validate` rules object. They are small, composable, and cover
+the most common field validation requirements.
+
+---
+
+## Usage
+
+Import validators from either package:
+
+```typescript
+import { isNotEmpty, isEmail, matches, isInRange } from '@headless-form/react';
+// or
+import { isNotEmpty, isEmail, matches, isInRange } from '@headless-form/core';
+```
+
+Use them in the `validate` rules object:
+
+```tsx
+import { useForm, isEmail, isNotEmpty, hasLength } from '@headless-form/react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: { name: '', email: '', password: '' },
+  validate: {
+    name: isNotEmpty('Name is required'),
+    email: isEmail('Invalid email address'),
+    password: hasLength({ min: 8 }, 'Password must be at least 8 characters'),
+  },
+});
+```
+
+---
+
+## Optional Error Messages
+
+All validator functions accept an optional error message as their last argument.
+If the error message is omitted, validation will still fail but no error message will be set —
+the input will only receive invalid styling (if you apply `error` prop to your inputs):
+
+```tsx
+import { useForm, isEmail } from '@headless-form/react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: { email: '' },
+  validate: {
+    // With error message
+    email: isEmail('Please enter a valid email address'),
+    // Without error message — marks invalid without error text
+    // email: isEmail(),
+  },
+});
+```
+
+---
+
+## isNotEmpty
+
+Checks that the form value is not empty. The following are considered empty:
+- Empty string (`''`)
+- Empty array (`[]`)
+- `false`
+- `null`
+- `undefined`
+
+Strings are trimmed before the check:
+
+```tsx
+import { useForm, isNotEmpty } from '@headless-form/react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: {
+    name: '',
+    acceptTerms: false,
+    country: null as string | null,
+    jobs: [] as string[],
+  },
+  validate: {
+    // Empty string fails
+    name: isNotEmpty('Name cannot be empty'),
+
+    // false fails
+    acceptTerms: isNotEmpty('You must accept terms of use'),
+
+    // null fails
+    country: isNotEmpty('Please select a country'),
+
+    // Empty array fails
+    jobs: isNotEmpty('Add at least one job'),
+  },
+});
+```
+
+---
+
+## isEmail
+
+Validates that the value is a valid email address using the pattern:
+`/^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,})+$/`
+
+```tsx
+import { useForm, isEmail } from '@headless-form/react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: { email: '' },
+  validate: {
+    email: isEmail('Invalid email address'),
+  },
+});
+```
+
+---
+
+## matches
+
+Validates that the value matches a given regular expression. If the value is not a string,
+validation fails:
+
+```tsx
+import { useForm, matches } from '@headless-form/react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: {
+    color: '',
+    zipCode: '',
+    phone: '',
+  },
+  validate: {
+    // Hex color
+    color: matches(/^#([0-9a-f]{3}){1,2}$/i, 'Invalid hex color'),
+
+    // US ZIP code
+    zipCode: matches(/^\d{5}(-\d{4})?$/, 'Invalid ZIP code'),
+
+    // Phone number
+    phone: matches(/^\+?[\d\s\-()]{7,15}$/, 'Invalid phone number'),
+  },
+});
+```
+
+---
+
+## isInRange
+
+Validates that a number is within the given `min`–`max` range. If the value is not a number,
+validation fails:
+
+```tsx
+import { useForm, isInRange } from '@headless-form/react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: {
+    maxAge: 0,
+    minScore: 0,
+    rating: 0,
+  },
+  validate: {
+    // Only max bound
+    maxAge: isInRange({ max: 120 }, 'Age must be 120 or less'),
+
+    // Only min bound
+    minScore: isInRange({ min: 0 }, 'Score must be 0 or more'),
+
+    // Both bounds
+    rating: isInRange({ min: 1, max: 5 }, 'Rating must be between 1 and 5'),
+  },
+});
+```
+
+---
+
+## hasLength
+
+Validates that the value's `length` property is within the given range. Works with strings,
+arrays, and any object with a `length` property. Strings are trimmed before the check:
+
+```tsx
+import { useForm, hasLength } from '@headless-form/react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: {
+    pin: '',
+    bio: '',
+    username: '',
+    tags: [] as string[],
+  },
+  validate: {
+    // Exact length
+    pin: hasLength(4, 'PIN must be exactly 4 digits'),
+
+    // Maximum length
+    bio: hasLength({ max: 200 }, 'Bio must be 200 characters or less'),
+
+    // Minimum length
+    username: hasLength({ min: 3 }, 'Username must be at least 3 characters'),
+
+    // Range
+    tags: hasLength({ min: 1, max: 5 }, 'Add 1 to 5 tags'),
+  },
+});
+```
+
+---
+
+## matchesField
+
+Validates that the value is equal to the value of another field in the form.
+Note: only primitive values can be compared — arrays and objects are not supported:
+
+```tsx
+import { useForm, matchesField } from '@headless-form/react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: {
+    password: '',
+    confirmPassword: '',
+    email: '',
+    confirmEmail: '',
+  },
+  validate: {
+    password: (v) => v.length < 8 ? 'Password must be at least 8 characters' : null,
+    confirmPassword: matchesField('password', 'Passwords do not match'),
+    email: isEmail('Invalid email'),
+    confirmEmail: matchesField('email', 'Emails do not match'),
+  },
+});
+```
+
+---
+
+## isJSONString
+
+Validates that the value is a valid JSON string:
+
+```tsx
+import { useForm, isJSONString } from '@headless-form/react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: { config: '' },
+  validate: {
+    config: isJSONString('Please enter valid JSON'),
+  },
+});
+
+// Valid: '{"key": "value"}'
+// Invalid: 'not json', '{key: value}', ''
+```
+
+---
+
+## isNotEmptyHTML
+
+Validates that the value is not an empty HTML string. An empty HTML string is any string
+that contains only HTML tags and whitespace with no visible text content:
+
+```tsx
+import { useForm, isNotEmptyHTML } from '@headless-form/react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: { content: '' },
+  validate: {
+    content: isNotEmptyHTML('Content cannot be empty'),
+  },
+});
+
+// Invalid: '', '   ', '<p></p>', '<p><br></p>', '<div>  </div>'
+// Valid: '<p>Hello</p>', '<strong>Text</strong>'
+```
+
+---
+
+## Combining Validators
+
+Since validators return error messages or `null`, you can compose them using a wrapper:
+
+```tsx
+import { useForm, isNotEmpty, isEmail } from '@headless-form/react';
+
+function compose<T>(
+  ...validators: Array<(value: T) => string | null>
+): (value: T) => string | null {
+  return (value) => {
+    for (const validator of validators) {
+      const error = validator(value);
+      if (error !== null) return error;
+    }
+    return null;
+  };
+}
+
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: { email: '' },
+  validate: {
+    email: compose(
+      isNotEmpty('Email is required'),
+      isEmail('Invalid email format'),
+    ),
+  },
+});
+```
+
+---
+
+## Custom Validators
+
+Write your own validators as simple functions that match the `ValidationRule` signature:
+
+```typescript
+import type { ValidationRule } from '@headless-form/react';
+
+// A custom validator that accepts an error message
+function isStrongPassword(error: string): ValidationRule<string> {
+  return (value) => {
+    const hasUppercase = /[A-Z]/.test(value);
+    const hasLowercase = /[a-z]/.test(value);
+    const hasDigit = /\d/.test(value);
+    const hasSpecial = /[!@#$%^&*]/.test(value);
+    const isLongEnough = value.length >= 8;
+
+    if (!hasUppercase || !hasLowercase || !hasDigit || !hasSpecial || !isLongEnough) {
+      return error;
+    }
+
+    return null;
+  };
+}
+
+// Usage
+const form = useForm({
+  initialValues: { password: '' },
+  validate: {
+    password: isStrongPassword(
+      'Password must be 8+ characters with uppercase, lowercase, digit, and special character'
+    ),
+  },
+});
+```
+
+---
+
+## Angular: Validators
+
+All validators are re-exported from `@headless-form/angular`:
+
+```typescript
+import {
+  isNotEmpty,
+  isEmail,
+  matches,
+  matchesField,
+  isInRange,
+  hasLength,
+  isJSONString,
+  isNotEmptyHTML,
+} from '@headless-form/angular';
+
+export class MyFormComponent {
+  form = injectForm({
+    mode: 'uncontrolled',
+    initialValues: { name: '', email: '', password: '' },
+    validate: {
+      name: isNotEmpty('Name is required'),
+      email: isEmail('Invalid email'),
+      password: hasLength({ min: 8 }, 'Password must be at least 8 characters'),
+    },
+  });
+}
+```

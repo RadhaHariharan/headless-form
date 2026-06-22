@@ -1,0 +1,347 @@
+# Form Errors
+
+`headless-form` tracks validation errors in a flat `errors` object keyed by dot-notation
+field paths. Errors are set automatically during validation and can be managed manually
+at any time.
+
+---
+
+## Errors Object
+
+`form.errors` is an object containing the current validation errors:
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: { firstName: '', lastName: '' },
+  validate: {
+    firstName: (value) =>
+      value.length < 2 ? 'First name is too short' : null,
+    lastName: (value) =>
+      value.length < 2 ? 'Last name is too short' : null,
+  },
+});
+
+// Empty by default
+form.errors; // -> {}
+
+// Filled after form.validate() or form.onSubmit()
+await form.validate();
+
+form.errors;
+// -> {
+//   firstName: 'First name is too short',
+//   lastName: 'Last name is too short',
+// }
+```
+
+---
+
+## Initial Errors
+
+Set errors that appear immediately when the form mounts:
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: { firstName: '', lastName: '' },
+  initialErrors: {
+    firstName: 'First name is too short',
+    lastName: 'Last name is too short',
+  },
+});
+
+// Available immediately — no validation needed
+form.errors;
+// -> { firstName: 'First name is too short', lastName: 'Last name is too short' }
+```
+
+---
+
+## setErrors
+
+Replaces the entire errors record at once:
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+const form = useForm({ mode: 'uncontrolled' });
+
+form.setErrors({ firstName: 'Too short', email: 'Invalid email' });
+
+form.errors;
+// -> { firstName: 'Too short', email: 'Invalid email' }
+```
+
+Common use case — map server-side validation errors to form fields:
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+function Demo() {
+  const form = useForm({
+    mode: 'uncontrolled',
+    initialValues: { email: '', password: '' },
+  });
+
+  const handleSubmit = form.onSubmit(async (values) => {
+    try {
+      await api.login(values);
+    } catch (error) {
+      if (error.type === 'validation') {
+        // Map server errors to form fields
+        form.setErrors({
+          email: error.fields.email,
+          password: error.fields.password,
+        });
+      }
+    }
+  });
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <input key={form.key('email')} {...form.getInputProps('email')} />
+      {form.errors.email && <p>{form.errors.email}</p>}
+
+      <input key={form.key('password')} {...form.getInputProps('password')} type="password" />
+      {form.errors.password && <p>{form.errors.password}</p>}
+
+      <button type="submit">Login</button>
+    </form>
+  );
+}
+```
+
+---
+
+## setFieldError
+
+Sets the error for a single field:
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: { name: '', email: '' },
+});
+
+form.setFieldError('email', 'Invalid email');
+
+form.errors; // -> { email: 'Invalid email' }
+```
+
+Use it to display server-side errors after a failed API call:
+
+```tsx
+form.onSubmit(async (values) => {
+  const response = await fetch('/api/register', {
+    method: 'POST',
+    body: JSON.stringify(values),
+  });
+
+  if (!response.ok) {
+    const { field, message } = await response.json();
+    form.setFieldError(field, message);
+  }
+});
+```
+
+---
+
+## clearErrors
+
+Clears all errors at once:
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  initialErrors: { name: 'Too short', email: 'Invalid email' },
+});
+
+form.clearErrors();
+
+form.errors; // -> {}
+```
+
+---
+
+## clearFieldError
+
+Clears the error for a single field:
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  initialErrors: { name: 'Too short', email: 'Invalid email' },
+});
+
+form.clearFieldError('name');
+
+form.errors; // -> { email: 'Invalid email' }
+```
+
+---
+
+## Errors as Any Value
+
+The error for a field can be any value of your `TError` type. By default, `TError` is `unknown`.
+In React, it is typically `React.ReactNode` so you can render JSX errors:
+
+```tsx
+import { useForm } from '@headless-form/react';
+import type { ReactNode } from 'react';
+
+const form = useForm<{ name: string; email: string }, { name: string; email: string }, ReactNode>({
+  mode: 'uncontrolled',
+  initialValues: { name: '', email: '' },
+  initialErrors: {
+    name: <strong>Name is required</strong>,
+    email: <span style={{ color: 'orange' }}>Please enter a valid email</span>,
+  },
+});
+```
+
+Errors that are `false`, `null`, or `undefined` are automatically excluded from the errors object:
+
+```tsx
+const form = useForm({
+  mode: 'uncontrolled',
+  initialErrors: {
+    name: 'name-error',
+    email: null,     // excluded
+    phone: undefined, // excluded
+    active: false,   // excluded
+  },
+});
+
+form.errors; // -> { name: 'name-error' }
+```
+
+---
+
+## FormErrors Type
+
+`form.errors` is typed as `FormErrors<TError>` which is `Record<string, TError>`.
+Import the type from either package:
+
+```typescript
+import type { FormErrors } from '@headless-form/react';
+// or
+import type { FormErrors } from '@headless-form/core';
+
+// Use in function signatures
+const handleErrors = (errors: FormErrors<string>) => {
+  Object.entries(errors).forEach(([field, message]) => {
+    console.log(`${field}: ${message}`);
+  });
+};
+```
+
+Get the errors type directly from a form instance:
+
+```typescript
+import { useForm } from '@headless-form/react';
+
+const form = useForm({ mode: 'uncontrolled', initialValues: { name: '' } });
+
+// Derive type from instance
+const handleErrors = (errors: typeof form.errors) => {
+  console.log(errors);
+};
+```
+
+---
+
+## Nested Field Errors
+
+Errors for nested objects and array items use dot-notation keys:
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: {
+    user: { name: '', email: '' },
+    addresses: [{ street: '', city: '' }],
+  },
+  validate: {
+    user: {
+      name: (v) => v.length < 2 ? 'Too short' : null,
+      email: (v) => !/\S+@\S+/.test(v) ? 'Invalid email' : null,
+    },
+    addresses: {
+      street: (v) => !v.trim() ? 'Required' : null,
+    },
+  },
+});
+
+await form.validate();
+
+form.errors;
+// -> {
+//   'user.name': 'Too short',
+//   'user.email': 'Invalid email',
+//   'addresses.0.street': 'Required',
+// }
+
+// Read individual nested error
+const nameError = form.errors['user.name'];
+```
+
+---
+
+## Angular: Errors Signal
+
+In Angular, `form.errors()` is a signal that returns the current errors record:
+
+```typescript
+import { Component, ChangeDetectionStrategy } from '@angular/core';
+import { injectForm, HfFieldDirective } from '@headless-form/angular';
+
+@Component({
+  standalone: true,
+  imports: [HfFieldDirective],
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  template: `
+    <form (ngSubmit)="submit($event)">
+      <input [hfField]="form" path="email" type="email" />
+      
+      <!-- Read from the errors signal -->
+      @if (form.errors()['email']) {
+        <p>{{ form.errors()['email'] }}</p>
+      }
+
+      <button type="submit">Submit</button>
+    </form>
+  `,
+})
+export class MyFormComponent {
+  form = injectForm({
+    mode: 'uncontrolled',
+    initialValues: { email: '' },
+    validate: {
+      email: (v: string) => !/\S+@\S+/.test(v) ? 'Invalid email' : null,
+    },
+  });
+
+  submit(event: Event) {
+    this.form.onSubmit(
+      (values) => console.log(values),
+      (errors) => {
+        // errors is the plain FormErrors record (not a signal)
+        console.log('Validation failed:', errors);
+      }
+    )(event);
+  }
+}
+```

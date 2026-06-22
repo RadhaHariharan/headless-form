@@ -1,0 +1,540 @@
+# Form Validation
+
+`headless-form` supports sync and async validation via a rules object, a whole-form function,
+or a Standard Schema resolver. Rules run on submit, on change, on blur, or on demand.
+
+---
+
+## Validation with a Rules Object
+
+Provide an object of validator functions matching your form values shape. Each function receives
+the field value and returns an error message or `null`/`undefined` when valid:
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+function Demo() {
+  const form = useForm({
+    mode: 'uncontrolled',
+    initialValues: {
+      name: '',
+      email: '',
+      age: 0,
+    },
+    validate: {
+      name: (value) =>
+        value.trim().length < 2 ? 'Name must be at least 2 characters' : null,
+      email: (value) =>
+        /^\S+@\S+\.\S+$/.test(value) ? null : 'Invalid email address',
+      age: (value) =>
+        value < 18 ? 'Must be 18 or older' : null,
+    },
+  });
+
+  return (
+    <form onSubmit={form.onSubmit((values) => console.log(values))}>
+      <input key={form.key('name')} {...form.getInputProps('name')} placeholder="Name" />
+      {form.errors.name && <p>{form.errors.name}</p>}
+
+      <input key={form.key('email')} {...form.getInputProps('email')} placeholder="Email" />
+      {form.errors.email && <p>{form.errors.email}</p>}
+
+      <input key={form.key('age')} {...form.getInputProps('age')} type="number" />
+      {form.errors.age && <p>{form.errors.age}</p>}
+
+      <button type="submit">Submit</button>
+    </form>
+  );
+}
+```
+
+---
+
+## Rule Function Arguments
+
+Each validation rule receives four arguments:
+
+| Argument | Description |
+|----------|-------------|
+| `value` | The current value of this field |
+| `values` | All form values (for cross-field validation) |
+| `path` | The dot-notation path of the field, e.g. `'user.email'` or `'items.0.name'` |
+| `signal` | An `AbortSignal` aborted when a newer validation supersedes this one (useful for cancelling async requests) |
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: { items: [{ name: '' }, { name: '' }] },
+  validate: {
+    items: {
+      name: (value, values, path) => {
+        // path is e.g. 'items.0.name' or 'items.1.name'
+        const index = parseInt(path.split('.')[1], 10);
+        if (index === 0 && value.trim().length < 2) {
+          return 'First item name must be at least 2 characters';
+        }
+        return null;
+      },
+    },
+  },
+});
+```
+
+---
+
+## formRootRule
+
+`formRootRule` is a special Symbol that can be used to validate objects or arrays alongside
+their individual fields. Useful for ensuring a list is non-empty while also validating each item:
+
+```tsx
+import { useForm, formRootRule } from '@headless-form/react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: {
+    tags: [] as string[],
+  },
+  validate: {
+    tags: {
+      [formRootRule]: (value) =>
+        value.length === 0 ? 'Add at least one tag' : null,
+    },
+  },
+});
+```
+
+Validate an object's field combination:
+
+```tsx
+import { useForm, formRootRule } from '@headless-form/react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: {
+    range: { min: 0, max: 100 },
+  },
+  validate: {
+    range: {
+      [formRootRule]: (value) =>
+        value.min >= value.max ? 'Min must be less than Max' : null,
+      min: (v) => v < 0 ? 'Must be non-negative' : null,
+      max: (v) => v > 1000 ? 'Cannot exceed 1000' : null,
+    },
+  },
+});
+```
+
+---
+
+## Validation Based on Other Form Values
+
+Use the second argument of the rule function to access other fields:
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+function PasswordForm() {
+  const form = useForm({
+    mode: 'uncontrolled',
+    initialValues: {
+      password: '',
+      confirmPassword: '',
+    },
+    validate: {
+      password: (value) =>
+        value.length < 8 ? 'Password must be at least 8 characters' : null,
+      confirmPassword: (value, values) =>
+        value !== values.password ? 'Passwords do not match' : null,
+    },
+  });
+
+  return (
+    <form onSubmit={form.onSubmit(console.log)}>
+      <input
+        key={form.key('password')}
+        {...form.getInputProps('password')}
+        type="password"
+        placeholder="Password"
+      />
+      {form.errors.password && <p>{form.errors.password}</p>}
+
+      <input
+        key={form.key('confirmPassword')}
+        {...form.getInputProps('confirmPassword')}
+        type="password"
+        placeholder="Confirm Password"
+      />
+      {form.errors.confirmPassword && <p>{form.errors.confirmPassword}</p>}
+
+      <button type="submit">Submit</button>
+    </form>
+  );
+}
+```
+
+---
+
+## Function-based Validation
+
+Pass a function to `validate` instead of a rules object. The function receives all form values
+and returns an errors record. Omit a field from the result (or return `null` for it) to indicate it's valid:
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: { name: '', email: '', age: 0 },
+  validate: (values) => {
+    const errors: Record<string, string> = {};
+
+    if (values.name.trim().length < 2) {
+      errors.name = 'Name must be at least 2 characters';
+    }
+    if (!/^\S+@\S+\.\S+$/.test(values.email)) {
+      errors.email = 'Invalid email';
+    }
+    if (values.age < 18) {
+      errors.age = 'Must be 18 or older';
+    }
+
+    return errors;
+  },
+});
+```
+
+---
+
+## Validate Fields on Change
+
+Set `validateInputOnChange: true` to validate all fields on every keystroke:
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  validateInputOnChange: true,
+  initialValues: { name: '', email: '' },
+  validate: {
+    name: (v) => v.trim().length < 2 ? 'Too short' : null,
+    email: (v) => !/^\S+@\S+/.test(v) ? 'Invalid email' : null,
+  },
+});
+```
+
+Validate only specific fields on change by passing an array of paths:
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  // Validate only 'email' and all items' 'name' fields on change
+  validateInputOnChange: ['email', 'items.0.name', 'items.1.name'],
+  initialValues: { name: '', email: '', items: [{ name: '' }, { name: '' }] },
+  validate: {
+    name: (v) => v.trim().length < 2 ? 'Too short' : null,
+    email: (v) => !/^\S+@\S+/.test(v) ? 'Invalid email' : null,
+    items: {
+      name: (v) => !v.trim() ? 'Required' : null,
+    },
+  },
+});
+```
+
+---
+
+## Validate Fields on Blur
+
+Set `validateInputOnBlur: true` to validate when focus leaves a field:
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  validateInputOnBlur: true,
+  initialValues: { name: '', email: '' },
+  validate: {
+    name: (v) => v.trim().length < 2 ? 'Too short' : null,
+    email: (v) => !/^\S+@\S+/.test(v) ? 'Invalid email' : null,
+  },
+});
+```
+
+Pass an array of paths to validate only specific fields on blur:
+
+```tsx
+const form = useForm({
+  mode: 'uncontrolled',
+  validateInputOnBlur: ['name', 'email'],
+  // ...
+});
+```
+
+---
+
+## Clear Field Error on Change
+
+By default, a field's error is cleared when its value changes. Set `clearInputErrorOnChange: false`
+to retain the error even while typing:
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  clearInputErrorOnChange: false, // keep error visible while typing
+  initialValues: { email: '' },
+  validate: {
+    email: (v) => !/^\S+@\S+/.test(v) ? 'Invalid email' : null,
+  },
+});
+```
+
+---
+
+## Validation in onSubmit Handler
+
+`form.onSubmit` validates all fields before calling your submit handler.
+The second argument is an optional error callback:
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+function Demo() {
+  const form = useForm({
+    mode: 'uncontrolled',
+    initialValues: { email: '', password: '' },
+    validate: {
+      email: (v) => !/^\S+@\S+/.test(v) ? 'Invalid email' : null,
+      password: (v) => v.length < 8 ? 'Too short' : null,
+    },
+  });
+
+  return (
+    <form
+      onSubmit={form.onSubmit(
+        // Called when all validations pass
+        (values) => {
+          console.log('Submit:', values);
+        },
+        // Called when validation fails
+        (errors, values) => {
+          console.log('Validation errors:', errors);
+          // Focus the first invalid field
+          const firstError = Object.keys(errors)[0];
+          form.getInputNode(firstError)?.focus();
+        }
+      )}
+    >
+      <input key={form.key('email')} {...form.getInputProps('email')} />
+      {form.errors.email && <p>{form.errors.email}</p>}
+
+      <input key={form.key('password')} {...form.getInputProps('password')} type="password" />
+      {form.errors.password && <p>{form.errors.password}</p>}
+
+      <button type="submit">Login</button>
+    </form>
+  );
+}
+```
+
+---
+
+## isValid Handler
+
+`form.isValid()` checks validity **without** setting errors. It returns a boolean (or
+`Promise<boolean>` when any rule is async):
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: { name: '', age: 0 },
+  validate: {
+    name: (value) => value.trim().length < 2 ? 'Too short' : null,
+    age: (value) => value < 18 ? 'Too young' : null,
+  },
+});
+
+// Check entire form
+form.isValid(); // -> false (no errors written to form.errors)
+
+// Check a single field
+form.isValid('name'); // -> false
+form.isValid('age');  // -> false
+```
+
+---
+
+## Async Validation
+
+Return a `Promise` from any rule to make it async. When any rule is async, `validate()`,
+`validateField()`, and `isValid()` return `Promise`s:
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+function Demo() {
+  const form = useForm({
+    mode: 'uncontrolled',
+    initialValues: { username: '' },
+    validate: {
+      username: async (value, _values, _path, signal) => {
+        if (value.trim().length < 3) return 'Too short';
+        const response = await fetch(`/api/check-username?q=${value}`, { signal });
+        const { taken } = await response.json();
+        return taken ? 'Username is already taken' : null;
+      },
+    },
+  });
+
+  return (
+    <form onSubmit={form.onSubmit(console.log)}>
+      <input key={form.key('username')} {...form.getInputProps('username')} />
+      {form.validating && <span>Checking username…</span>}
+      {form.errors.username && <p>{form.errors.username}</p>}
+      <button type="submit">Submit</button>
+    </form>
+  );
+}
+```
+
+The `signal` argument is an `AbortSignal` that is aborted when a newer validation run supersedes
+the current one. Pass it to `fetch` to cancel in-flight requests and avoid race conditions.
+
+---
+
+## Async Validation with Debounce
+
+Set `validateDebounce` to avoid firing API calls on every keystroke when using
+`validateInputOnChange`:
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  validateInputOnChange: true,
+  validateDebounce: 500, // wait 500ms after last keystroke
+  initialValues: { username: '' },
+  validate: {
+    username: async (value, _values, _path, signal) => {
+      if (value.trim().length < 3) return 'Too short';
+      const response = await fetch(`/api/check-username?q=${value}`, { signal });
+      const { taken } = await response.json();
+      return taken ? 'Username is taken' : null;
+    },
+  },
+});
+```
+
+The debounce applies only to field-level validation triggered by change/blur events.
+It does **not** delay `form.validate()` or `form.onSubmit()`.
+
+---
+
+## Focus the First Invalid Field
+
+Use `form.getInputNode(path)` in the `onInvalid` callback to focus the first invalid field:
+
+```tsx
+import { useForm } from '@headless-form/react';
+
+function Demo() {
+  const form = useForm({
+    mode: 'uncontrolled',
+    initialValues: { name: '', email: '' },
+    validate: {
+      name: (v) => !v.trim() ? 'Required' : null,
+      email: (v) => !/^\S+@\S+/.test(v) ? 'Invalid email' : null,
+    },
+  });
+
+  return (
+    <form
+      onSubmit={form.onSubmit(
+        (values) => console.log(values),
+        (errors) => {
+          // Focus the first invalid field for accessibility
+          const firstKey = Object.keys(errors)[0];
+          if (firstKey) {
+            form.getInputNode(firstKey)?.focus();
+          }
+        }
+      )}
+    >
+      <input key={form.key('name')} {...form.getInputProps('name')} placeholder="Name" />
+      {form.errors.name && <p>{form.errors.name}</p>}
+
+      <input key={form.key('email')} {...form.getInputProps('email')} placeholder="Email" />
+      {form.errors.email && <p>{form.errors.email}</p>}
+
+      <button type="submit">Submit</button>
+    </form>
+  );
+}
+```
+
+`getInputNode` uses the `data-path` attribute set by `getInputProps` to locate the element in the DOM.
+It returns `null` on the server (SSR-safe).
+
+---
+
+## Angular: Validation
+
+All validation options work identically in Angular:
+
+```typescript
+import { Component, ChangeDetectionStrategy } from '@angular/core';
+import { injectForm, HfFieldDirective } from '@headless-form/angular';
+
+@Component({
+  standalone: true,
+  imports: [HfFieldDirective],
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  template: `
+    <form (ngSubmit)="submit($event)">
+      <input [hfField]="form" path="email" type="email" placeholder="Email" />
+      @if (form.errors()['email']) {
+        <p>{{ form.errors()['email'] }}</p>
+      }
+
+      @if (form.validating()) {
+        <p>Validating...</p>
+      }
+
+      <button type="submit" [disabled]="form.submitting()">Submit</button>
+    </form>
+  `,
+})
+export class MyFormComponent {
+  form = injectForm({
+    mode: 'uncontrolled',
+    validateInputOnChange: true,
+    validateDebounce: 300,
+    initialValues: { email: '' },
+    validate: {
+      email: async (value: string, _values: unknown, _path: string, signal: AbortSignal) => {
+        if (!/^\S+@\S+/.test(value)) return 'Invalid email';
+        const res = await fetch(`/api/check-email?q=${value}`, { signal });
+        const { taken } = await res.json();
+        return taken ? 'Email already registered' : null;
+      },
+    },
+  });
+
+  submit(event: Event) {
+    this.form.onSubmit(
+      (values) => console.log('Submit:', values),
+      (errors) => console.log('Errors:', errors)
+    )(event);
+  }
+}
+```

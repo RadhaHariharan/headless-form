@@ -1,0 +1,25 @@
+{
+  "name": "@headless-form/example-angular",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Angular 18 example — mirrors React demos",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@angular/common": "^18.0.0",
+    "@angular/core": "^18.0.0",
+    "@angular/platform-browser": "^18.0.0",
+    "@angular/platform-browser-dynamic": "^18.0.0",
+    "@headless-form/angular": "workspace:*",
+    "@headless-form/core": "workspace:*",
+    "zone.js": "^0.14.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.2",
+    "vite": "^5.4.0"
+  }
+}

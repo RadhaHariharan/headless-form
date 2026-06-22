@@ -1,0 +1,632 @@
+# Recipes
+
+Common patterns and real-world form implementations using `headless-form`.
+
+---
+
+## Set Initial Values with Async Request
+
+Use `form.initialize` to populate the form once from an API response. The method is
+idempotent — safe to call in effects that may fire multiple times:
+
+```tsx
+import { useEffect, useState } from 'react';
+import { useForm, isNotEmpty, isEmail } from '@headless-form/react';
+
+interface UserProfile {
+  name: string;
+  email: string;
+  bio: string;
+}
+
+function EditProfileForm() {
+  const [loading, setLoading] = useState(true);
+
+  const form = useForm<UserProfile>({
+    mode: 'uncontrolled',
+    initialValues: { name: '', email: '', bio: '' },
+    validate: {
+      name: isNotEmpty('Name is required'),
+      email: isEmail('Invalid email'),
+    },
+    // Disable all inputs until data is loaded
+    enhanceGetInputProps: () => ({
+      disabled: !form.initialized,
+    }),
+  });
+
+  useEffect(() => {
+    fetch('/api/profile')
+      .then((res) => res.json())
+      .then((data: UserProfile) => {
+        form.initialize(data);
+        setLoading(false);
+      });
+  }, []);
+
+  return (
+    <form
+      onSubmit={form.onSubmit(async (values) => {
+        await fetch('/api/profile', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(values),
+        });
+
+        // After saving, reset dirty baseline
+        form.resetDirty(values);
+      })}
+    >
+      {loading ? (
+        <p>Loading...</p>
+      ) : (
+        <>
+          <div>
+            <label>Name</label>
+            <input key={form.key('name')} {...form.getInputProps('name')} />
+            {form.errors.name && <p>{form.errors.name}</p>}
+          </div>
+          <div>
+            <label>Email</label>
+            <input key={form.key('email')} {...form.getInputProps('email')} type="email" />
+            {form.errors.email && <p>{form.errors.email}</p>}
+          </div>
+          <div>
+            <label>Bio</label>
+            <textarea key={form.key('bio')} {...form.getInputProps('bio')} />
+          </div>
+
+          <button type="submit" disabled={form.submitting || !form.isDirty()}>
+            {form.submitting ? 'Saving...' : 'Save Changes'}
+          </button>
+          <button type="button" onClick={() => form.reset()} disabled={!form.isDirty()}>
+            Discard Changes
+          </button>
+        </>
+      )}
+    </form>
+  );
+}
+```
+
+---
+
+## Save Form Values to localStorage
+
+Persist form state across page reloads using `onValuesChange` to sync to `localStorage`:
+
+```tsx
+import { useForm, isNotEmpty, isEmail } from '@headless-form/react';
+
+const STORAGE_KEY = 'contact-form-draft';
+
+function getStoredValues() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+interface ContactValues {
+  name: string;
+  email: string;
+  message: string;
+}
+
+function ContactForm() {
+  const stored = getStoredValues();
+
+  const form = useForm<ContactValues>({
+    mode: 'uncontrolled',
+    initialValues: stored ?? { name: '', email: '', message: '' },
+    validate: {
+      name: isNotEmpty('Name is required'),
+      email: isEmail('Invalid email'),
+      message: isNotEmpty('Message is required'),
+    },
+    onValuesChange: (values) => {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(values));
+    },
+  });
+
+  const handleSubmit = form.onSubmit(async (values) => {
+    await fetch('/api/contact', {
+      method: 'POST',
+      body: JSON.stringify(values),
+    });
+    // Clear draft after successful submit
+    localStorage.removeItem(STORAGE_KEY);
+    form.reset();
+  });
+
+  const clearDraft = () => {
+    localStorage.removeItem(STORAGE_KEY);
+    form.reset();
+  };
+
+  return (
+    <form onSubmit={handleSubmit}>
+      {stored && (
+        <div style={{ padding: '8px', background: '#fffde7' }}>
+          Draft restored from a previous session.{' '}
+          <button type="button" onClick={clearDraft} style={{ marginLeft: '8px' }}>
+            Clear draft
+          </button>
+        </div>
+      )}
+
+      <input key={form.key('name')} {...form.getInputProps('name')} placeholder="Name" />
+      {form.errors.name && <p>{form.errors.name}</p>}
+
+      <input
+        key={form.key('email')}
+        {...form.getInputProps('email')}
+        type="email"
+        placeholder="Email"
+      />
+      {form.errors.email && <p>{form.errors.email}</p>}
+
+      <textarea
+        key={form.key('message')}
+        {...form.getInputProps('message')}
+        placeholder="Your message"
+        rows={5}
+      />
+      {form.errors.message && <p>{form.errors.message}</p>}
+
+      <button type="submit" disabled={form.submitting}>
+        {form.submitting ? 'Sending...' : 'Send'}
+      </button>
+    </form>
+  );
+}
+```
+
+---
+
+## List Items Reordering (Drag and Drop)
+
+Use `form.reorderListItem` with a drag-and-drop library to support reorderable lists.
+Here's an example using HTML5 drag events (adapt for your preferred DnD library):
+
+```tsx
+import { useRef } from 'react';
+import { useForm } from '@headless-form/react';
+
+interface Task {
+  title: string;
+  priority: 'low' | 'medium' | 'high';
+}
+
+function TaskList() {
+  const dragIndex = useRef<number | null>(null);
+  const form = useForm({
+    mode: 'uncontrolled',
+    initialValues: {
+      tasks: [
+        { title: 'Design wireframes', priority: 'high' as const },
+        { title: 'Write tests', priority: 'medium' as const },
+        { title: 'Update docs', priority: 'low' as const },
+      ] as Task[],
+    },
+  });
+
+  const tasks = form.getValues().tasks;
+
+  return (
+    <form onSubmit={form.onSubmit(console.log)}>
+      {tasks.map((task, index) => (
+        <div
+          key={form.key(`tasks.${index}`)}
+          draggable
+          onDragStart={() => { dragIndex.current = index; }}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={() => {
+            if (dragIndex.current !== null && dragIndex.current !== index) {
+              form.reorderListItem('tasks', {
+                from: dragIndex.current,
+                to: index,
+              });
+              dragIndex.current = null;
+            }
+          }}
+          style={{
+            display: 'flex',
+            gap: '8px',
+            padding: '8px',
+            margin: '4px 0',
+            border: '1px solid #ddd',
+            borderRadius: '4px',
+            cursor: 'grab',
+            background: '#fff',
+          }}
+        >
+          <span>⠿</span>
+          <input
+            key={form.key(`tasks.${index}.title`)}
+            {...form.getInputProps(`tasks.${index}.title`)}
+            style={{ flex: 1 }}
+          />
+          <select
+            key={form.key(`tasks.${index}.priority`)}
+            {...form.getInputProps(`tasks.${index}.priority`)}
+          >
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+          </select>
+          <button
+            type="button"
+            onClick={() => form.removeListItem('tasks', index)}
+          >
+            ✕
+          </button>
+        </div>
+      ))}
+
+      <button
+        type="button"
+        onClick={() => form.insertListItem('tasks', { title: '', priority: 'medium' })}
+      >
+        Add Task
+      </button>
+      <button type="submit">Save Tasks</button>
+    </form>
+  );
+}
+```
+
+---
+
+## Multi-Step Form
+
+Divide a long form across multiple steps using a single form instance:
+
+```tsx
+import { useState } from 'react';
+import { useForm, isNotEmpty, isEmail } from '@headless-form/react';
+
+interface MultiStepValues {
+  // Step 1: Personal
+  firstName: string;
+  lastName: string;
+  email: string;
+
+  // Step 2: Company
+  company: string;
+  role: string;
+
+  // Step 3: Preferences
+  newsletter: boolean;
+  plan: 'starter' | 'pro' | 'enterprise';
+}
+
+const STEPS = ['Personal', 'Company', 'Preferences'];
+
+function MultiStepForm() {
+  const [step, setStep] = useState(0);
+
+  const form = useForm<MultiStepValues>({
+    mode: 'uncontrolled',
+    initialValues: {
+      firstName: '',
+      lastName: '',
+      email: '',
+      company: '',
+      role: '',
+      newsletter: false,
+      plan: 'starter',
+    },
+    validate: {
+      // Step 1 validators
+      firstName: isNotEmpty('First name is required'),
+      lastName: isNotEmpty('Last name is required'),
+      email: isEmail('Invalid email'),
+
+      // Step 2 validators
+      company: isNotEmpty('Company is required'),
+      role: isNotEmpty('Role is required'),
+    },
+  });
+
+  // Validate only the fields relevant to the current step
+  const stepFields: Record<number, Array<keyof MultiStepValues>> = {
+    0: ['firstName', 'lastName', 'email'],
+    1: ['company', 'role'],
+    2: [],
+  };
+
+  const validateStep = async () => {
+    const fields = stepFields[step];
+    let hasErrors = false;
+
+    for (const field of fields) {
+      const result = await Promise.resolve(form.validateField(field));
+      if (result.hasError) hasErrors = true;
+    }
+
+    return !hasErrors;
+  };
+
+  const next = async () => {
+    const valid = await validateStep();
+    if (valid) setStep((s) => Math.min(s + 1, STEPS.length - 1));
+  };
+
+  const prev = () => setStep((s) => Math.max(s - 1, 0));
+
+  return (
+    <form onSubmit={form.onSubmit(console.log)}>
+      {/* Step indicator */}
+      <div style={{ display: 'flex', gap: '8px', marginBottom: '24px' }}>
+        {STEPS.map((label, i) => (
+          <div
+            key={label}
+            style={{
+              padding: '4px 12px',
+              borderRadius: '4px',
+              background: i === step ? '#1971c2' : '#e9ecef',
+              color: i === step ? '#fff' : '#495057',
+            }}
+          >
+            {i + 1}. {label}
+          </div>
+        ))}
+      </div>
+
+      {/* Step 1: Personal Info */}
+      {step === 0 && (
+        <div>
+          <h2>Personal Information</h2>
+          <input
+            key={form.key('firstName')}
+            {...form.getInputProps('firstName')}
+            placeholder="First name"
+          />
+          {form.errors.firstName && <p>{form.errors.firstName}</p>}
+
+          <input
+            key={form.key('lastName')}
+            {...form.getInputProps('lastName')}
+            placeholder="Last name"
+          />
+          {form.errors.lastName && <p>{form.errors.lastName}</p>}
+
+          <input
+            key={form.key('email')}
+            {...form.getInputProps('email')}
+            type="email"
+            placeholder="Email"
+          />
+          {form.errors.email && <p>{form.errors.email}</p>}
+        </div>
+      )}
+
+      {/* Step 2: Company */}
+      {step === 1 && (
+        <div>
+          <h2>Company Details</h2>
+          <input
+            key={form.key('company')}
+            {...form.getInputProps('company')}
+            placeholder="Company name"
+          />
+          {form.errors.company && <p>{form.errors.company}</p>}
+
+          <input
+            key={form.key('role')}
+            {...form.getInputProps('role')}
+            placeholder="Your role"
+          />
+          {form.errors.role && <p>{form.errors.role}</p>}
+        </div>
+      )}
+
+      {/* Step 3: Preferences */}
+      {step === 2 && (
+        <div>
+          <h2>Preferences</h2>
+          <label>
+            <input
+              key={form.key('newsletter')}
+              type="checkbox"
+              {...form.getInputProps('newsletter', { type: 'checkbox' })}
+            />
+            Subscribe to newsletter
+          </label>
+
+          <div>
+            {(['starter', 'pro', 'enterprise'] as const).map((plan) => (
+              <label key={plan}>
+                <input
+                  key={form.key('plan')}
+                  type="radio"
+                  {...form.getInputProps('plan', { type: 'radio', value: plan })}
+                />
+                {plan.charAt(0).toUpperCase() + plan.slice(1)}
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Navigation */}
+      <div style={{ display: 'flex', gap: '8px', marginTop: '24px' }}>
+        {step > 0 && (
+          <button type="button" onClick={prev}>
+            Back
+          </button>
+        )}
+        {step < STEPS.length - 1 ? (
+          <button type="button" onClick={next}>
+            Next
+          </button>
+        ) : (
+          <button type="submit" disabled={form.submitting}>
+            {form.submitting ? 'Submitting...' : 'Submit'}
+          </button>
+        )}
+      </div>
+    </form>
+  );
+}
+```
+
+---
+
+## Server-Side Validation Errors
+
+Map API error responses back to form fields:
+
+```tsx
+import { useForm, isEmail, isNotEmpty } from '@headless-form/react';
+
+interface ApiError {
+  field: string;
+  message: string;
+}
+
+function RegisterForm() {
+  const form = useForm({
+    mode: 'uncontrolled',
+    initialValues: { email: '', password: '', username: '' },
+    validate: {
+      email: isEmail('Invalid email'),
+      username: isNotEmpty('Username is required'),
+      password: (v) => v.length < 8 ? 'Password must be at least 8 characters' : null,
+    },
+  });
+
+  return (
+    <form
+      onSubmit={form.onSubmit(async (values) => {
+        const response = await fetch('/api/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(values),
+        });
+
+        if (!response.ok) {
+          const errors: ApiError[] = await response.json();
+          // Map server errors to form fields
+          const formErrors: Record<string, string> = {};
+          for (const { field, message } of errors) {
+            formErrors[field] = message;
+          }
+          form.setErrors(formErrors);
+          return;
+        }
+
+        // Success — redirect or show confirmation
+        window.location.href = '/dashboard';
+      })}
+    >
+      <input
+        key={form.key('email')}
+        {...form.getInputProps('email')}
+        type="email"
+        placeholder="Email"
+      />
+      {form.errors.email && <p>{form.errors.email}</p>}
+
+      <input
+        key={form.key('username')}
+        {...form.getInputProps('username')}
+        placeholder="Username"
+      />
+      {form.errors.username && <p>{form.errors.username}</p>}
+
+      <input
+        key={form.key('password')}
+        {...form.getInputProps('password')}
+        type="password"
+        placeholder="Password"
+      />
+      {form.errors.password && <p>{form.errors.password}</p>}
+
+      <button type="submit" disabled={form.submitting}>
+        {form.submitting ? 'Creating account...' : 'Create Account'}
+      </button>
+    </form>
+  );
+}
+```
+
+---
+
+## Dynamic Field Dependencies (Cascade)
+
+Clear or update a dependent field when a parent field changes:
+
+```tsx
+import { useForm, isNotEmpty } from '@headless-form/react';
+
+const STATES: Record<string, string[]> = {
+  us: ['California', 'New York', 'Texas', 'Florida'],
+  ca: ['Ontario', 'British Columbia', 'Quebec', 'Alberta'],
+  uk: ['England', 'Scotland', 'Wales', 'Northern Ireland'],
+};
+
+function AddressForm() {
+  const form = useForm({
+    mode: 'uncontrolled',
+    initialValues: { country: '', state: '', city: '' },
+    validate: {
+      country: isNotEmpty('Country is required'),
+      state: isNotEmpty('State is required'),
+      city: isNotEmpty('City is required'),
+    },
+    onValuesChange: (values, previous) => {
+      if (values.country !== previous.country) {
+        // Clear dependent fields when country changes
+        form.setFieldValue('state', '');
+        form.setFieldValue('city', '');
+        form.clearFieldError('state');
+        form.clearFieldError('city');
+      }
+      if (values.state !== previous.state) {
+        form.setFieldValue('city', '');
+        form.clearFieldError('city');
+      }
+    },
+  });
+
+  const country = form.getValues().country;
+  const availableStates = STATES[country] ?? [];
+
+  return (
+    <form onSubmit={form.onSubmit(console.log)}>
+      <select key={form.key('country')} {...form.getInputProps('country')}>
+        <option value="">Select country</option>
+        <option value="us">United States</option>
+        <option value="ca">Canada</option>
+        <option value="uk">United Kingdom</option>
+      </select>
+      {form.errors.country && <p>{form.errors.country}</p>}
+
+      <select
+        key={form.key('state')}
+        {...form.getInputProps('state')}
+        disabled={!country}
+      >
+        <option value="">Select state</option>
+        {availableStates.map((s) => (
+          <option key={s} value={s}>{s}</option>
+        ))}
+      </select>
+      {form.errors.state && <p>{form.errors.state}</p>}
+
+      <input
+        key={form.key('city')}
+        {...form.getInputProps('city')}
+        placeholder="City"
+      />
+      {form.errors.city && <p>{form.errors.city}</p>}
+
+      <button type="submit">Submit</button>
+    </form>
+  );
+}
+```

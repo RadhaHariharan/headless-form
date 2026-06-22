@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test & Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Type-check all packages
+        run: pnpm -r run typecheck
+
+      - name: Lint all packages
+        run: pnpm -r run lint
+
+      - name: Test core
+        run: pnpm --filter @headless-form/core run test
+
+      - name: Test react
+        run: pnpm --filter @headless-form/react run test
+
+      - name: Test angular
+        run: pnpm --filter @headless-form/angular run test
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build core
+        run: pnpm --filter @headless-form/core run build
+
+      - name: Build react
+        run: pnpm --filter @headless-form/react run build
+
+      - name: Size check
+        run: npx size-limit
+        working-directory: .
