@@ -126,7 +126,8 @@ describe('useForm — enhanceGetInputProps', () => {
       }),
     );
     const props = result.current.getInputProps('name');
-    expect(props['disabled']).toBe(true);
+    // `disabled` is an enhancer-added extra prop, not part of the closed result type.
+    expect((props as unknown as Record<string, unknown>)['disabled']).toBe(true);
   });
 });
 
@@ -143,7 +144,7 @@ describe('useForm — getInputProps DOM integration', () => {
       });
       return (
         <form>
-          <input data-testid="email" {...(form.getInputProps('email') as Record<string, unknown>)} />
+          <input data-testid="email" {...form.getInputProps('email')} />
           <span data-testid="val">{form.getValues().email}</span>
         </form>
       );

@@ -46,6 +46,25 @@ export type { HasLengthRangeSpec } from './validators/has-length.js';
 export { isJSONString } from './validators/is-json-string.js';
 export { isNotEmptyHTML } from './validators/is-not-empty-html.js';
 
+// Field validators (standalone, configurable validator factories — "build your own")
+export {
+  createStringValidator,
+  createNumberValidator,
+  createArrayValidator,
+  createCheckboxValidator,
+  createDateValidator,
+  parseLocalDate,
+  formatLocalDate,
+} from './field-validators/index.js';
+export type {
+  FieldValidatorFunction,
+  StringValidationRule,
+  NumberValidationRule,
+  ArrayValidationRule,
+  BooleanValidationRule,
+  DateValidationRule,
+} from './field-validators/index.js';
+
 // Resolvers
 export { schemaResolver } from './resolvers/schema-resolver.js';
 export type {

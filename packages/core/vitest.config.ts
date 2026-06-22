@@ -14,8 +14,10 @@ export default defineConfig({
         'src/store/index.ts',
         'src/resolvers/index.ts',
         'src/validators/index.ts',
+        'src/field-validators/index.ts',
         // Pure type declaration files
         'src/types/**/*.ts',
+        'src/field-validators/types.ts',
       ],
       thresholds: {
         lines: 95,

@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "vanilla",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@headless-form/example-vanilla", "dev"],
+      "port": 5173
+    }
+  ]
+}

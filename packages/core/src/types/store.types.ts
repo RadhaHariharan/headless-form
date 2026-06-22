@@ -154,7 +154,7 @@ export interface UseFormOptions<Values, TransformedValues = Values, TError = unk
    */
   enhanceGetInputProps?: (
     payload: EnhanceGetInputPropsPayload<Values, TError>,
-  ) => Partial<GetInputPropsResult<TError>> | undefined;
+  ) => (Partial<GetInputPropsResult<TError>> & Record<string, unknown>) | undefined;
 
   /**
    * Per-field rules object **or** a whole-form validator function.
