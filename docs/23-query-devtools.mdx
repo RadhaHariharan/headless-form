@@ -1,9 +1,9 @@
 # Query Devtools
 
-`@headless-form/query-devtools` is a framework-agnostic devtools panel for inspecting and debugging `@headless-form/query-core` cache state. It renders a shadow-DOM-isolated UI overlay that shows all queries, their status, data, errors, and timing — and lets you trigger refetches or remove queries manually.
+`@headlesskit/query-devtools` is a framework-agnostic devtools panel for inspecting and debugging `@headlesskit/query-core` cache state. It renders a shadow-DOM-isolated UI overlay that shows all queries, their status, data, errors, and timing — and lets you trigger refetches or remove queries manually.
 
 ```bash
-pnpm add @headless-form/query-devtools
+pnpm add @headlesskit/query-devtools
 ```
 
 ---
@@ -13,7 +13,7 @@ pnpm add @headless-form/query-devtools
 The main devtools class. Mount it once, passing a `QueryClient`. It creates and manages its own DOM tree in a shadow root so styles cannot leak into or from your app.
 
 ```typescript
-import { QueryDevtools } from '@headless-form/query-devtools';
+import { QueryDevtools } from '@headlesskit/query-devtools';
 import { queryClient } from './queryClient';
 
 const devtools = new QueryDevtools({
@@ -61,7 +61,7 @@ type PanelPosition = 'top' | 'bottom' | 'left' | 'right';
 ## Mounting and destroying
 
 ```typescript
-import { QueryDevtools } from '@headless-form/query-devtools';
+import { QueryDevtools } from '@headlesskit/query-devtools';
 import { queryClient } from './queryClient';
 
 let devtools: QueryDevtools | undefined;
@@ -102,7 +102,7 @@ devtools.setOptions({
 Control the order queries appear in the panel:
 
 ```typescript
-import type { SortFn } from '@headless-form/query-devtools';
+import type { SortFn } from '@headlesskit/query-devtools';
 
 const sortByUpdatedAt: SortFn = (a, b) =>
   b.state.dataUpdatedAt - a.state.dataUpdatedAt;
@@ -177,8 +177,8 @@ const devtools = new QueryDevtools({
 ### Vanilla
 
 ```typescript
-import { QueryClient, QueryCache } from '@headless-form/query-core';
-import { QueryDevtools } from '@headless-form/query-devtools';
+import { QueryClient, QueryCache } from '@headlesskit/query-core';
+import { QueryDevtools } from '@headlesskit/query-devtools';
 
 const queryClient = new QueryClient({
   queryCache: new QueryCache(),
@@ -203,7 +203,7 @@ if (import.meta.env.DEV) {
 
 ```tsx
 import { useEffect, useRef } from 'react';
-import { QueryDevtools } from '@headless-form/query-devtools';
+import { QueryDevtools } from '@headlesskit/query-devtools';
 import { useQueryClient } from './hooks'; // your typed hook
 
 export function DevtoolsProvider() {
@@ -231,7 +231,7 @@ export function DevtoolsProvider() {
 
 ```typescript
 import { Injectable, OnDestroy } from '@angular/core';
-import { QueryDevtools } from '@headless-form/query-devtools';
+import { QueryDevtools } from '@headlesskit/query-devtools';
 import { QueryClientService } from './query-client.service';
 
 @Injectable({ providedIn: 'root' })

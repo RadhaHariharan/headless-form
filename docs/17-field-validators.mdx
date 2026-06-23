@@ -34,9 +34,9 @@ import {
   createDateValidator,
   parseLocalDate,
   formatLocalDate,
-} from '@headless-form/core';
+} from '@headlesskit/forms';
 // or, from the React package (re-exported):
-import { createStringValidator } from '@headless-form/react';
+import { createStringValidator } from '@headlesskit/forms-react';
 ```
 
 ---
@@ -218,7 +218,7 @@ The date validator avoids this with `parseLocalDate`, which builds bare dates fr
 calendar parts:
 
 ```typescript
-import { parseLocalDate, formatLocalDate } from '@headless-form/core';
+import { parseLocalDate, formatLocalDate } from '@headlesskit/forms';
 
 // Built from local parts → local midnight, same calendar day in every timezone:
 formatLocalDate(parseLocalDate('2024-01-15')); // "2024-01-15" everywhere
@@ -255,7 +255,7 @@ import {
   createStringValidator,   // new field validator
   createNumberValidator,
   toValidationRule,        // the bridge
-} from '@headless-form/react';
+} from '@headlesskit/forms-react';
 
 const nameRule = createStringValidator({ minLength: 3, allowedCharacters: 'alphabetic', allowSpaces: true });
 const ageRule = createNumberValidator({ min: 18, max: 120, integer: true });
@@ -290,8 +290,8 @@ function SignupForm() {
   `schemaResolver`, or any custom `(value, values, path) => …` rule.
 
 > **It's available everywhere.** `toValidationRule` (and every `create*Validator`) is exported
-> from `@headless-form/core`, **and** re-exported from `@headless-form/react` and
-> `@headless-form/angular`, so you import from whichever package you already use.
+> from `@headlesskit/forms`, **and** re-exported from `@headlesskit/forms-react` and
+> `@headlesskit/angular`, so you import from whichever package you already use.
 
 ### Standalone (no form store)
 

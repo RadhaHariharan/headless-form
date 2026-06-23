@@ -1,19 +1,19 @@
 # Query Async Storage Persister
 
-`@headless-form/query-async-storage-persister` creates a `Persister` that stores the entire `QueryClient` snapshot in any async key-value store. Designed for environments where synchronous storage is unavailable — most commonly React Native's `AsyncStorage`, but works with IndexedDB wrappers, filesystem APIs, and custom async backends.
+`@headlesskit/query-async-storage-persister` creates a `Persister` that stores the entire `QueryClient` snapshot in any async key-value store. Designed for environments where synchronous storage is unavailable — most commonly React Native's `AsyncStorage`, but works with IndexedDB wrappers, filesystem APIs, and custom async backends.
 
 ```bash
-pnpm add @headless-form/query-async-storage-persister
+pnpm add @headlesskit/query-async-storage-persister
 ```
 
-Requires `@headless-form/query-persist-client-core` for the `persistQueryClient` lifecycle functions.
+Requires `@headlesskit/query-persist-client-core` for the `persistQueryClient` lifecycle functions.
 
 ---
 
 ## createAsyncStoragePersister
 
 ```typescript
-import { createAsyncStoragePersister } from '@headless-form/query-async-storage-persister';
+import { createAsyncStoragePersister } from '@headlesskit/query-async-storage-persister';
 
 const persister = createAsyncStoragePersister({
   storage: AsyncStorage, // e.g. from @react-native-async-storage/async-storage
@@ -50,9 +50,9 @@ interface AsyncStorage {
 
 ```typescript
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { QueryClient } from '@headless-form/query-core';
-import { persistQueryClient } from '@headless-form/query-persist-client-core';
-import { createAsyncStoragePersister } from '@headless-form/query-async-storage-persister';
+import { QueryClient } from '@headlesskit/query-core';
+import { persistQueryClient } from '@headlesskit/query-persist-client-core';
+import { createAsyncStoragePersister } from '@headlesskit/query-async-storage-persister';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -84,7 +84,7 @@ queryClient.mount();
 ### With subscribe-only pattern
 
 ```typescript
-import { persistQueryClientSubscribe } from '@headless-form/query-persist-client-core';
+import { persistQueryClientSubscribe } from '@headlesskit/query-persist-client-core';
 
 const unsubscribe = persistQueryClientSubscribe({
   queryClient,
@@ -101,7 +101,7 @@ unsubscribe();
 
 ```typescript
 import { get, set, del } from 'idb-keyval';
-import { createAsyncStoragePersister } from '@headless-form/query-async-storage-persister';
+import { createAsyncStoragePersister } from '@headlesskit/query-async-storage-persister';
 
 const idbStorage = {
   getItem: (key: string) => get<string>(key),
@@ -142,7 +142,7 @@ const persister = createAsyncStoragePersister({ storage: apiStorage });
 The underlying throttle utility used internally to rate-limit storage writes. Exported for custom use cases.
 
 ```typescript
-import { asyncThrottle } from '@headless-form/query-async-storage-persister';
+import { asyncThrottle } from '@headlesskit/query-async-storage-persister';
 
 const throttledSave = asyncThrottle(
   async (data: unknown) => {

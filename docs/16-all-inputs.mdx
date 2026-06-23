@@ -8,7 +8,7 @@ All examples use `mode: 'uncontrolled'` for best performance.
 ## Text Input
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 function Demo() {
   const form = useForm({
@@ -40,7 +40,7 @@ function Demo() {
 ## Email Input
 
 ```tsx
-import { useForm, isEmail } from '@headless-form/react';
+import { useForm, isEmail } from '@headlesskit/forms-react';
 
 function Demo() {
   const form = useForm({
@@ -72,7 +72,7 @@ function Demo() {
 ## Password Input
 
 ```tsx
-import { useForm, hasLength } from '@headless-form/react';
+import { useForm, hasLength } from '@headlesskit/forms-react';
 
 function Demo() {
   const form = useForm({
@@ -104,7 +104,7 @@ function Demo() {
 ## Number Input
 
 ```tsx
-import { useForm, isInRange } from '@headless-form/react';
+import { useForm, isInRange } from '@headlesskit/forms-react';
 
 function Demo() {
   const form = useForm({
@@ -137,7 +137,7 @@ function Demo() {
 ## Textarea
 
 ```tsx
-import { useForm, hasLength } from '@headless-form/react';
+import { useForm, hasLength } from '@headlesskit/forms-react';
 
 function Demo() {
   const form = useForm({
@@ -169,7 +169,7 @@ function Demo() {
 ## Select
 
 ```tsx
-import { useForm, isNotEmpty } from '@headless-form/react';
+import { useForm, isNotEmpty } from '@headlesskit/forms-react';
 
 function Demo() {
   const form = useForm({
@@ -204,7 +204,7 @@ function Demo() {
 Use `{ type: 'checkbox' }` to get `checked`/`defaultChecked` instead of `value`/`defaultValue`:
 
 ```tsx
-import { useForm, isNotEmpty } from '@headless-form/react';
+import { useForm, isNotEmpty } from '@headlesskit/forms-react';
 
 function Demo() {
   const form = useForm({
@@ -249,7 +249,7 @@ function Demo() {
 Use an array field with individual checkboxes to handle multi-select:
 
 ```tsx
-import { useForm, isNotEmpty } from '@headless-form/react';
+import { useForm, isNotEmpty } from '@headlesskit/forms-react';
 
 const SKILLS = ['React', 'TypeScript', 'Node.js', 'GraphQL', 'CSS'];
 
@@ -299,7 +299,7 @@ function Demo() {
 Use `{ type: 'radio', value: optionValue }` for each radio option:
 
 ```tsx
-import { useForm, isNotEmpty } from '@headless-form/react';
+import { useForm, isNotEmpty } from '@headlesskit/forms-react';
 
 function Demo() {
   const form = useForm({
@@ -341,7 +341,7 @@ function Demo() {
 ## Range Slider
 
 ```tsx
-import { useForm, isInRange } from '@headless-form/react';
+import { useForm, isInRange } from '@headlesskit/forms-react';
 
 function Demo() {
   const form = useForm({
@@ -374,7 +374,7 @@ function Demo() {
 ## Date Input
 
 ```tsx
-import { useForm, isNotEmpty } from '@headless-form/react';
+import { useForm, isNotEmpty } from '@headlesskit/forms-react';
 
 function Demo() {
   const form = useForm({
@@ -412,7 +412,7 @@ function Demo() {
 ## Time Input
 
 ```tsx
-import { useForm, isNotEmpty } from '@headless-form/react';
+import { useForm, isNotEmpty } from '@headlesskit/forms-react';
 
 function Demo() {
   const form = useForm({
@@ -443,7 +443,7 @@ function Demo() {
 ## Color Input
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 function Demo() {
   const form = useForm({
@@ -474,7 +474,7 @@ function Demo() {
 File inputs in uncontrolled mode use `onChange` to capture `FileList`:
 
 ```tsx
-import { useForm, isNotEmpty } from '@headless-form/react';
+import { useForm, isNotEmpty } from '@headlesskit/forms-react';
 
 function Demo() {
   const form = useForm({
@@ -507,7 +507,7 @@ function Demo() {
 ## Search Input
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 function Demo() {
   const form = useForm({
@@ -544,7 +544,7 @@ function Demo() {
 A switch is semantically equivalent to a checkbox:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 function Demo() {
   const form = useForm({
@@ -602,7 +602,7 @@ function Demo() {
 ## Hidden Input
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 function Demo() {
   const form = useForm({
@@ -632,7 +632,7 @@ function Demo() {
 ## Complete Form with All Input Types
 
 ```tsx
-import { useForm, isEmail, isNotEmpty, hasLength, isInRange } from '@headless-form/react';
+import { useForm, isEmail, isNotEmpty, hasLength, isInRange } from '@headlesskit/forms-react';
 
 interface FullFormValues {
   name: string;
@@ -771,8 +771,8 @@ In Angular, `HfFieldDirective` automatically handles the correct binding for eac
 
 ```typescript
 import { Component, ChangeDetectionStrategy } from '@angular/core';
-import { injectForm, HfFieldDirective } from '@headless-form/angular';
-import { isEmail, isNotEmpty } from '@headless-form/angular';
+import { injectForm, HfFieldDirective } from '@headlesskit/angular';
+import { isEmail, isNotEmpty } from '@headlesskit/angular';
 
 @Component({
   standalone: true,

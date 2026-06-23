@@ -1,6 +1,6 @@
 # Uncontrolled Mode
 
-`headless-form` supports two modes: **controlled** and **uncontrolled**.
+`headlesskit` supports two modes: **controlled** and **uncontrolled**.
 Uncontrolled mode is the recommended default for production forms because it causes
 **zero re-renders on typing**, which dramatically improves performance in large forms.
 
@@ -49,7 +49,7 @@ In **uncontrolled** mode, `form.values` is a stable object reference that does *
 when the user types. Always use `form.getValues()` to read the latest form state:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 function Demo() {
   const form = useForm({
@@ -114,7 +114,7 @@ In uncontrolled mode, when you **programmatically** change a value (e.g., via `s
 The `form.key(path)` method provides a stable string key that is bumped on programmatic changes:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 function Demo() {
   const form = useForm({
@@ -154,7 +154,7 @@ When using list fields (`insertListItem`, `removeListItem`, `reorderListItem`), 
 `form.key(path)` on the list item container so that inputs remount correctly:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 interface User {
   name: string;
@@ -287,7 +287,7 @@ The directive sets `defaultValue` on the native input and subscribes to value ch
 
 ```typescript
 import { Component, ChangeDetectionStrategy } from '@angular/core';
-import { injectForm, HfFieldDirective } from '@headless-form/angular';
+import { injectForm, HfFieldDirective } from '@headlesskit/angular';
 
 @Component({
   standalone: true,

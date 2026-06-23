@@ -69,15 +69,15 @@ importers:
 
   examples/nextjs:
     dependencies:
-      '@headless-form/core':
+      '@headlesskit/forms':
         specifier: workspace:*
-        version: link:../../packages/core
-      '@headless-form/react':
+        version: link:../../packages/forms
+      '@headlesskit/forms-react':
         specifier: workspace:*
-        version: link:../../packages/react
+        version: link:../../packages/forms-react
       next:
         specifier: 16.2.9
-        version: 16.2.9(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(sass@1.101.0)
+        version: 16.2.9(@babel/core@7.29.7)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(sass@1.101.0)
       react:
         specifier: 19.2.4
         version: 19.2.4
@@ -107,7 +107,7 @@ importers:
         specifier: ^5
         version: 5.9.3
 
-  packages/core:
+  packages/forms:
     devDependencies:
       '@types/node':
         specifier: ^20.14.0
@@ -125,89 +125,11 @@ importers:
         specifier: ^1.6.0
         version: 1.6.1(@types/node@20.19.43)(jsdom@24.1.3)(less@4.6.6)(sass@1.101.0)
 
-  packages/query-async-storage-persister:
+  packages/forms-react:
     dependencies:
-      '@headless-form/query-core':
+      '@headlesskit/forms':
         specifier: workspace:*
-        version: link:../query-core
-      '@headless-form/query-persist-client-core':
-        specifier: workspace:*
-        version: link:../query-persist-client-core
-    devDependencies:
-      '@types/node':
-        specifier: ^20.14.0
-        version: 20.19.43
-      tsup:
-        specifier: ^8.1.0
-        version: 8.5.1(jiti@2.7.0)(postcss@8.5.15)(typescript@5.9.3)
-      typescript:
-        specifier: ^5.5.2
-        version: 5.9.3
-      vitest:
-        specifier: ^1.6.0
-        version: 1.6.1(@types/node@20.19.43)(jsdom@24.1.3)(less@4.6.6)(sass@1.101.0)
-
-  packages/query-core:
-    devDependencies:
-      '@types/node':
-        specifier: ^20.14.0
-        version: 20.19.43
-      tsup:
-        specifier: ^8.1.0
-        version: 8.5.1(jiti@2.7.0)(postcss@8.5.15)(typescript@5.9.3)
-      typescript:
-        specifier: ^5.5.2
-        version: 5.9.3
-      vitest:
-        specifier: ^1.6.0
-        version: 1.6.1(@types/node@20.19.43)(jsdom@24.1.3)(less@4.6.6)(sass@1.101.0)
-
-  packages/query-persist-client-core:
-    dependencies:
-      '@headless-form/query-core':
-        specifier: workspace:*
-        version: link:../query-core
-    devDependencies:
-      '@types/node':
-        specifier: ^20.14.0
-        version: 20.19.43
-      tsup:
-        specifier: ^8.1.0
-        version: 8.5.1(jiti@2.7.0)(postcss@8.5.15)(typescript@5.9.3)
-      typescript:
-        specifier: ^5.5.2
-        version: 5.9.3
-      vitest:
-        specifier: ^1.6.0
-        version: 1.6.1(@types/node@20.19.43)(jsdom@24.1.3)(less@4.6.6)(sass@1.101.0)
-
-  packages/query-sync-storage-persister:
-    dependencies:
-      '@headless-form/query-core':
-        specifier: workspace:*
-        version: link:../query-core
-      '@headless-form/query-persist-client-core':
-        specifier: workspace:*
-        version: link:../query-persist-client-core
-    devDependencies:
-      '@types/node':
-        specifier: ^20.14.0
-        version: 20.19.43
-      tsup:
-        specifier: ^8.1.0
-        version: 8.5.1(jiti@2.7.0)(postcss@8.5.15)(typescript@5.9.3)
-      typescript:
-        specifier: ^5.5.2
-        version: 5.9.3
-      vitest:
-        specifier: ^1.6.0
-        version: 1.6.1(@types/node@20.19.43)(jsdom@24.1.3)(less@4.6.6)(sass@1.101.0)
-
-  packages/react:
-    dependencies:
-      '@headless-form/core':
-        specifier: workspace:*
-        version: link:../core
+        version: link:../forms
     devDependencies:
       '@testing-library/jest-dom':
         specifier: ^6.4.6
@@ -249,7 +171,85 @@ importers:
         specifier: ^1.6.0
         version: 1.6.1(@types/node@20.19.43)(jsdom@24.1.3)(less@4.6.6)(sass@1.101.0)
 
-  packages/redux:
+  packages/query-async-storage-persister:
+    dependencies:
+      '@headlesskit/query-core':
+        specifier: workspace:*
+        version: link:../query-core
+      '@headlesskit/query-persist-client-core':
+        specifier: workspace:*
+        version: link:../query-persist-client-core
+    devDependencies:
+      '@types/node':
+        specifier: ^20.14.0
+        version: 20.19.43
+      tsup:
+        specifier: ^8.1.0
+        version: 8.5.1(jiti@2.7.0)(postcss@8.5.15)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.5.2
+        version: 5.9.3
+      vitest:
+        specifier: ^1.6.0
+        version: 1.6.1(@types/node@20.19.43)(jsdom@24.1.3)(less@4.6.6)(sass@1.101.0)
+
+  packages/query-core:
+    devDependencies:
+      '@types/node':
+        specifier: ^20.14.0
+        version: 20.19.43
+      tsup:
+        specifier: ^8.1.0
+        version: 8.5.1(jiti@2.7.0)(postcss@8.5.15)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.5.2
+        version: 5.9.3
+      vitest:
+        specifier: ^1.6.0
+        version: 1.6.1(@types/node@20.19.43)(jsdom@24.1.3)(less@4.6.6)(sass@1.101.0)
+
+  packages/query-persist-client-core:
+    dependencies:
+      '@headlesskit/query-core':
+        specifier: workspace:*
+        version: link:../query-core
+    devDependencies:
+      '@types/node':
+        specifier: ^20.14.0
+        version: 20.19.43
+      tsup:
+        specifier: ^8.1.0
+        version: 8.5.1(jiti@2.7.0)(postcss@8.5.15)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.5.2
+        version: 5.9.3
+      vitest:
+        specifier: ^1.6.0
+        version: 1.6.1(@types/node@20.19.43)(jsdom@24.1.3)(less@4.6.6)(sass@1.101.0)
+
+  packages/query-sync-storage-persister:
+    dependencies:
+      '@headlesskit/query-core':
+        specifier: workspace:*
+        version: link:../query-core
+      '@headlesskit/query-persist-client-core':
+        specifier: workspace:*
+        version: link:../query-persist-client-core
+    devDependencies:
+      '@types/node':
+        specifier: ^20.14.0
+        version: 20.19.43
+      tsup:
+        specifier: ^8.1.0
+        version: 8.5.1(jiti@2.7.0)(postcss@8.5.15)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.5.2
+        version: 5.9.3
+      vitest:
+        specifier: ^1.6.0
+        version: 1.6.1(@types/node@20.19.43)(jsdom@24.1.3)(less@4.6.6)(sass@1.101.0)
+
+  packages/state-management:
     devDependencies:
       '@types/node':
         specifier: ^20.14.0
@@ -261,11 +261,11 @@ importers:
         specifier: ^5.0.0
         version: 5.9.3
 
-  packages/redux-toolkit:
+  packages/state-management-toolkit:
     dependencies:
-      '@headless-form/redux':
+      '@headlesskit/state-management':
         specifier: workspace:*
-        version: link:../redux
+        version: link:../state-management
       '@standard-schema/spec':
         specifier: ^1.0.0
         version: 1.1.0
@@ -7250,7 +7250,7 @@ snapshots:
       sax: 1.6.0
     optional: true
 
-  next@16.2.9(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(sass@1.101.0):
+  next@16.2.9(@babel/core@7.29.7)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(sass@1.101.0):
     dependencies:
       '@next/env': 16.2.9
       '@swc/helpers': 0.5.15
@@ -7259,7 +7259,7 @@ snapshots:
       postcss: 8.4.31
       react: 19.2.4
       react-dom: 19.2.4(react@19.2.4)
-      styled-jsx: 5.1.6(react@19.2.4)
+      styled-jsx: 5.1.6(@babel/core@7.29.7)(react@19.2.4)
     optionalDependencies:
       '@next/swc-darwin-arm64': 16.2.9
       '@next/swc-darwin-x64': 16.2.9
@@ -7945,10 +7945,12 @@ snapshots:
     dependencies:
       js-tokens: 9.0.1
 
-  styled-jsx@5.1.6(react@19.2.4):
+  styled-jsx@5.1.6(@babel/core@7.29.7)(react@19.2.4):
     dependencies:
       client-only: 0.0.1
       react: 19.2.4
+    optionalDependencies:
+      '@babel/core': 7.29.7
 
   sucrase@3.35.1:
     dependencies:

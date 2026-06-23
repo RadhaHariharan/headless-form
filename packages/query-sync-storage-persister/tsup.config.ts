@@ -8,5 +8,5 @@ export default defineConfig({
   clean: true,
   splitting: false,
   treeshake: true,
-  external: ['@headless-form/query-core', '@headless-form/query-persist-client-core'],
+  external: ['@headlesskit/query-core', '@headlesskit/query-persist-client-core'],
 });

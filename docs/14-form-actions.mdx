@@ -25,7 +25,7 @@ Add a `name` to your form options. The name must contain only letters, numbers, 
 
 ```tsx
 // DemoForm.tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 export interface DemoFormValues {
   name: string;
@@ -61,7 +61,7 @@ Call `createFormActions` with the form name. The form does **not** need to be mo
 
 ```typescript
 // demoFormActions.ts
-import { createFormActions } from '@headless-form/react';
+import { createFormActions } from '@headlesskit/forms-react';
 import type { DemoFormValues } from './DemoForm';
 
 export const demoFormActions = createFormActions<DemoFormValues>('demo-form');
@@ -162,7 +162,7 @@ arguments as the corresponding `form` methods:
 
 ```tsx
 // form-context.ts
-import { createFormActions } from '@headless-form/react';
+import { createFormActions } from '@headlesskit/forms-react';
 
 export interface CheckoutValues {
   email: string;
@@ -175,8 +175,8 @@ export const checkoutActions = createFormActions<CheckoutValues>('checkout');
 
 ```tsx
 // CheckoutForm.tsx
-import { useForm } from '@headless-form/react';
-import { isEmail, isNotEmpty } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
+import { isEmail, isNotEmpty } from '@headlesskit/forms-react';
 import type { CheckoutValues } from './form-context';
 
 export function CheckoutForm() {
@@ -269,7 +269,7 @@ The same named form / actions pattern works in Angular:
 
 ```typescript
 // checkout-form-actions.ts
-import { createFormActions } from '@headless-form/angular';
+import { createFormActions } from '@headlesskit/angular';
 
 export interface CheckoutValues {
   email: string;
@@ -282,7 +282,7 @@ export const checkoutActions = createFormActions<CheckoutValues>('checkout-form'
 ```typescript
 // checkout-form.component.ts
 import { Component, ChangeDetectionStrategy } from '@angular/core';
-import { injectForm, HfFieldDirective } from '@headless-form/angular';
+import { injectForm, HfFieldDirective } from '@headlesskit/angular';
 import type { CheckoutValues } from './checkout-form-actions';
 
 @Component({
@@ -335,10 +335,10 @@ export class ProfileLoaderService {
 
 ## Vanilla / Core
 
-`createFormActions` is also exported from `@headless-form/core`:
+`createFormActions` is also exported from `@headlesskit/forms`:
 
 ```typescript
-import { createFormStore, createFormActions } from '@headless-form/core';
+import { createFormStore, createFormActions } from '@headlesskit/forms';
 
 // Named form
 const form = createFormStore({
@@ -350,6 +350,6 @@ const form = createFormStore({
 const searchActions = createFormActions<{ query: string; category: string }>('search-form');
 
 // Use in a different module
-searchActions.setFieldValue('query', 'headless forms');
+searchActions.setFieldValue('query', 'headless kit');
 searchActions.validate();
 ```

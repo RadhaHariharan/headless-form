@@ -1,4 +1,4 @@
-import type { QueryClient, QueryKey, QueryState } from '@headless-form/query-core'
+import type { QueryClient, QueryKey, QueryState } from '@headlesskit/query-core'
 
 export type StorageValue = string
 

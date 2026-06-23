@@ -1,5 +1,5 @@
 import { asyncThrottle } from './asyncThrottle'
-import type { PersistedClient, Persister } from '@headless-form/query-persist-client-core'
+import type { PersistedClient, Persister } from '@headlesskit/query-persist-client-core'
 
 export { asyncThrottle }
 

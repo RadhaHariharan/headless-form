@@ -157,7 +157,7 @@ function renderDoc(slug) {
   content.scrollTop = 0
   window.scrollTo({ top: 0 })
 
-  document.title = `${doc.title} — Headless Form`
+  document.title = `${doc.title} — HeadlessKit`
 }
 
 // ── Home page ─────────────────────────────────────────────────────────────────
@@ -165,7 +165,7 @@ function renderHome() {
   breadcrumb.textContent = ''
   toc.innerHTML = ''
   tocPanel.style.display = 'none'
-  document.title = 'Headless Form — Documentation'
+  document.title = 'HeadlessKit — Documentation'
 
   let cardsHtml = ''
   for (const section of SECTIONS) {
@@ -186,8 +186,8 @@ function renderHome() {
   content.innerHTML = `
     <div class="home">
       <div class="home-hero">
-        <h1>◈ Headless Form</h1>
-        <p>Framework-agnostic form state engine with first-class React &amp; Angular bindings — plus integrated TanStack Query and Redux support.</p>
+        <h1>◈ HeadlessKit</h1>
+        <p>Framework-agnostic form state engine with first-class React bindings — plus integrated TanStack Query and state management support.</p>
       </div>
       ${cardsHtml}
     </div>

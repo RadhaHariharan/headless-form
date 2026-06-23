@@ -1,6 +1,6 @@
 # Form Status
 
-`headless-form` tracks several status flags: touched, dirty, validating, and submitting.
+`headlesskit` tracks several status flags: touched, dirty, validating, and submitting.
 These help you conditionally render UIs, disable buttons, and guide users through the form.
 
 ---
@@ -13,7 +13,7 @@ These help you conditionally render UIs, disable buttons, and guide users throug
   (compared deeply using fast-deep-equal).
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 function Demo() {
   const form = useForm({
@@ -46,7 +46,7 @@ function Demo() {
 Both functions optionally accept a path argument:
 
 ```typescript
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -73,7 +73,7 @@ The `touchTrigger` option controls which interaction marks a field as touched:
 - `'focus'` — the field is touched only when it has been focused (regardless of changes)
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -99,7 +99,7 @@ form.isTouched('a'); // -> true
 Set initial touched and dirty flags when the form mounts:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -125,7 +125,7 @@ form.isDirty('a');             // -> true
 Clear all touched/dirty state. `form.reset()` also resets both:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -149,7 +149,7 @@ form.isDirty('a');   // -> false
 Pass new values to `resetDirty` to update the baseline used for dirty comparisons:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -215,7 +215,7 @@ form.setDirty({ name: true });
 After the Promise resolves or rejects, `form.submitting` is set back to `false` automatically:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 function Demo() {
   const form = useForm({
@@ -264,7 +264,7 @@ form.setSubmitting(false);
 `form.isValidating(path)` returns `true` if a specific field is currently validating:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 function Demo() {
   const form = useForm({
@@ -325,7 +325,7 @@ In Angular, all status properties are exposed as signals:
 
 ```typescript
 import { Component, ChangeDetectionStrategy } from '@angular/core';
-import { injectForm, HfFieldDirective } from '@headless-form/angular';
+import { injectForm, HfFieldDirective } from '@headlesskit/angular';
 
 @Component({
   standalone: true,

@@ -28,15 +28,15 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Build all packages
-        run: pnpm --filter @headless-form/core run build && pnpm --filter @headless-form/react run build
+        run: pnpm --filter @headlesskit/forms run build && pnpm --filter @headlesskit/forms-react run build
 
-      - name: Publish @headless-form/core
-        run: pnpm publish --filter @headless-form/core --no-git-checks --access public
+      - name: Publish @headlesskit/forms
+        run: pnpm publish --filter @headlesskit/forms --no-git-checks --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Publish @headless-form/react
-        run: pnpm publish --filter @headless-form/react --no-git-checks --access public
+      - name: Publish @headlesskit/forms-react
+        run: pnpm publish --filter @headlesskit/forms-react --no-git-checks --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 

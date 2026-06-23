@@ -1,5 +1,5 @@
 {
-  "name": "@headless-form/examples-nextjs",
+  "name": "@headlesskit/examples-nextjs",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -12,8 +12,8 @@
     "next": "16.2.9",
     "react": "19.2.4",
     "react-dom": "19.2.4",
-    "@headless-form/core": "workspace:*",
-    "@headless-form/react": "workspace:*"
+    "@headlesskit/forms": "workspace:*",
+    "@headlesskit/forms-react": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^20",

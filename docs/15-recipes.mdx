@@ -1,6 +1,6 @@
 # Recipes
 
-Common patterns and real-world form implementations using `headless-form`.
+Common patterns and real-world form implementations using `headlesskit`.
 
 ---
 
@@ -11,7 +11,7 @@ idempotent — safe to call in effects that may fire multiple times:
 
 ```tsx
 import { useEffect, useState } from 'react';
-import { useForm, isNotEmpty, isEmail } from '@headless-form/react';
+import { useForm, isNotEmpty, isEmail } from '@headlesskit/forms-react';
 
 interface UserProfile {
   name: string;
@@ -96,7 +96,7 @@ function EditProfileForm() {
 Persist form state across page reloads using `onValuesChange` to sync to `localStorage`:
 
 ```tsx
-import { useForm, isNotEmpty, isEmail } from '@headless-form/react';
+import { useForm, isNotEmpty, isEmail } from '@headlesskit/forms-react';
 
 const STORAGE_KEY = 'contact-form-draft';
 
@@ -193,7 +193,7 @@ Here's an example using HTML5 drag events (adapt for your preferred DnD library)
 
 ```tsx
 import { useRef } from 'react';
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 interface Task {
   title: string;
@@ -286,7 +286,7 @@ Divide a long form across multiple steps using a single form instance:
 
 ```tsx
 import { useState } from 'react';
-import { useForm, isNotEmpty, isEmail } from '@headless-form/react';
+import { useForm, isNotEmpty, isEmail } from '@headlesskit/forms-react';
 
 interface MultiStepValues {
   // Step 1: Personal
@@ -481,7 +481,7 @@ function MultiStepForm() {
 Map API error responses back to form fields:
 
 ```tsx
-import { useForm, isEmail, isNotEmpty } from '@headless-form/react';
+import { useForm, isEmail, isNotEmpty } from '@headlesskit/forms-react';
 
 interface ApiError {
   field: string;
@@ -561,7 +561,7 @@ function RegisterForm() {
 Clear or update a dependent field when a parent field changes:
 
 ```tsx
-import { useForm, isNotEmpty } from '@headless-form/react';
+import { useForm, isNotEmpty } from '@headlesskit/forms-react';
 
 const STATES: Record<string, string[]> = {
   us: ['California', 'New York', 'Texas', 'Florida'],

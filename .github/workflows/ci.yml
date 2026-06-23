@@ -31,13 +31,13 @@ jobs:
         run: pnpm -r run lint
 
       - name: Test core
-        run: pnpm --filter @headless-form/core run test
+        run: pnpm --filter @headlesskit/forms run test
 
       - name: Test react
-        run: pnpm --filter @headless-form/react run test
+        run: pnpm --filter @headlesskit/forms-react run test
 
       - name: Test angular
-        run: pnpm --filter @headless-form/angular run test
+        run: pnpm --filter @headlesskit/angular run test
 
   build:
     name: Build
@@ -57,10 +57,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Build core
-        run: pnpm --filter @headless-form/core run build
+        run: pnpm --filter @headlesskit/forms run build
 
       - name: Build react
-        run: pnpm --filter @headless-form/react run build
+        run: pnpm --filter @headlesskit/forms-react run build
 
       - name: Size check
         run: npx size-limit

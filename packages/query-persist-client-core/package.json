@@ -1,5 +1,5 @@
 {
-  "name": "@headless-form/query-persist-client-core",
+  "name": "@headlesskit/query-persist-client-core",
   "version": "0.1.0",
   "description": "Utilities for interacting with persisters — vendored in plain JS",
   "license": "MIT",
@@ -23,7 +23,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@headless-form/query-core": "workspace:*"
+    "@headlesskit/query-core": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

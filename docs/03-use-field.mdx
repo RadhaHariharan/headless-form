@@ -9,7 +9,7 @@ field-as-a-component patterns, or isolating field logic in a library.
 ## React: useField
 
 ```tsx
-import { useField } from '@headless-form/react';
+import { useField } from '@headlesskit/forms-react';
 
 function EmailInput() {
   const field = useField({
@@ -36,7 +36,7 @@ function EmailInput() {
 
 ```typescript
 import { Component, ChangeDetectionStrategy } from '@angular/core';
-import { injectField } from '@headless-form/angular';
+import { injectField } from '@headlesskit/angular';
 
 @Component({
   standalone: true,
@@ -107,7 +107,7 @@ export class EmailInputComponent {
 Validates the field on every keystroke:
 
 ```tsx
-import { useField } from '@headless-form/react';
+import { useField } from '@headlesskit/forms-react';
 
 function Demo() {
   const field = useField({
@@ -130,7 +130,7 @@ function Demo() {
 Validates the field when focus leaves:
 
 ```tsx
-import { useField } from '@headless-form/react';
+import { useField } from '@headlesskit/forms-react';
 
 function Demo() {
   const field = useField({
@@ -153,7 +153,7 @@ function Demo() {
 The `validate` function may return a `Promise`:
 
 ```tsx
-import { useField } from '@headless-form/react';
+import { useField } from '@headlesskit/forms-react';
 
 function UsernameInput() {
   const field = useField({
@@ -181,7 +181,7 @@ function UsernameInput() {
 ## Touched and Dirty
 
 ```tsx
-import { useField } from '@headless-form/react';
+import { useField } from '@headlesskit/forms-react';
 
 function Demo() {
   const field = useField({
@@ -205,7 +205,7 @@ function Demo() {
 Use `mode: 'uncontrolled'` to prevent re-renders on every keystroke:
 
 ```tsx
-import { useField } from '@headless-form/react';
+import { useField } from '@headlesskit/forms-react';
 
 function Demo() {
   const field = useField({
@@ -234,7 +234,7 @@ function Demo() {
 Call `field.validate()` programmatically:
 
 ```tsx
-import { useField } from '@headless-form/react';
+import { useField } from '@headlesskit/forms-react';
 
 function Demo() {
   const field = useField({
@@ -266,7 +266,7 @@ function Demo() {
 ## Checkbox Field
 
 ```tsx
-import { useField } from '@headless-form/react';
+import { useField } from '@headlesskit/forms-react';
 
 function Demo() {
   const field = useField({
@@ -292,7 +292,7 @@ function Demo() {
 In Angular, `injectField` returns signals instead of plain values:
 
 ```typescript
-import { injectField, type InjectFieldReturnType } from '@headless-form/angular';
+import { injectField, type InjectFieldReturnType } from '@headlesskit/angular';
 
 export class MyComponent {
   field = injectField({

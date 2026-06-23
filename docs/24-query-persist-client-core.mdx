@@ -1,9 +1,9 @@
 # Query Persist Client Core
 
-`@headless-form/query-persist-client-core` provides the infrastructure to persist and restore a `QueryClient`'s full cache to any storage backend. Use it to enable offline support, page-reload cache warming, and cross-session continuity.
+`@headlesskit/query-persist-client-core` provides the infrastructure to persist and restore a `QueryClient`'s full cache to any storage backend. Use it to enable offline support, page-reload cache warming, and cross-session continuity.
 
 ```bash
-pnpm add @headless-form/query-persist-client-core
+pnpm add @headlesskit/query-persist-client-core
 ```
 
 ---
@@ -33,7 +33,7 @@ interface Persister {
 interface PersistedClient {
   timestamp: number;
   buster: string;
-  clientState: DehydratedState; // from @headless-form/query-core
+  clientState: DehydratedState; // from @headlesskit/query-core
 }
 ```
 
@@ -50,7 +50,7 @@ The lowest-level API — manually control persist/restore/subscribe.
 Reads from the persister and hydrates the `QueryClient` if the snapshot is fresh.
 
 ```typescript
-import { persistQueryClientRestore } from '@headless-form/query-persist-client-core';
+import { persistQueryClientRestore } from '@headlesskit/query-persist-client-core';
 
 await persistQueryClientRestore({
   queryClient,
@@ -70,7 +70,7 @@ If the persisted snapshot is expired (older than `maxAge`) or busted (different 
 Serializes the current `QueryClient` state and writes it to the persister.
 
 ```typescript
-import { persistQueryClientSave } from '@headless-form/query-persist-client-core';
+import { persistQueryClientSave } from '@headlesskit/query-persist-client-core';
 
 await persistQueryClientSave({
   queryClient,
@@ -88,7 +88,7 @@ await persistQueryClientSave({
 Restores on startup and then saves every time the query cache changes. Returns an `unsubscribe` function.
 
 ```typescript
-import { persistQueryClientSubscribe } from '@headless-form/query-persist-client-core';
+import { persistQueryClientSubscribe } from '@headlesskit/query-persist-client-core';
 
 const unsubscribe = persistQueryClientSubscribe({
   queryClient,
@@ -112,7 +112,7 @@ unsubscribe();
 Combines restore and subscribe. Returns `[unsubscribe, restorePromise]`.
 
 ```typescript
-import { persistQueryClient } from '@headless-form/query-persist-client-core';
+import { persistQueryClient } from '@headlesskit/query-persist-client-core';
 
 const [unsubscribe, restorePromise] = await persistQueryClient({
   queryClient,
@@ -155,7 +155,7 @@ unsubscribe();
 A query-level persister factory. Instead of persisting the entire client at once, it wraps individual `queryFn`s and reads/writes per-query cache entries. This is useful when you want fine-grained per-query persistence without full-client serialization.
 
 ```typescript
-import { experimental_createPersister } from '@headless-form/query-persist-client-core';
+import { experimental_createPersister } from '@headlesskit/query-persist-client-core';
 
 const persister = experimental_createPersister({
   storage: localStorage,
@@ -211,8 +211,8 @@ interface AsyncStorage {
 Helper functions for controlling persistence retry behaviour:
 
 ```typescript
-import { defaultRetry, defaultRetryDelay } from '@headless-form/query-persist-client-core';
-import type { RetryConfig } from '@headless-form/query-persist-client-core';
+import { defaultRetry, defaultRetryDelay } from '@headlesskit/query-persist-client-core';
+import type { RetryConfig } from '@headlesskit/query-persist-client-core';
 
 // defaultRetry: retries up to 3 times, stops on 4xx errors
 // defaultRetryDelay: exponential backoff capped at 30 seconds
@@ -229,12 +229,12 @@ import type { RetryConfig } from '@headless-form/query-persist-client-core';
 ## Full example
 
 ```typescript
-import { QueryClient } from '@headless-form/query-core';
+import { QueryClient } from '@headlesskit/query-core';
 import {
   persistQueryClient,
   persistQueryClientSubscribe,
-} from '@headless-form/query-persist-client-core';
-import { createSyncStoragePersister } from '@headless-form/query-sync-storage-persister';
+} from '@headlesskit/query-persist-client-core';
+import { createSyncStoragePersister } from '@headlesskit/query-sync-storage-persister';
 
 const queryClient = new QueryClient({
   defaultOptions: {

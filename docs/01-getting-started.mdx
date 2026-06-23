@@ -1,13 +1,13 @@
 # Getting Started
 
-`headless-form` is a framework-agnostic form state engine with zero runtime dependencies
+`headlesskit` is a framework-agnostic form state engine with zero runtime dependencies
 and first-class React and Angular wrappers.
 
 | Package | Description |
 |---------|-------------|
-| `@headless-form/core` | Pure TypeScript form engine — zero deps |
-| `@headless-form/react` | React 18 bindings via `useSyncExternalStore` |
-| `@headless-form/angular` | Angular 17+ signals-based bindings |
+| `@headlesskit/forms` | Pure TypeScript form engine — zero deps |
+| `@headlesskit/forms-react` | React 18 bindings via `useSyncExternalStore` |
+| `@headlesskit/angular` | Angular 17+ signals-based bindings |
 
 ---
 
@@ -16,25 +16,25 @@ and first-class React and Angular wrappers.
 ### React
 
 ```bash
-npm install @headless-form/react
+npm install @headlesskit/forms-react
 # or
-pnpm add @headless-form/react
+pnpm add @headlesskit/forms-react
 # or
-yarn add @headless-form/react
+yarn add @headlesskit/forms-react
 ```
 
 ### Angular
 
 ```bash
-npm install @headless-form/angular
+npm install @headlesskit/angular
 # or
-pnpm add @headless-form/angular
+pnpm add @headlesskit/angular
 ```
 
 ### Vanilla / Core only
 
 ```bash
-npm install @headless-form/core
+npm install @headlesskit/forms
 ```
 
 ---
@@ -44,8 +44,8 @@ npm install @headless-form/core
 ### React
 
 ```tsx
-import { useForm } from '@headless-form/react';
-import { isEmail, isNotEmpty } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
+import { isEmail, isNotEmpty } from '@headlesskit/forms-react';
 
 function ContactForm() {
   const form = useForm({
@@ -97,8 +97,8 @@ function ContactForm() {
 
 ```typescript
 import { Component, ChangeDetectionStrategy } from '@angular/core';
-import { injectForm, HfFieldDirective } from '@headless-form/angular';
-import { isEmail, isNotEmpty } from '@headless-form/angular';
+import { injectForm, HfFieldDirective } from '@headlesskit/angular';
+import { isEmail, isNotEmpty } from '@headlesskit/angular';
 
 @Component({
   standalone: true,
@@ -147,7 +147,7 @@ export class ContactFormComponent {
 ### Vanilla (Core)
 
 ```typescript
-import { createFormStore, isEmail, isNotEmpty } from '@headless-form/core';
+import { createFormStore, isEmail, isNotEmpty } from '@headlesskit/forms';
 
 const form = createFormStore({
   mode: 'uncontrolled',
@@ -177,7 +177,7 @@ document.querySelector('form')!.addEventListener('submit',
 
 ## Features
 
-- **Zero dependencies** in `@headless-form/core`
+- **Zero dependencies** in `@headlesskit/forms`
 - **Controlled and uncontrolled modes** — uncontrolled mode causes zero re-renders on typing
 - **Deep path inference** — `form.getInputProps('user.address.city')` is fully typed
 - **Built-in validators** — `isNotEmpty`, `isEmail`, `matches`, `matchesField`, `isInRange`, `hasLength`, `isJSONString`, `isNotEmptyHTML`
@@ -195,7 +195,7 @@ document.querySelector('form')!.addEventListener('submit',
 All packages ship full TypeScript types. The form values type is inferred from `initialValues`:
 
 ```typescript
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 // Inferred from initialValues
 const form = useForm({

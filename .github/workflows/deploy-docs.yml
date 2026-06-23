@@ -34,7 +34,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Build docs site
-        run: pnpm --filter @headless-form/docs-site build
+        run: pnpm --filter @headlesskit/docs-site build
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

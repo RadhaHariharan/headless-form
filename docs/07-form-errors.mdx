@@ -1,6 +1,6 @@
 # Form Errors
 
-`headless-form` tracks validation errors in a flat `errors` object keyed by dot-notation
+`headlesskit` tracks validation errors in a flat `errors` object keyed by dot-notation
 field paths. Errors are set automatically during validation and can be managed manually
 at any time.
 
@@ -11,7 +11,7 @@ at any time.
 `form.errors` is an object containing the current validation errors:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -44,7 +44,7 @@ form.errors;
 Set errors that appear immediately when the form mounts:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -67,7 +67,7 @@ form.errors;
 Replaces the entire errors record at once:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 const form = useForm({ mode: 'uncontrolled' });
 
@@ -80,7 +80,7 @@ form.errors;
 Common use case — map server-side validation errors to form fields:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 function Demo() {
   const form = useForm({
@@ -123,7 +123,7 @@ function Demo() {
 Sets the error for a single field:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -158,7 +158,7 @@ form.onSubmit(async (values) => {
 Clears all errors at once:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -177,7 +177,7 @@ form.errors; // -> {}
 Clears the error for a single field:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -197,7 +197,7 @@ The error for a field can be any value of your `TError` type. By default, `TErro
 In React, it is typically `React.ReactNode` so you can render JSX errors:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 import type { ReactNode } from 'react';
 
 const form = useForm<{ name: string; email: string }, { name: string; email: string }, ReactNode>({
@@ -234,9 +234,9 @@ form.errors; // -> { name: 'name-error' }
 Import the type from either package:
 
 ```typescript
-import type { FormErrors } from '@headless-form/react';
+import type { FormErrors } from '@headlesskit/forms-react';
 // or
-import type { FormErrors } from '@headless-form/core';
+import type { FormErrors } from '@headlesskit/forms';
 
 // Use in function signatures
 const handleErrors = (errors: FormErrors<string>) => {
@@ -249,7 +249,7 @@ const handleErrors = (errors: FormErrors<string>) => {
 Get the errors type directly from a form instance:
 
 ```typescript
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 const form = useForm({ mode: 'uncontrolled', initialValues: { name: '' } });
 
@@ -266,7 +266,7 @@ const handleErrors = (errors: typeof form.errors) => {
 Errors for nested objects and array items use dot-notation keys:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -306,7 +306,7 @@ In Angular, `form.errors()` is a signal that returns the current errors record:
 
 ```typescript
 import { Component, ChangeDetectionStrategy } from '@angular/core';
-import { injectForm, HfFieldDirective } from '@headless-form/angular';
+import { injectForm, HfFieldDirective } from '@headlesskit/angular';
 
 @Component({
   standalone: true,

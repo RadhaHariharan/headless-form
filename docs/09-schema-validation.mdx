@@ -1,6 +1,6 @@
 # Schema Validation
 
-`headless-form` supports [Standard Schema](https://standardschema.dev/) — a community
+`headlesskit` supports [Standard Schema](https://standardschema.dev/) — a community
 specification implemented by many popular validation libraries. Use `schemaResolver` to
 validate forms with any Standard Schema-compliant library without extra adapter packages.
 
@@ -14,17 +14,17 @@ Supported libraries include:
 
 ## Installation
 
-Install `@headless-form/react` (or `/core`) alongside your preferred schema library:
+Install `@headlesskit/forms-react` (or `/core`) alongside your preferred schema library:
 
 ```bash
 # Zod
-npm install @headless-form/react zod
+npm install @headlesskit/forms-react zod
 
 # Valibot
-npm install @headless-form/react valibot
+npm install @headlesskit/forms-react valibot
 
 # Arktype
-npm install @headless-form/react arktype
+npm install @headlesskit/forms-react arktype
 ```
 
 ---
@@ -34,9 +34,9 @@ npm install @headless-form/react arktype
 Import `schemaResolver` and pass it to the `validate` option:
 
 ```typescript
-import { schemaResolver } from '@headless-form/react';
+import { schemaResolver } from '@headlesskit/forms-react';
 // or
-import { schemaResolver } from '@headless-form/core';
+import { schemaResolver } from '@headlesskit/forms';
 ```
 
 ---
@@ -68,8 +68,8 @@ npm install zod
 
 ```tsx
 import { z } from 'zod/v4';
-import { useForm } from '@headless-form/react';
-import { schemaResolver } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
+import { schemaResolver } from '@headlesskit/forms-react';
 
 const schema = z.object({
   name: z.string().min(2, { error: 'Name must have at least 2 letters' }),
@@ -119,7 +119,7 @@ form.errors;
 
 ```tsx
 import { z } from 'zod/v4';
-import { useForm, schemaResolver } from '@headless-form/react';
+import { useForm, schemaResolver } from '@headlesskit/forms-react';
 
 const schema = z.object({
   user: z.object({
@@ -148,7 +148,7 @@ form.errors;
 
 ```tsx
 import { z } from 'zod/v4';
-import { useForm, schemaResolver } from '@headless-form/react';
+import { useForm, schemaResolver } from '@headlesskit/forms-react';
 
 const schema = z.object({
   users: z.array(
@@ -183,7 +183,7 @@ handle promises automatically:
 
 ```tsx
 import { z } from 'zod/v4';
-import { useForm, schemaResolver } from '@headless-form/react';
+import { useForm, schemaResolver } from '@headlesskit/forms-react';
 
 const schema = z
   .object({
@@ -226,7 +226,7 @@ npm install valibot
 
 ```tsx
 import * as v from 'valibot';
-import { useForm, schemaResolver } from '@headless-form/react';
+import { useForm, schemaResolver } from '@headlesskit/forms-react';
 
 const schema = v.object({
   name: v.pipe(
@@ -277,7 +277,7 @@ npm install arktype
 
 ```tsx
 import { type } from 'arktype';
-import { useForm, schemaResolver } from '@headless-form/react';
+import { useForm, schemaResolver } from '@headlesskit/forms-react';
 
 const schema = type({
   name: 'string >= 2',
@@ -314,8 +314,8 @@ function Demo() {
 ## Schema Resolver API
 
 ```typescript
-import { schemaResolver } from '@headless-form/react';
-import type { SchemaResolverOptions, StandardSchema } from '@headless-form/react';
+import { schemaResolver } from '@headlesskit/forms-react';
+import type { SchemaResolverOptions, StandardSchema } from '@headlesskit/forms-react';
 
 // Usage
 const resolver = schemaResolver(schema, options);
@@ -341,8 +341,8 @@ of `useForm` / `injectForm` / `createFormStore`. It handles:
 
 ```typescript
 import { Component, ChangeDetectionStrategy } from '@angular/core';
-import { injectForm, HfFieldDirective } from '@headless-form/angular';
-import { schemaResolver } from '@headless-form/angular';
+import { injectForm, HfFieldDirective } from '@headlesskit/angular';
+import { schemaResolver } from '@headlesskit/angular';
 import { z } from 'zod/v4';
 
 const schema = z.object({
@@ -388,7 +388,7 @@ export class LoginFormComponent {
 ## Vanilla / Core
 
 ```typescript
-import { createFormStore, schemaResolver } from '@headless-form/core';
+import { createFormStore, schemaResolver } from '@headlesskit/forms';
 import { z } from 'zod/v4';
 
 const schema = z.object({

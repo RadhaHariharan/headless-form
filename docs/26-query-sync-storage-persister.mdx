@@ -1,19 +1,19 @@
 # Query Sync Storage Persister
 
-`@headless-form/query-sync-storage-persister` creates a `Persister` backed by any synchronous storage — `localStorage`, `sessionStorage`, or any object satisfying the `Storage` interface. It throttles writes to avoid hammering storage on every cache update, and supports a retry strategy for handling storage quota errors.
+`@headlesskit/query-sync-storage-persister` creates a `Persister` backed by any synchronous storage — `localStorage`, `sessionStorage`, or any object satisfying the `Storage` interface. It throttles writes to avoid hammering storage on every cache update, and supports a retry strategy for handling storage quota errors.
 
 ```bash
-pnpm add @headless-form/query-sync-storage-persister
+pnpm add @headlesskit/query-sync-storage-persister
 ```
 
-Requires `@headless-form/query-persist-client-core` for the `persistQueryClient` lifecycle functions.
+Requires `@headlesskit/query-persist-client-core` for the `persistQueryClient` lifecycle functions.
 
 ---
 
 ## createSyncStoragePersister
 
 ```typescript
-import { createSyncStoragePersister } from '@headless-form/query-sync-storage-persister';
+import { createSyncStoragePersister } from '@headlesskit/query-sync-storage-persister';
 
 const persister = createSyncStoragePersister({
   storage: window.localStorage,
@@ -50,9 +50,9 @@ interface Storage {
 ### localStorage
 
 ```typescript
-import { QueryClient } from '@headless-form/query-core';
-import { persistQueryClient } from '@headless-form/query-persist-client-core';
-import { createSyncStoragePersister } from '@headless-form/query-sync-storage-persister';
+import { QueryClient } from '@headlesskit/query-core';
+import { persistQueryClient } from '@headlesskit/query-persist-client-core';
+import { createSyncStoragePersister } from '@headlesskit/query-sync-storage-persister';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -95,7 +95,7 @@ const persister = createSyncStoragePersister({
 ### subscribe-only (no await)
 
 ```typescript
-import { persistQueryClientSubscribe } from '@headless-form/query-persist-client-core';
+import { persistQueryClientSubscribe } from '@headlesskit/query-persist-client-core';
 
 const unsubscribe = persistQueryClientSubscribe({
   queryClient,
@@ -112,8 +112,8 @@ const unsubscribe = persistQueryClientSubscribe({
 `localStorage` has a 5–10 MB limit depending on browser. When the serialized snapshot exceeds this, `setItem` throws a `QuotaExceededError`. Use the `retry` option to recover by reducing what you persist:
 
 ```typescript
-import { createSyncStoragePersister } from '@headless-form/query-sync-storage-persister';
-import type { PersistedClient } from '@headless-form/query-persist-client-core';
+import { createSyncStoragePersister } from '@headlesskit/query-sync-storage-persister';
+import type { PersistedClient } from '@headlesskit/query-persist-client-core';
 
 const persister = createSyncStoragePersister({
   storage: window.localStorage,
@@ -158,7 +158,7 @@ const persister = createSyncStoragePersister({
 
 ```typescript
 // Selective query persistence via dehydrateOptions
-import { persistQueryClient } from '@headless-form/query-persist-client-core';
+import { persistQueryClient } from '@headlesskit/query-persist-client-core';
 
 await persistQueryClient({
   queryClient,

@@ -1,4 +1,4 @@
-# headless-form
+# headlesskit
 
 A framework-agnostic form state engine with zero runtime dependencies, and 100% feature-parity React and Angular wrappers.
 
@@ -6,21 +6,21 @@ A framework-agnostic form state engine with zero runtime dependencies, and 100% 
 
 | Package | Description | Size |
 |---------|-------------|------|
-| [`@headless-form/core`](./packages/core) | Pure TypeScript form engine — zero deps | ≤ 12 KB |
-| [`@headless-form/react`](./packages/react) | React 18 bindings via `useSyncExternalStore` | ≤ 5 KB |
-| [`@headless-form/angular`](./packages/angular) | Angular 17+ signals-based bindings | ≤ 10 KB |
+| [`@headlesskit/forms`](./packages/forms) | Pure TypeScript form engine — zero deps | ≤ 12 KB |
+| [`@headlesskit/forms-react`](./packages/forms-react) | React 18 bindings via `useSyncExternalStore` | ≤ 5 KB |
+| [`@headlesskit/angular`](./packages/angular) | Angular 17+ signals-based bindings | ≤ 10 KB |
 
 ## Quick Start
 
 ### React
 
 ```bash
-npm install @headless-form/react
+npm install @headlesskit/forms-react
 ```
 
 ```tsx
-import { useForm } from '@headless-form/react';
-import { isEmail, isNotEmpty } from '@headless-form/core';
+import { useForm } from '@headlesskit/forms-react';
+import { isEmail, isNotEmpty } from '@headlesskit/forms';
 
 function ContactForm() {
   const form = useForm({
@@ -48,13 +48,13 @@ function ContactForm() {
 ### Angular
 
 ```bash
-npm install @headless-form/angular
+npm install @headlesskit/angular
 ```
 
 ```typescript
 import { Component, ChangeDetectionStrategy } from '@angular/core';
-import { injectForm, HfFieldDirective } from '@headless-form/angular';
-import { isEmail, isNotEmpty } from '@headless-form/core';
+import { injectForm, HfFieldDirective } from '@headlesskit/angular';
+import { isEmail, isNotEmpty } from '@headlesskit/forms';
 
 @Component({
   standalone: true,
@@ -83,11 +83,11 @@ export class MyFormComponent {
 ### Vanilla / Core
 
 ```bash
-npm install @headless-form/core
+npm install @headlesskit/forms
 ```
 
 ```typescript
-import { createFormStore, isEmail } from '@headless-form/core';
+import { createFormStore, isEmail } from '@headlesskit/forms';
 
 const form = createFormStore({
   initialValues: { email: '' },
@@ -101,10 +101,10 @@ form.subscribe(() => {
 
 ## Features
 
-- **Zero dependencies** in `@headless-form/core`
+- **Zero dependencies** in `@headlesskit/forms`
 - **Controlled and uncontrolled** modes — uncontrolled causes **zero re-renders on typing**
 - **Deep path inference** — `form.getInputProps('user.address.city')` is fully typed
-- **All 8 Mantine validators** — `isNotEmpty`, `isEmail`, `matches`, `matchesField`, `isInRange`, `hasLength`, `isJsonString`, `isNotEmptyHtml`
+- **8 built-in validators** — `isNotEmpty`, `isEmail`, `matches`, `matchesField`, `isInRange`, `hasLength`, `isJsonString`, `isNotEmptyHtml`
 - **Standard Schema resolver** — Zod v4, Valibot, Arktype
 - **Async-first validation** — generation-guarded, abortable, debounced
 - **List helpers** — `insertListItem`, `removeListItem`, `replaceListItem`, `reorderListItem`
@@ -127,7 +127,7 @@ pnpm build
 pnpm typecheck
 
 # Run the React example
-pnpm --filter @headless-form/example-react dev
+pnpm --filter @headlesskit/example-react dev
 ```
 
 ## Coverage Thresholds

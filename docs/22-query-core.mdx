@@ -1,9 +1,9 @@
 # Query Core
 
-`@headless-form/query-core` is a framework-agnostic port of TanStack Query Core. It provides the engine that powers all async state management — caching, deduplication, background refetching, stale-while-revalidate, mutations, and hydration — with zero UI-framework dependency.
+`@headlesskit/query-core` is a framework-agnostic port of TanStack Query Core. It provides the engine that powers all async state management — caching, deduplication, background refetching, stale-while-revalidate, mutations, and hydration — with zero UI-framework dependency.
 
 ```bash
-pnpm add @headless-form/query-core
+pnpm add @headlesskit/query-core
 ```
 
 ---
@@ -31,7 +31,7 @@ Framework adapters (React, Vue, etc.) layer on top by subscribing to `QueryObser
 The top-level object that coordinates everything. Create one per application, mount it on app start, unmount on teardown.
 
 ```typescript
-import { QueryClient } from '@headless-form/query-core';
+import { QueryClient } from '@headlesskit/query-core';
 
 const queryClient = new QueryClient({
   queryCache: new QueryCache({
@@ -173,7 +173,7 @@ queryClient.setMutationDefaults(['createPost'], {
 Stores all `Query` instances. You can subscribe to cache events globally.
 
 ```typescript
-import { QueryCache } from '@headless-form/query-core';
+import { QueryCache } from '@headlesskit/query-core';
 
 const queryCache = new QueryCache({
   onError: (error, query) => {
@@ -243,7 +243,7 @@ unsubscribe();
 Stores all `Mutation` instances.
 
 ```typescript
-import { MutationCache } from '@headless-form/query-core';
+import { MutationCache } from '@headlesskit/query-core';
 
 const mutationCache = new MutationCache({
   onMutate: (variables, mutation) => {
@@ -284,7 +284,7 @@ Each `Query` goes through these states:
 Subscribes to a single query and receives updates when state changes. Framework adapters (like `useQuery` in React) build on top of this.
 
 ```typescript
-import { QueryObserver } from '@headless-form/query-core';
+import { QueryObserver } from '@headlesskit/query-core';
 
 const observer = new QueryObserver(queryClient, {
   queryKey: ['user', 1],
@@ -363,7 +363,7 @@ Options passed to `queryClient.fetchQuery`, `QueryObserver`, and framework `useQ
 Extends `QueryObserver` for paginated data. Adds `fetchNextPage`, `fetchPreviousPage`, and page-tracking properties.
 
 ```typescript
-import { InfiniteQueryObserver } from '@headless-form/query-core';
+import { InfiniteQueryObserver } from '@headlesskit/query-core';
 
 const observer = new InfiniteQueryObserver(queryClient, {
   queryKey: ['posts', 'infinite'],
@@ -414,7 +414,7 @@ interface InfiniteData<TData, TPageParam = unknown> {
 Observes a single mutation's lifecycle.
 
 ```typescript
-import { MutationObserver } from '@headless-form/query-core';
+import { MutationObserver } from '@headlesskit/query-core';
 
 const observer = new MutationObserver(queryClient, {
   mutationFn: (newPost: NewPost) =>
@@ -459,7 +459,7 @@ observer.reset();
 `dehydrate` and `hydrate` serialize and restore cache state across server/client boundaries.
 
 ```typescript
-import { dehydrate, hydrate } from '@headless-form/query-core';
+import { dehydrate, hydrate } from '@headlesskit/query-core';
 
 // Server: prefetch and serialize
 const queryClient = new QueryClient();
@@ -500,7 +500,7 @@ hydrate(clientQueryClient, dehydratedState);
 Tracks window focus. Controls `refetchOnWindowFocus` behaviour.
 
 ```typescript
-import { focusManager } from '@headless-form/query-core';
+import { focusManager } from '@headlesskit/query-core';
 
 // Manual override (e.g. in tests or non-browser envs)
 focusManager.setFocused(true);
@@ -528,7 +528,7 @@ const unsubscribe = focusManager.subscribe((focused) => {
 Tracks network connectivity. Controls `refetchOnReconnect` and whether fetches are attempted.
 
 ```typescript
-import { onlineManager } from '@headless-form/query-core';
+import { onlineManager } from '@headlesskit/query-core';
 
 // Manual override
 onlineManager.setOnline(true);
@@ -562,7 +562,7 @@ console.log(onlineManager.isOnline()); // boolean
 Batches subscriber notifications from multiple state updates into a single flush. Called internally by `QueryCache` and `MutationCache`.
 
 ```typescript
-import { notifyManager } from '@headless-form/query-core';
+import { notifyManager } from '@headlesskit/query-core';
 
 // Wrap multiple updates in a single notification batch
 notifyManager.batch(() => {
@@ -614,7 +614,7 @@ queryClient.cancelQueries({
 Pass `skipToken` as `queryFn` to disable a query while preserving its type inference — equivalent to `enabled: false` but works at the type level.
 
 ```typescript
-import { skipToken } from '@headless-form/query-core';
+import { skipToken } from '@headlesskit/query-core';
 
 const observer = new QueryObserver(queryClient, {
   queryKey: ['user', userId],
@@ -640,9 +640,9 @@ type QueryKey = ReadonlyArray<unknown>
 ### Custom error type
 
 ```typescript
-import type { Register } from '@headless-form/query-core';
+import type { Register } from '@headlesskit/query-core';
 
-declare module '@headless-form/query-core' {
+declare module '@headlesskit/query-core' {
   interface Register {
     defaultError: MyCustomError;
   }

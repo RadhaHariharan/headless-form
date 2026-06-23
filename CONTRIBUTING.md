@@ -1,4 +1,4 @@
-# Contributing to headless-form
+# Contributing to headlesskit
 
 Thank you for your interest in contributing! Please read this guide before opening a PR.
 
@@ -29,4 +29,4 @@ pnpm build       # build all packages
 - JSDoc on every exported symbol and every key of every exported interface.
 - Tests alongside every module; coverage thresholds must pass.
 - Named exports only.
-- Keep `@headless-form/core` dependency-free.
+- Keep `@headlesskit/forms` dependency-free.

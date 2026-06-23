@@ -10,7 +10,7 @@ All value-related APIs: reading, setting, watching, transforming, and initializi
 from this object's shape:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 const form = useForm({
   initialValues: {
@@ -34,7 +34,7 @@ const form = useForm({
 Shallow-merges a partial object into the current values, or calls an updater function:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 const form = useForm({
   initialValues: { name: '', email: '', age: 0 },
@@ -59,7 +59,7 @@ This makes it safe to call in a `useEffect` that may run multiple times (e.g., f
 
 ```tsx
 import { useEffect } from 'react';
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 interface UserValues {
   name: string;
@@ -97,7 +97,7 @@ function EditProfileForm() {
 ```tsx
 import { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 function Demo() {
   const query = useQuery({
@@ -133,7 +133,7 @@ function Demo() {
 ### Use with enhanceGetInputProps to disable until initialized
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -153,7 +153,7 @@ const form = useForm({
 Sets the value of a single field at the given dot-notation path:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 const form = useForm({
   initialValues: {
@@ -190,7 +190,7 @@ form.setFieldValue('name', 'John', { forceUpdate: false });
 Resets all values to `initialValues` and clears errors, touched, dirty, and validating state:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 function Demo() {
   const form = useForm({
@@ -215,7 +215,7 @@ function Demo() {
 Replaces the initial-values reference used for dirty comparisons without changing the current values:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 const form = useForm({
   initialValues: { name: 'John' },
@@ -233,7 +233,7 @@ form.setInitialValues({ name: form.getValues().name });
 `getTransformedValues`. Use it to derive or reshape the submission payload:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 interface FormValues {
   firstName: string;
@@ -268,8 +268,8 @@ form.onSubmit((transformed) => {
 ### TypeScript: Transformed Values Type
 
 ```typescript
-import { useForm } from '@headless-form/react';
-import type { TransformedValues } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
+import type { TransformedValues } from '@headlesskit/forms-react';
 
 const form = useForm({
   initialValues: { first: '', last: '' },
@@ -308,7 +308,7 @@ Called on every value change with the new and previous values. Useful for side-e
 or cross-field dependencies:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 const form = useForm({
   initialValues: { country: '', state: '' },
@@ -329,7 +329,7 @@ Subscribes to changes on a single field. Returns an unsubscribe function:
 
 ```tsx
 import { useEffect } from 'react';
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 function Demo() {
   const form = useForm({
@@ -395,7 +395,7 @@ form.watch('user', ({ value }) => {
 ## TypeScript: Values Type
 
 ```typescript
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 // Explicitly typed form
 interface FormValues {
@@ -419,8 +419,8 @@ const form = useForm<FormValues>({
 When you need to reuse the form type elsewhere:
 
 ```typescript
-import { useForm } from '@headless-form/react';
-import type { UseFormReturnType } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
+import type { UseFormReturnType } from '@headlesskit/forms-react';
 
 type MyForm = UseFormReturnType<
   { name: string; email: string },  // Values
@@ -442,7 +442,7 @@ In Angular, the `FormApi` wraps values in signals where reactive reads are neede
 
 ```typescript
 import { Component, ChangeDetectionStrategy } from '@angular/core';
-import { injectForm, HfFieldDirective } from '@headless-form/angular';
+import { injectForm, HfFieldDirective } from '@headlesskit/angular';
 
 @Component({
   standalone: true,

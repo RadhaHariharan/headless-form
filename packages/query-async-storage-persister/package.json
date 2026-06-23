@@ -1,5 +1,5 @@
 {
-  "name": "@headless-form/query-async-storage-persister",
+  "name": "@headlesskit/query-async-storage-persister",
   "version": "0.1.0",
   "description": "A persister for asynchronous storages — vendored in plain JS",
   "license": "MIT",
@@ -23,8 +23,8 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@headless-form/query-core": "workspace:*",
-    "@headless-form/query-persist-client-core": "workspace:*"
+    "@headlesskit/query-core": "workspace:*",
+    "@headlesskit/query-persist-client-core": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

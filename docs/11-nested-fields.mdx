@@ -11,7 +11,7 @@ A path describes the location of a value in the form values tree using `.` as a 
 and array indices as numeric path segments:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -49,7 +49,7 @@ await form.validateField('deeply.nested.object.0.item');
 Build forms with nested object structure:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 function AddressForm() {
   const form = useForm({
@@ -111,7 +111,7 @@ function AddressForm() {
 Set individual nested fields or the entire object at once:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -138,7 +138,7 @@ form.setFieldValue('user', { name: 'Jane', occupation: 'Architect' });
 Define nested validation rules matching the object structure:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -171,7 +171,7 @@ form.errors;
 Manage arrays of items with the list helpers:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 interface Job {
   company: string;
@@ -257,7 +257,7 @@ function JobsForm() {
 | `form.reorderListItem(path, { from, to })` | Moves the item at `from` to `to` |
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -289,7 +289,7 @@ form.reorderListItem('tags', { from: 2, to: 0 });
 Validation errors for list items use dot-notation with the item index:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -328,7 +328,7 @@ Use `formRootRule` to validate the array itself (e.g., minimum length) alongside
 its items:
 
 ```tsx
-import { useForm, formRootRule } from '@headless-form/react';
+import { useForm, formRootRule } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -355,7 +355,7 @@ form.errors;
 Paths work at any depth:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -387,7 +387,7 @@ The `HfFieldDirective` accepts any dot-notation path in the `path` input:
 
 ```typescript
 import { Component, ChangeDetectionStrategy } from '@angular/core';
-import { injectForm, HfFieldDirective } from '@headless-form/angular';
+import { injectForm, HfFieldDirective } from '@headlesskit/angular';
 import { NgFor } from '@angular/common';
 
 @Component({

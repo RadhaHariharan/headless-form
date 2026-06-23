@@ -1,6 +1,6 @@
 # Form Validation
 
-`headless-form` supports sync and async validation via a rules object, a whole-form function,
+`headlesskit` supports sync and async validation via a rules object, a whole-form function,
 or a Standard Schema resolver. Rules run on submit, on change, on blur, or on demand.
 
 ---
@@ -11,7 +11,7 @@ Provide an object of validator functions matching your form values shape. Each f
 the field value and returns an error message or `null`/`undefined` when valid:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 function Demo() {
   const form = useForm({
@@ -62,7 +62,7 @@ Each validation rule receives four arguments:
 | `signal` | An `AbortSignal` aborted when a newer validation supersedes this one (useful for cancelling async requests) |
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -90,7 +90,7 @@ const form = useForm({
 their individual fields. Useful for ensuring a list is non-empty while also validating each item:
 
 ```tsx
-import { useForm, formRootRule } from '@headless-form/react';
+import { useForm, formRootRule } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -109,7 +109,7 @@ const form = useForm({
 Validate an object's field combination:
 
 ```tsx
-import { useForm, formRootRule } from '@headless-form/react';
+import { useForm, formRootRule } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -134,7 +134,7 @@ const form = useForm({
 Use the second argument of the rule function to access other fields:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 function PasswordForm() {
   const form = useForm({
@@ -183,7 +183,7 @@ Pass a function to `validate` instead of a rules object. The function receives a
 and returns an errors record. Omit a field from the result (or return `null` for it) to indicate it's valid:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -213,7 +213,7 @@ const form = useForm({
 Set `validateInputOnChange: true` to validate all fields on every keystroke:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -229,7 +229,7 @@ const form = useForm({
 Validate only specific fields on change by passing an array of paths:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -253,7 +253,7 @@ const form = useForm({
 Set `validateInputOnBlur: true` to validate when focus leaves a field:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -284,7 +284,7 @@ By default, a field's error is cleared when its value changes. Set `clearInputEr
 to retain the error even while typing:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -304,7 +304,7 @@ const form = useForm({
 The second argument is an optional error callback:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 function Demo() {
   const form = useForm({
@@ -352,7 +352,7 @@ function Demo() {
 `Promise<boolean>` when any rule is async):
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -379,7 +379,7 @@ Return a `Promise` from any rule to make it async. When any rule is async, `vali
 `validateField()`, and `isValid()` return `Promise`s:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 function Demo() {
   const form = useForm({
@@ -417,7 +417,7 @@ Set `validateDebounce` to avoid firing API calls on every keystroke when using
 `validateInputOnChange`:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -445,7 +445,7 @@ It does **not** delay `form.validate()` or `form.onSubmit()`.
 Use `form.getInputNode(path)` in the `onInvalid` callback to focus the first invalid field:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 function Demo() {
   const form = useForm({
@@ -493,7 +493,7 @@ All validation options work identically in Angular:
 
 ```typescript
 import { Component, ChangeDetectionStrategy } from '@angular/core';
-import { injectForm, HfFieldDirective } from '@headless-form/angular';
+import { injectForm, HfFieldDirective } from '@headlesskit/angular';
 
 @Component({
   standalone: true,

@@ -14,7 +14,7 @@ manually passing props. This is useful for complex forms with many sub-component
 3. `useForm` — a typed version of `useForm` with the values type pre-applied
 
 ```tsx
-import { createFormContext } from '@headless-form/react';
+import { createFormContext } from '@headlesskit/forms-react';
 
 // Define form values type (required)
 interface FormValues {
@@ -84,7 +84,7 @@ Avoid dependency cycles by keeping form context in a dedicated file:
 
 ```typescript
 // form-context.ts
-import { createFormContext } from '@headless-form/react';
+import { createFormContext } from '@headlesskit/forms-react';
 
 interface UserFormValues {
   firstName: string;
@@ -151,7 +151,7 @@ export function NameFields() {
 import { UserFormProvider, useUserForm } from './form-context';
 import { EmailField } from './fields/EmailField';
 import { NameFields } from './fields/NameFields';
-import { isEmail, isNotEmpty } from '@headless-form/react';
+import { isEmail, isNotEmpty } from '@headlesskit/forms-react';
 
 export function UserForm() {
   const form = useUserForm({
@@ -188,7 +188,7 @@ export function UserForm() {
 You can create as many independent form contexts as needed:
 
 ```typescript
-import { createFormContext } from '@headless-form/react';
+import { createFormContext } from '@headlesskit/forms-react';
 
 interface ShippingFormValues {
   street: string;
@@ -218,7 +218,7 @@ in child components to access the form:
 
 ```typescript
 // form.token.ts — optional: just use provideForm directly
-import { injectForm } from '@headless-form/angular';
+import { injectForm } from '@headlesskit/angular';
 
 interface CheckoutFormValues {
   name: string;
@@ -237,8 +237,8 @@ export function createCheckoutForm() {
 ```typescript
 // parent-form.component.ts
 import { Component, ChangeDetectionStrategy } from '@angular/core';
-import { injectForm, provideForm, HfFieldDirective } from '@headless-form/angular';
-import { isNotEmpty, isEmail } from '@headless-form/angular';
+import { injectForm, provideForm, HfFieldDirective } from '@headlesskit/angular';
+import { isNotEmpty, isEmail } from '@headlesskit/angular';
 import { NameFieldComponent } from './name-field.component';
 import { EmailFieldComponent } from './email-field.component';
 
@@ -287,7 +287,7 @@ export class CheckoutFormComponent {
 ```typescript
 // name-field.component.ts
 import { Component, ChangeDetectionStrategy } from '@angular/core';
-import { injectFormContext, HfFieldDirective } from '@headless-form/angular';
+import { injectFormContext, HfFieldDirective } from '@headlesskit/angular';
 
 @Component({
   standalone: true,
@@ -313,7 +313,7 @@ export class NameFieldComponent {
 ```typescript
 // email-field.component.ts
 import { Component, ChangeDetectionStrategy } from '@angular/core';
-import { injectFormContext, HfFieldDirective } from '@headless-form/angular';
+import { injectFormContext, HfFieldDirective } from '@headlesskit/angular';
 
 @Component({
   standalone: true,
@@ -342,8 +342,8 @@ You can use it directly for advanced patterns:
 
 ```typescript
 import { inject } from '@angular/core';
-import { FORM_CONTEXT_TOKEN } from '@headless-form/angular';
-import type { FormApi } from '@headless-form/angular';
+import { FORM_CONTEXT_TOKEN } from '@headlesskit/angular';
+import type { FormApi } from '@headlesskit/angular';
 
 // Access with optional injection
 const form = inject(FORM_CONTEXT_TOKEN, { optional: true });
@@ -359,14 +359,14 @@ if (!form) {
 `useFormContext` (React) throws if called outside a `FormProvider`:
 
 ```
-[headless-form/useFormContext] No FormProvider found in the component tree.
+[headlesskit/useFormContext] No FormProvider found in the component tree.
 Wrap your form with <FormProvider form={form}>.
 ```
 
 `injectFormContext` (Angular) throws if `provideForm` was not called in a parent:
 
 ```
-[headless-form/injectFormContext] No provideForm() found in the injection hierarchy.
+[headlesskit/injectFormContext] No provideForm() found in the injection hierarchy.
 Add provideForm(form) to a parent component's providers or constructor.
 ```
 
@@ -375,7 +375,7 @@ Add provideForm(form) to a parent component's providers or constructor.
 ## CreateFormContextResult Type
 
 ```typescript
-import type { CreateFormContextResult } from '@headless-form/react';
+import type { CreateFormContextResult } from '@headlesskit/forms-react';
 
 type Result = CreateFormContextResult<FormValues>;
 // -> [FormProvider, useFormContext, useForm]

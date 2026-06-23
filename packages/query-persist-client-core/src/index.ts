@@ -1,4 +1,4 @@
-import type { DehydratedState } from '@headless-form/query-core'
+import type { DehydratedState } from '@headlesskit/query-core'
 
 export type { AsyncStorage, SyncStorage, Storage, PersisterOptions, StorageValue } from './createPersister'
 export { experimental_createPersister } from './createPersister'

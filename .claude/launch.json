@@ -4,37 +4,37 @@
     {
       "name": "vanilla",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["--filter", "@headless-form/example-vanilla", "dev"],
+      "runtimeArgs": ["--filter", "@headlesskit/example-vanilla", "dev"],
       "port": 5173
     },
     {
       "name": "angular",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["--filter", "@headless-form/example-angular", "dev"],
+      "runtimeArgs": ["--filter", "@headlesskit/example-angular", "dev"],
       "port": 5174
     },
     {
       "name": "react",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["--filter", "@headless-form/example-react", "dev"],
+      "runtimeArgs": ["--filter", "@headlesskit/example-react", "dev"],
       "port": 5175
     },
     {
       "name": "playground",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["--filter", "@headless-form/vanilla-playground", "dev"],
+      "runtimeArgs": ["--filter", "@headlesskit/vanilla-playground", "dev"],
       "port": 5177
     }
   ,{
       "name": "docs",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["--filter", "@headless-form/docs-site", "dev"],
+      "runtimeArgs": ["--filter", "@headlesskit/docs-site", "dev"],
       "port": 5180
     },
     {
       "name": "nextjs",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["--filter", "@headless-form/examples-nextjs", "dev", "--", "-p", "3001"],
+      "runtimeArgs": ["--filter", "@headlesskit/examples-nextjs", "dev", "--", "-p", "3001"],
       "port": 3001
     }
   ]

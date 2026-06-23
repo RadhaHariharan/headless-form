@@ -1,6 +1,6 @@
 # Form Validators
 
-`@headless-form/react` and `@headless-form/core` export several built-in validator functions
+`@headlesskit/forms-react` and `@headlesskit/forms` export several built-in validator functions
 that can be used directly in the `validate` rules object. They are small, composable, and cover
 the most common field validation requirements.
 
@@ -11,15 +11,15 @@ the most common field validation requirements.
 Import validators from either package:
 
 ```typescript
-import { isNotEmpty, isEmail, matches, isInRange } from '@headless-form/react';
+import { isNotEmpty, isEmail, matches, isInRange } from '@headlesskit/forms-react';
 // or
-import { isNotEmpty, isEmail, matches, isInRange } from '@headless-form/core';
+import { isNotEmpty, isEmail, matches, isInRange } from '@headlesskit/forms';
 ```
 
 Use them in the `validate` rules object:
 
 ```tsx
-import { useForm, isEmail, isNotEmpty, hasLength } from '@headless-form/react';
+import { useForm, isEmail, isNotEmpty, hasLength } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -41,7 +41,7 @@ If the error message is omitted, validation will still fail but no error message
 the input will only receive invalid styling (if you apply `error` prop to your inputs):
 
 ```tsx
-import { useForm, isEmail } from '@headless-form/react';
+import { useForm, isEmail } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -69,7 +69,7 @@ Checks that the form value is not empty. The following are considered empty:
 Strings are trimmed before the check:
 
 ```tsx
-import { useForm, isNotEmpty } from '@headless-form/react';
+import { useForm, isNotEmpty } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -103,7 +103,7 @@ Validates that the value is a valid email address using the pattern:
 `/^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,})+$/`
 
 ```tsx
-import { useForm, isEmail } from '@headless-form/react';
+import { useForm, isEmail } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -122,7 +122,7 @@ Validates that the value matches a given regular expression. If the value is not
 validation fails:
 
 ```tsx
-import { useForm, matches } from '@headless-form/react';
+import { useForm, matches } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -152,7 +152,7 @@ Validates that a number is within the given `min`–`max` range. If the value is
 validation fails:
 
 ```tsx
-import { useForm, isInRange } from '@headless-form/react';
+import { useForm, isInRange } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -182,7 +182,7 @@ Validates that the value's `length` property is within the given range. Works wi
 arrays, and any object with a `length` property. Strings are trimmed before the check:
 
 ```tsx
-import { useForm, hasLength } from '@headless-form/react';
+import { useForm, hasLength } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -216,7 +216,7 @@ Validates that the value is equal to the value of another field in the form.
 Note: only primitive values can be compared — arrays and objects are not supported:
 
 ```tsx
-import { useForm, matchesField } from '@headless-form/react';
+import { useForm, matchesField } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -242,7 +242,7 @@ const form = useForm({
 Validates that the value is a valid JSON string:
 
 ```tsx
-import { useForm, isJSONString } from '@headless-form/react';
+import { useForm, isJSONString } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -264,7 +264,7 @@ Validates that the value is not an empty HTML string. An empty HTML string is an
 that contains only HTML tags and whitespace with no visible text content:
 
 ```tsx
-import { useForm, isNotEmptyHTML } from '@headless-form/react';
+import { useForm, isNotEmptyHTML } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -285,7 +285,7 @@ const form = useForm({
 Since validators return error messages or `null`, you can compose them using a wrapper:
 
 ```tsx
-import { useForm, isNotEmpty, isEmail } from '@headless-form/react';
+import { useForm, isNotEmpty, isEmail } from '@headlesskit/forms-react';
 
 function compose<T>(
   ...validators: Array<(value: T) => string | null>
@@ -318,7 +318,7 @@ const form = useForm({
 Write your own validators as simple functions that match the `ValidationRule` signature:
 
 ```typescript
-import type { ValidationRule } from '@headless-form/react';
+import type { ValidationRule } from '@headlesskit/forms-react';
 
 // A custom validator that accepts an error message
 function isStrongPassword(error: string): ValidationRule<string> {
@@ -352,7 +352,7 @@ const form = useForm({
 
 ## Angular: Validators
 
-All validators are re-exported from `@headless-form/angular`:
+All validators are re-exported from `@headlesskit/angular`:
 
 ```typescript
 import {
@@ -364,7 +364,7 @@ import {
   hasLength,
   isJSONString,
   isNotEmptyHTML,
-} from '@headless-form/angular';
+} from '@headlesskit/angular';
 
 export class MyFormComponent {
   form = injectForm({

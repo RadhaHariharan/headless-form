@@ -1,25 +1,25 @@
 [
   {
-    "name": "@headless-form/core (full)",
-    "path": "packages/core/dist/index.mjs",
+    "name": "@headlesskit/forms (full)",
+    "path": "packages/forms/dist/index.mjs",
     "limit": "12 KB"
   },
   {
-    "name": "@headless-form/core (isEmail only)",
+    "name": "@headlesskit/forms (isEmail only)",
     "import": "{ isEmail }",
-    "path": "packages/core/dist/index.mjs",
+    "path": "packages/forms/dist/index.mjs",
     "limit": "500 B"
   },
   {
-    "name": "@headless-form/react (full)",
-    "path": "packages/react/dist/index.mjs",
+    "name": "@headlesskit/forms-react (full)",
+    "path": "packages/forms-react/dist/index.mjs",
     "limit": "5 KB",
-    "ignore": ["react", "react-dom", "@headless-form/core"]
+    "ignore": ["react", "react-dom", "@headlesskit/forms"]
   },
   {
-    "name": "@headless-form/angular (full)",
-    "path": "packages/angular/dist/fesm2022/headless-form-angular.mjs",
+    "name": "@headlesskit/angular (full)",
+    "path": "packages/angular/dist/fesm2022/headlesskit-angular.mjs",
     "limit": "10 KB",
-    "ignore": ["@angular/core", "@angular/common", "@headless-form/core"]
+    "ignore": ["@angular/core", "@angular/common", "@headlesskit/forms"]
   }
 ]

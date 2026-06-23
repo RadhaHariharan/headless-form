@@ -7,7 +7,7 @@ The primary hook (React) or injection function (Angular) that creates and manage
 ## React: useForm
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -21,7 +21,7 @@ const form = useForm({
 ## Angular: injectForm
 
 ```typescript
-import { injectForm } from '@headless-form/angular';
+import { injectForm } from '@headlesskit/angular';
 
 export class MyComponent {
   form = injectForm({
@@ -37,7 +37,7 @@ export class MyComponent {
 ## Vanilla: createFormStore
 
 ```typescript
-import { createFormStore } from '@headless-form/core';
+import { createFormStore } from '@headlesskit/forms';
 
 const form = createFormStore({
   mode: 'uncontrolled',
@@ -274,8 +274,8 @@ form.getTransformedValues()
 ## Full Example (React)
 
 ```tsx
-import { useForm } from '@headless-form/react';
-import { isEmail, isNotEmpty, hasLength } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
+import { isEmail, isNotEmpty, hasLength } from '@headlesskit/forms-react';
 
 interface FormValues {
   name: string;
@@ -331,8 +331,8 @@ function RegistrationForm() {
 
 ```typescript
 import { Component, ChangeDetectionStrategy } from '@angular/core';
-import { injectForm, HfFieldDirective } from '@headless-form/angular';
-import { isEmail, isNotEmpty, hasLength } from '@headless-form/angular';
+import { injectForm, HfFieldDirective } from '@headlesskit/angular';
+import { isEmail, isNotEmpty, hasLength } from '@headlesskit/angular';
 
 interface FormValues {
   name: string;
@@ -392,7 +392,7 @@ export class RegistrationFormComponent {
 ## TypeScript: UseFormReturnType
 
 ```typescript
-import type { UseFormReturnType } from '@headless-form/react';
+import type { UseFormReturnType } from '@headlesskit/forms-react';
 
 // Full type with all generics
 type MyForm = UseFormReturnType<
@@ -413,7 +413,7 @@ type Errors = MyForm['errors'];
 In Angular, `injectForm` returns a `FormApi` which extends `FormStoreApi` with Angular signals:
 
 ```typescript
-import type { FormApi } from '@headless-form/angular';
+import type { FormApi } from '@headlesskit/angular';
 
 // form.errors() returns a Signal<FormErrors>
 // form.validating() returns a Signal<boolean>

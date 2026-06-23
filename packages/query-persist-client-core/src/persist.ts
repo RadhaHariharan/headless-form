@@ -1,4 +1,4 @@
-import type { QueryClient } from '@headless-form/query-core'
+import type { QueryClient } from '@headlesskit/query-core'
 import type { PersistedClient, Persister, PersisterCallbacks } from './index'
 
 interface PersistQueryClientOptions {
@@ -44,7 +44,7 @@ export async function persistQueryClientRestore({
         if (expired || busted) {
           await persister.removeClient()
         } else {
-          const { hydrate } = await import('@headless-form/query-core')
+          const { hydrate } = await import('@headlesskit/query-core')
           hydrate(queryClient, cachedState.clientState)
         }
       } else {
@@ -68,7 +68,7 @@ export async function persistQueryClientSave({
   buster = '',
   dehydrateOptions,
 }: Omit<PersistQueryClientOptions, 'maxAge'>) {
-  const { dehydrate } = await import('@headless-form/query-core')
+  const { dehydrate } = await import('@headlesskit/query-core')
 
   const dehydratedClient = dehydrate(queryClient, dehydrateOptions)
 

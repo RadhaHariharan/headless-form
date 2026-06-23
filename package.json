@@ -1,8 +1,8 @@
 {
-  "name": "headless-form-monorepo",
+  "name": "headlesskit-monorepo",
   "version": "0.0.0",
   "private": true,
-  "description": "Monorepo root for headless-form",
+  "description": "Monorepo root for headlesskit",
   "license": "MIT",
   "workspaces": [
     "packages/*",

@@ -1,6 +1,6 @@
 "use client"
 
-import { useForm, createStringValidator, toValidationRule } from "@headless-form/react";
+import { useForm, createStringValidator, toValidationRule } from "@headlesskit/forms-react";
 
 interface myForm {
   firstname: string,

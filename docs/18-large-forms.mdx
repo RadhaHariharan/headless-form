@@ -1,6 +1,6 @@
 # Large Forms & Performance (100+ fields)
 
-`headless-form` is built for large forms. This page explains **how re-renders work**, why the
+`headlesskit` is built for large forms. This page explains **how re-renders work**, why the
 cost stays flat as field count grows, and shows runnable patterns for **100+ field** forms with
 **custom and complex validators** in React, Angular, and vanilla JS.
 
@@ -59,7 +59,7 @@ import {
   isEmail, isNotEmpty, matchesField,
   createNumberValidator, createStringValidator, createDateValidator,
   toValidationRule,
-} from '@headless-form/core'; // also re-exported from /react and /angular
+} from '@headlesskit/forms'; // also re-exported from /react and /angular
 
 const ageRule  = toValidationRule(createNumberValidator({ min: 18, max: 120, integer: true }), 'Age');
 const userRule = toValidationRule(createStringValidator({ minLength: 3, allowedCharacters: 'alphanumeric' }), 'Username');
@@ -92,7 +92,7 @@ Generate fields from data and stay in **uncontrolled** mode. Typing causes **no 
 errors render on blur/submit.
 
 ```tsx
-import { useForm, isEmail, matchesField, toValidationRule, createNumberValidator } from '@headless-form/react';
+import { useForm, isEmail, matchesField, toValidationRule, createNumberValidator } from '@headlesskit/forms-react';
 
 const FIELDS = Array.from({ length: 120 }, (_, i) => `field_${i}`);
 const ageRule = toValidationRule(createNumberValidator({ min: 18, max: 120, integer: true }), 'Age');
@@ -139,7 +139,7 @@ If you need controlled inputs (every keystroke re-renders), don't put 120 contro
 one component — isolate each field so only the typed field re-renders:
 
 ```tsx
-import { createFormContext } from '@headless-form/react';
+import { createFormContext } from '@headlesskit/forms-react';
 const [FormProvider, useFormContext] = createFormContext<Record<string, string>>();
 
 const Field = React.memo(function Field({ name }: { name: string }) {
@@ -162,7 +162,7 @@ whole-form change-detection pass.
 
 ```typescript
 import { Component, ChangeDetectionStrategy } from '@angular/core';
-import { injectForm, HfFieldDirective, isEmail, matchesField, toValidationRule, createNumberValidator } from '@headless-form/angular';
+import { injectForm, HfFieldDirective, isEmail, matchesField, toValidationRule, createNumberValidator } from '@headlesskit/angular';
 
 const FIELDS = Array.from({ length: 120 }, (_, i) => `field_${i}`);
 const ageRule = toValidationRule(createNumberValidator({ min: 18, max: 120, integer: true }), 'Age');
@@ -226,7 +226,7 @@ You own the DOM, so you decide exactly what updates. Subscribe once; the callbac
 observable-state changes (in uncontrolled mode: not on typing).
 
 ```typescript
-import { createFormStore, isEmail, matchesField, toValidationRule, createNumberValidator } from '@headless-form/core';
+import { createFormStore, isEmail, matchesField, toValidationRule, createNumberValidator } from '@headlesskit/forms';
 
 const FIELDS = Array.from({ length: 120 }, (_, i) => `field_${i}`);
 const ageRule = toValidationRule(createNumberValidator({ min: 18, max: 120, integer: true }), 'Age');

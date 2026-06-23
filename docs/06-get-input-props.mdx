@@ -8,7 +8,7 @@ It handles `value`/`defaultValue`, `onChange`, `onFocus`, `onBlur`, and `error` 
 ## Basic Usage
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 function Demo() {
   const form = useForm({
@@ -109,7 +109,7 @@ Use `type: 'radio'` with the `value` option to bind individual radio options.
 the form field value against the provided `value`:
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 function Demo() {
   const form = useForm({
@@ -163,7 +163,7 @@ The payload argument contains:
 ### Disable a specific field
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
@@ -179,7 +179,7 @@ const form = useForm({
 ### Pass additional options through getInputProps
 
 ```tsx
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 // Define custom options (not part of the standard GetInputPropsOptions)
 const form = useForm({
@@ -201,7 +201,7 @@ form.getInputProps('name', { size: 'large' } as any)
 
 ```tsx
 import { useEffect } from 'react';
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 function Demo() {
   const form = useForm({
@@ -239,7 +239,7 @@ Use it to populate the form from an API response:
 
 ```tsx
 import { useEffect } from 'react';
-import { useForm } from '@headless-form/react';
+import { useForm } from '@headlesskit/forms-react';
 
 function EditForm() {
   const form = useForm({
@@ -383,7 +383,7 @@ it automatically binds value, change, focus, and blur events for the specified p
 
 ```typescript
 import { Component, ChangeDetectionStrategy } from '@angular/core';
-import { injectForm, HfFieldDirective } from '@headless-form/angular';
+import { injectForm, HfFieldDirective } from '@headlesskit/angular';
 
 @Component({
   standalone: true,

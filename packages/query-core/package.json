@@ -1,5 +1,5 @@
 {
-  "name": "@headless-form/query-core",
+  "name": "@headlesskit/query-core",
   "version": "0.1.0",
   "description": "The framework agnostic core that powers TanStack Query — vendored in plain JS",
   "license": "MIT",
