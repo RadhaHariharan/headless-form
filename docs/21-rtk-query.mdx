@@ -271,6 +271,34 @@ invalidatesTags: [{ type: 'Post', id: 'LIST' }]
 
 ---
 
+## skipToken
+
+Pass `skipToken` instead of a real argument to skip a query conditionally, with full type-narrowing (better than `skip: true`, which still requires a valid argument value).
+
+```typescript
+import { skipToken } from '@headless-form/redux-toolkit/query';
+
+function PostView({ postId }: { postId?: number }) {
+  const { data } = useGetPostQuery(postId ?? skipToken);
+  // query does not run until postId is defined
+}
+```
+
+## QueryStatus
+
+The status string stored on every query/mutation cache entry.
+
+```typescript
+import { QueryStatus } from '@headless-form/redux-toolkit/query';
+
+QueryStatus.uninitialized; // 'uninitialized'
+QueryStatus.pending;       // 'pending'
+QueryStatus.fulfilled;     // 'fulfilled'
+QueryStatus.rejected;      // 'rejected'
+```
+
+---
+
 ## Using endpoints imperatively
 
 Access endpoints directly from the API object — useful outside React or in listeners.

@@ -214,6 +214,19 @@ addTodo('Buy groceries');
 // { type: 'todos/add', payload: { id: '...', text: 'Buy groceries', createdAt: 1234567890 } }
 ```
 
+### isActionCreator / isFluxStandardAction
+
+```typescript
+import { isActionCreator, isFluxStandardAction } from '@headless-form/redux-toolkit';
+
+isActionCreator(increment);          // true — has .type and is callable
+isActionCreator(() => {});           // false — no .type property
+
+isFluxStandardAction({ type: 'x', payload: 1 });               // true
+isFluxStandardAction({ type: 'x', payload: 1, meta: {} });      // true
+isFluxStandardAction({ type: 'x', extra: 1 });                  // false — unknown key outside the FSA shape
+```
+
 ---
 
 ## createReducer
@@ -339,6 +352,21 @@ try {
   console.log(user); // User
 } catch (error) {
   console.error(error); // custom rejectValue or SerializedError
+}
+```
+
+### miniSerializeError
+
+Converts a thrown value into a plain, serializable `SerializedError` (`{ name, message, stack, code }`). Used internally to build the `rejected` action's `error` field; useful when you need the same normalization elsewhere.
+
+```typescript
+import { miniSerializeError } from '@headless-form/redux-toolkit';
+
+try {
+  JSON.parse('not json');
+} catch (err) {
+  const serialized = miniSerializeError(err);
+  // { name: 'SyntaxError', message: '...', stack: '...' }
 }
 ```
 
@@ -644,6 +672,45 @@ startAppListening({
 });
 ```
 
+### Adding/removing listeners by dispatch
+
+`addListener`, `removeListener`, and `clearAllListeners` are action creators — an alternative to calling `listenerMiddleware.startListening()` directly, useful when you want to manage listeners from inside a thunk or another reducer.
+
+```typescript
+import { addListener, removeListener, clearAllListeners } from '@headless-form/redux-toolkit';
+
+store.dispatch(
+  addListener({
+    actionCreator: increment,
+    effect: async (action, listenerApi) => { /* ... */ },
+  })
+);
+
+store.dispatch(removeListener({ actionCreator: increment, effect: someEffect }));
+store.dispatch(clearAllListeners());
+```
+
+### TaskAbortError
+
+Thrown inside a listener effect when its task is cancelled (e.g. via `cancelActiveListeners()` or `cancel()`). Check for it if you wrap awaited work in `try/catch`.
+
+```typescript
+import { TaskAbortError } from '@headless-form/redux-toolkit';
+
+listenerMiddleware.startListening({
+  actionCreator: searchChanged,
+  effect: async (action, { delay, dispatch }) => {
+    try {
+      await delay(300);
+      dispatch(fetchResults(action.payload));
+    } catch (err) {
+      if (err instanceof TaskAbortError) return; // cancelled by a newer keystroke
+      throw err;
+    }
+  },
+});
+```
+
 ---
 
 ## createDynamicMiddleware
@@ -745,16 +812,107 @@ const extended = middleware.prepend(someMiddleware);
 // Tuple<[typeof someMiddleware, typeof thunk, typeof logger]>
 ```
 
-### freezeDraftable
+---
 
-Deeply freezes a value if it is Immer-draftable (objects and arrays). Primitives pass through unchanged.
+## Immer re-exports
+
+`@headless-form/redux-toolkit` re-exports a few Immer helpers directly, since `createReducer`/`createSlice` reducers operate on Immer drafts.
 
 ```typescript
-import { freezeDraftable } from '@headless-form/redux-toolkit';
-
-const frozen = freezeDraftable({ a: 1, b: [2, 3] });
-// Object.isFrozen(frozen) === true
+import { current, isDraft, createNextState, original, freeze } from '@headless-form/redux-toolkit';
+import type { Draft, WritableDraft } from '@headless-form/redux-toolkit';
 ```
+
+| Export | Description |
+|--------|-------------|
+| `current(draft)` | Returns a plain snapshot of the current draft state, useful for logging mid-reducer |
+| `isDraft(value)` | `true` if the value is an Immer draft |
+| `createNextState(base, recipe)` | Immer's `produce`, exported under its RTK-internal name |
+| `original(draft)` | Returns the pre-mutation value a draft was created from |
+| `freeze(value)` | Deeply freezes a plain object/array |
+| `Draft<T>` / `WritableDraft<T>` | Type of a value as seen inside a draft recipe |
+
+```typescript
+builder.addCase(someAction, (state) => {
+  console.log('before mutation:', current(state));
+  state.value += 1;
+});
+```
+
+---
+
+## Reselect re-exports
+
+```typescript
+import { createSelector, createSelectorCreator, lruMemoize, weakMapMemoize } from '@headless-form/redux-toolkit';
+import type { Selector, OutputSelector } from '@headless-form/redux-toolkit';
+```
+
+| Export | Description |
+|--------|-------------|
+| `createSelector(...inputs, resultFn)` | Builds a memoized selector — recomputes only when its inputs change |
+| `createSelectorCreator(memoize, ...memoizeOptions)` | Builds a custom `createSelector` with a different memoization strategy |
+| `lruMemoize` | Default memoizer used by `createSelector` — caches the last N argument sets |
+| `weakMapMemoize` | Memoizer that caches per unique argument reference via `WeakMap`, with unbounded cache size |
+
+```typescript
+const selectTodos = (state: RootState) => state.todos.items;
+const selectFilter = (state: RootState) => state.todos.filter;
+
+const selectVisibleTodos = createSelector(
+  [selectTodos, selectFilter],
+  (todos, filter) => todos.filter((t) => t.status === filter)
+);
+```
+
+---
+
+## Thunk types
+
+`ThunkAction`, `ThunkDispatch`, and `ThunkMiddleware` are re-exported from `redux-thunk` for typing hand-written thunks (as opposed to `createAsyncThunk`-generated ones).
+
+```typescript
+import type { ThunkAction } from '@headless-form/redux-toolkit';
+
+const incrementAsync = (amount: number): ThunkAction<void, RootState, unknown, AppAction> =>
+  (dispatch, getState) => {
+    setTimeout(() => dispatch({ type: 'counter/add', payload: amount }), 1000);
+  };
+```
+
+---
+
+## buildCreateSlice / asyncThunkCreator
+
+`createSlice` is itself built by calling `buildCreateSlice()` with no arguments. Pass `asyncThunkCreator` to get a `create.asyncThunk(...)` reducer creator inside the `reducers` builder callback form.
+
+```typescript
+import { buildCreateSlice, asyncThunkCreator } from '@headless-form/redux-toolkit';
+
+const createAppSlice = buildCreateSlice({
+  creators: { asyncThunk: asyncThunkCreator },
+});
+
+const postsSlice = createAppSlice({
+  name: 'posts',
+  initialState: { items: [] as Post[], loading: false },
+  reducers: (create) => ({
+    fetchPosts: create.asyncThunk(
+      async () => {
+        const res = await fetch('/api/posts');
+        return (await res.json()) as Post[];
+      },
+      {
+        pending: (state) => { state.loading = true },
+        fulfilled: (state, action) => { state.items = action.payload; state.loading = false },
+        rejected: (state) => { state.loading = false },
+      },
+    ),
+  }),
+});
+```
+
+`ReducerType` is the internal enum (`reducer`, `reducerWithPrepare`, `asyncThunk`) used to tag entries produced by the `reducers` builder callback — most code never needs to reference it directly.
 
 ---
 

@@ -18,7 +18,7 @@ const docs = Object.entries(rawDocs)
 // ── Sections ──────────────────────────────────────────────────────────────────
 const SECTIONS = [
   { name: 'Form', range: [1, 18] },
-  { name: 'Redux & Toolkit', range: [19, 21] },
+  { name: 'State Management', range: [19, 21] },
   { name: 'TanStack Query', range: [22, 26] },
 ]
 

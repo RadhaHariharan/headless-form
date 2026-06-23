@@ -56,6 +56,8 @@ export default function Home() {
       <br />
       LastName - {form.getValues().lastname}
       <br />
+      Errors - {form.isValid() ? "True" : "False"}
+      <br />
       <button onClick={submit}>Submit</button>
     </div>
   );
