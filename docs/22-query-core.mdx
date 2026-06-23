@@ -1,0 +1,667 @@
+# Query Core
+
+`@headless-form/query-core` is a framework-agnostic port of TanStack Query Core. It provides the engine that powers all async state management — caching, deduplication, background refetching, stale-while-revalidate, mutations, and hydration — with zero UI-framework dependency.
+
+```bash
+pnpm add @headless-form/query-core
+```
+
+---
+
+## Architecture overview
+
+```
+QueryClient
+  ├── QueryCache          ← stores and manages Query instances
+  │     └── Query         ← single cached entry (state machine)
+  │           └── Retryer ← fetch + retry + pause/resume
+  ├── MutationCache       ← stores and manages Mutation instances
+  │     └── Mutation      ← single mutation (state machine)
+  ├── FocusManager        ← tracks window focus
+  ├── OnlineManager       ← tracks network connectivity
+  └── NotifyManager       ← batches subscriber notifications
+```
+
+Framework adapters (React, Vue, etc.) layer on top by subscribing to `QueryObserver` / `MutationObserver`.
+
+---
+
+## QueryClient
+
+The top-level object that coordinates everything. Create one per application, mount it on app start, unmount on teardown.
+
+```typescript
+import { QueryClient } from '@headless-form/query-core';
+
+const queryClient = new QueryClient({
+  queryCache: new QueryCache({
+    onError: (error, query) => {
+      console.error(`Query ${String(query.queryKey)} failed:`, error);
+    },
+  }),
+  mutationCache: new MutationCache({
+    onError: (error) => console.error('Mutation failed:', error),
+  }),
+  defaultOptions: {
+    queries: {
+      staleTime: 1000 * 60,     // 1 minute
+      gcTime: 1000 * 60 * 5,   // 5 minutes
+      retry: 3,
+      refetchOnWindowFocus: true,
+    },
+    mutations: {
+      retry: 0,
+    },
+  },
+});
+
+queryClient.mount();
+// ...
+queryClient.unmount();
+```
+
+### Constructor options
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `queryCache` | `QueryCache` | Custom query cache (defaults to `new QueryCache()`) |
+| `mutationCache` | `MutationCache` | Custom mutation cache (defaults to `new MutationCache()`) |
+| `defaultOptions.queries` | `QueryObserverOptions` | Default options applied to all queries |
+| `defaultOptions.mutations` | `MutationObserverOptions` | Default options applied to all mutations |
+
+### Query data methods
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `getQueryData(queryKey)` | `TData \| undefined` | Read cached data synchronously |
+| `setQueryData(queryKey, updater, opts?)` | `TData \| undefined` | Write to cache directly |
+| `getQueriesData(filters)` | `[QueryKey, TData][]` | Get data for multiple queries |
+| `setQueriesData(filters, updater, opts?)` | `[QueryKey, TData][]` | Update multiple queries at once |
+| `getQueryState(queryKey)` | `QueryState \| undefined` | Full state object for a query |
+| `ensureQueryData(options)` | `Promise<TData>` | Return cached data or fetch if missing |
+
+```typescript
+// Read
+const user = queryClient.getQueryData<User>(['users', 1]);
+
+// Write (functional updater)
+queryClient.setQueryData<User>(['users', 1], (old) => ({
+  ...old!,
+  name: 'Alice',
+}));
+
+// Write (direct value)
+queryClient.setQueryData(['users', 1], newUser, {
+  updatedAt: Date.now(),
+});
+```
+
+### Query lifecycle methods
+
+| Method | Description |
+|--------|-------------|
+| `fetchQuery(options)` | Fetch if stale; return cached data otherwise. Throws on error. |
+| `prefetchQuery(options)` | Same as `fetchQuery` but swallows errors — fire-and-forget warm-up |
+| `fetchInfiniteQuery(options)` | Like `fetchQuery` for infinite queries |
+| `prefetchInfiniteQuery(options)` | Like `prefetchQuery` for infinite queries |
+| `invalidateQueries(filters?, opts?)` | Mark queries stale and refetch active ones |
+| `refetchQueries(filters?, opts?)` | Force-refetch matching queries |
+| `cancelQueries(filters?, opts?)` | Cancel in-flight fetches |
+| `removeQueries(filters?)` | Remove queries from the cache |
+| `resetQueries(filters?, opts?)` | Reset to initial state and refetch active |
+
+```typescript
+// Fetch (throws on error)
+const posts = await queryClient.fetchQuery({
+  queryKey: ['posts'],
+  queryFn: () => fetch('/api/posts').then(r => r.json()),
+  staleTime: 10_000,
+});
+
+// Prefetch silently
+await queryClient.prefetchQuery({
+  queryKey: ['posts'],
+  queryFn: fetchPosts,
+});
+
+// Invalidate all posts queries, refetch active ones
+await queryClient.invalidateQueries({ queryKey: ['posts'] });
+
+// Invalidate without refetching
+await queryClient.invalidateQueries(
+  { queryKey: ['posts'] },
+  { refetchType: 'none' }
+);
+```
+
+### Default and per-query options
+
+```typescript
+// Global defaults
+queryClient.setDefaultOptions({
+  queries: { staleTime: 60_000 },
+});
+
+// Per-key defaults (matched by partial key)
+queryClient.setQueryDefaults(['users'], {
+  staleTime: 5 * 60_000,
+  gcTime: 15 * 60_000,
+});
+
+// Per-mutation-key defaults
+queryClient.setMutationDefaults(['createPost'], {
+  mutationFn: (variables) => api.createPost(variables),
+  onSuccess: () => queryClient.invalidateQueries({ queryKey: ['posts'] }),
+});
+```
+
+### Utility methods
+
+| Method | Description |
+|--------|-------------|
+| `isFetching(filters?)` | Count of in-flight queries |
+| `isMutating(filters?)` | Count of pending mutations |
+| `getQueryCache()` | Access the `QueryCache` |
+| `getMutationCache()` | Access the `MutationCache` |
+| `clear()` | Remove all queries and mutations from cache |
+| `resumePausedMutations()` | Re-run mutations paused by network offline |
+
+---
+
+## QueryCache
+
+Stores all `Query` instances. You can subscribe to cache events globally.
+
+```typescript
+import { QueryCache } from '@headless-form/query-core';
+
+const queryCache = new QueryCache({
+  onError: (error, query) => {
+    // Global error handler — fires after every query failure
+    logError(error, query.queryKey);
+  },
+  onSuccess: (data, query) => {
+    logSuccess(query.queryKey);
+  },
+  onSettled: (data, error, query) => {
+    trackMetric(query.queryKey);
+  },
+});
+```
+
+### Cache events
+
+Subscribe to low-level cache events:
+
+```typescript
+const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
+  switch (event.type) {
+    case 'added':
+      // Query was added to cache
+      break;
+    case 'removed':
+      // Query was garbage collected
+      break;
+    case 'updated':
+      // Query state changed (fetch, success, error, etc.)
+      break;
+    case 'observerAdded':
+      // A new observer (component) started watching this query
+      break;
+    case 'observerRemoved':
+      // An observer stopped watching
+      break;
+    case 'observerResultsUpdated':
+      // Observer result changed
+      break;
+  }
+  console.log(event.query.queryKey, event.type);
+});
+
+// Later
+unsubscribe();
+```
+
+### QueryCache methods
+
+| Method | Description |
+|--------|-------------|
+| `get(queryHash)` | Get a `Query` by its hash |
+| `getAll()` | All queries in the cache |
+| `find(filters)` | First query matching filters |
+| `findAll(filters)` | All queries matching filters |
+| `add(query)` | Add a query to the cache |
+| `remove(query)` | Remove a query from the cache |
+| `clear()` | Remove all queries |
+| `onFocus()` | Trigger focus-based refetches |
+| `onOnline()` | Trigger online-based refetches |
+
+---
+
+## MutationCache
+
+Stores all `Mutation` instances.
+
+```typescript
+import { MutationCache } from '@headless-form/query-core';
+
+const mutationCache = new MutationCache({
+  onMutate: (variables, mutation) => {
+    console.log('Mutation started', mutation.options.mutationKey);
+  },
+  onSuccess: (data, variables, context, mutation) => {
+    // Runs after any mutation succeeds
+  },
+  onError: (error, variables, context, mutation) => {
+    toast.error(`Failed: ${error.message}`);
+  },
+  onSettled: (data, error, variables, context, mutation) => {
+    // Always runs
+  },
+});
+```
+
+---
+
+## Query state machine
+
+Each `Query` goes through these states:
+
+| `status` | `fetchStatus` | Meaning |
+|----------|--------------|---------|
+| `'pending'` | `'fetching'` | No data yet, currently fetching |
+| `'pending'` | `'paused'` | No data yet, waiting for network |
+| `'pending'` | `'idle'` | No data, not fetching (disabled or not mounted) |
+| `'success'` | `'idle'` | Has data, not currently fetching |
+| `'success'` | `'fetching'` | Has data, background refetch in progress |
+| `'error'` | `'idle'` | Failed, not retrying |
+| `'error'` | `'fetching'` | Failed but retrying |
+
+---
+
+## QueryObserver
+
+Subscribes to a single query and receives updates when state changes. Framework adapters (like `useQuery` in React) build on top of this.
+
+```typescript
+import { QueryObserver } from '@headless-form/query-core';
+
+const observer = new QueryObserver(queryClient, {
+  queryKey: ['user', 1],
+  queryFn: () => fetchUser(1),
+  staleTime: 30_000,
+});
+
+const unsubscribe = observer.subscribe((result) => {
+  console.log(result.status, result.data, result.error);
+});
+
+// Force a refetch
+await observer.refetch();
+
+// Stop observing
+unsubscribe();
+```
+
+### Observer result properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `status` | `'pending' \| 'success' \| 'error'` | Query status |
+| `fetchStatus` | `'fetching' \| 'paused' \| 'idle'` | Fetch status |
+| `data` | `TData \| undefined` | Resolved data |
+| `error` | `TError \| null` | Last error |
+| `isLoading` | `boolean` | `status === 'pending' && fetchStatus === 'fetching'` |
+| `isFetching` | `boolean` | Any fetch in progress (including background) |
+| `isRefetching` | `boolean` | Background refetch with existing data |
+| `isStale` | `boolean` | Data is older than `staleTime` |
+| `isPending` | `boolean` | No data yet |
+| `isSuccess` | `boolean` | Has data and last fetch was successful |
+| `isError` | `boolean` | Last fetch failed |
+| `isFetched` | `boolean` | Has been fetched at least once |
+| `isPlaceholderData` | `boolean` | Currently showing `placeholderData` |
+| `failureCount` | `number` | Number of consecutive failures |
+| `dataUpdatedAt` | `number` | Timestamp of last successful data update |
+| `refetch(opts?)` | `Promise<QueryObserverResult>` | Manually trigger a refetch |
+| `promise` | `Promise<TData>` | Resolves when data is available (for Suspense) |
+
+---
+
+## QueryObserverOptions
+
+Options passed to `queryClient.fetchQuery`, `QueryObserver`, and framework `useQuery` hooks.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `queryKey` | `QueryKey` | required | Array identifying the query |
+| `queryFn` | `QueryFunction \| skipToken` | — | Async function that fetches data |
+| `enabled` | `boolean \| ((query) => boolean)` | `true` | Whether to auto-fetch |
+| `staleTime` | `number \| ((query) => number)` | `0` | Time (ms) before data is considered stale |
+| `gcTime` | `number` | `5 * 60 * 1000` | Time (ms) to keep unused data in cache |
+| `retry` | `boolean \| number \| fn` | `3` | Retry count or function returning whether to retry |
+| `retryDelay` | `number \| fn` | exponential backoff | Delay between retries |
+| `networkMode` | `'online' \| 'always' \| 'offlineFirst'` | `'online'` | When to fetch relative to network state |
+| `refetchInterval` | `number \| false \| fn` | `false` | Auto-refetch interval in ms |
+| `refetchIntervalInBackground` | `boolean` | `false` | Refetch even when window is not focused |
+| `refetchOnWindowFocus` | `boolean \| 'always' \| fn` | `true` | Refetch when window regains focus |
+| `refetchOnReconnect` | `boolean \| 'always' \| fn` | `true` | Refetch when network reconnects |
+| `refetchOnMount` | `boolean \| 'always' \| fn` | `true` | Refetch when observer mounts |
+| `notifyOnChangeProps` | `string[] \| 'all' \| fn` | depends | Which result properties trigger re-render |
+| `select` | `(data: TQueryData) => TData` | — | Transform/select from cached data |
+| `placeholderData` | `TData \| fn` | — | Data to show while loading |
+| `initialData` | `TData \| fn` | — | Pre-populate cache (skips loading state) |
+| `initialDataUpdatedAt` | `number \| fn` | — | Timestamp of `initialData` for stale check |
+| `structuralSharing` | `boolean \| fn` | `true` | Skip re-renders if data is structurally equal |
+| `meta` | `QueryMeta` | — | Arbitrary metadata passed to `queryFn` context |
+| `throwOnError` | `boolean \| fn` | `false` | Re-throw errors (for Suspense error boundaries) |
+| `suspense` | `boolean` | `false` | Enable React Suspense integration |
+
+---
+
+## InfiniteQueryObserver
+
+Extends `QueryObserver` for paginated data. Adds `fetchNextPage`, `fetchPreviousPage`, and page-tracking properties.
+
+```typescript
+import { InfiniteQueryObserver } from '@headless-form/query-core';
+
+const observer = new InfiniteQueryObserver(queryClient, {
+  queryKey: ['posts', 'infinite'],
+  queryFn: ({ pageParam }) =>
+    fetch(`/api/posts?cursor=${pageParam}`).then(r => r.json()),
+  initialPageParam: 0,
+  getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+  getPreviousPageParam: (firstPage) => firstPage.prevCursor ?? undefined,
+  maxPages: 5,
+});
+
+const unsubscribe = observer.subscribe((result) => {
+  if (result.isSuccess) {
+    const allPosts = result.data.pages.flatMap(page => page.items);
+    console.log(allPosts, result.hasNextPage, result.hasPreviousPage);
+  }
+});
+
+// Load next page
+await observer.fetchNextPage();
+
+// Load previous page
+await observer.fetchPreviousPage();
+```
+
+### InfiniteData shape
+
+```typescript
+interface InfiniteData<TData, TPageParam = unknown> {
+  pages: TData[];        // one entry per page
+  pageParams: TPageParam[];  // corresponding page params
+}
+```
+
+### InfiniteQueryObserverOptions (additional to QueryObserverOptions)
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `initialPageParam` | `TPageParam` | Page param for the first page (required) |
+| `getNextPageParam` | `fn` | Derive the next page param from the last page |
+| `getPreviousPageParam` | `fn` | Derive the previous page param from the first page |
+| `maxPages` | `number` | Max number of pages to keep in cache at once |
+
+---
+
+## MutationObserver
+
+Observes a single mutation's lifecycle.
+
+```typescript
+import { MutationObserver } from '@headless-form/query-core';
+
+const observer = new MutationObserver(queryClient, {
+  mutationFn: (newPost: NewPost) =>
+    fetch('/api/posts', { method: 'POST', body: JSON.stringify(newPost) }).then(r => r.json()),
+  onSuccess: () => queryClient.invalidateQueries({ queryKey: ['posts'] }),
+  onError: (error) => console.error(error),
+});
+
+const unsubscribe = observer.subscribe((result) => {
+  console.log(result.status); // 'idle' | 'pending' | 'success' | 'error'
+});
+
+// Trigger the mutation
+await observer.mutate({ title: 'New post', body: '...' });
+
+// Reset to idle
+observer.reset();
+```
+
+### MutationOptions
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `mutationFn` | `(variables) => Promise<TData>` | The mutation function |
+| `mutationKey` | `MutationKey` | Optional key for devtools and defaults matching |
+| `onMutate` | `(vars) => TContext` | Runs before the mutation — return context for rollback |
+| `onSuccess` | `(data, vars, ctx) => void` | Runs after success |
+| `onError` | `(err, vars, ctx) => void` | Runs after failure |
+| `onSettled` | `(data, err, vars, ctx) => void` | Always runs |
+| `retry` | `boolean \| number \| fn` | Retry on failure |
+| `retryDelay` | `number \| fn` | Delay between retries |
+| `networkMode` | `NetworkMode` | When to run the mutation |
+| `gcTime` | `number` | How long to keep mutation in cache after settling |
+| `scope` | `{ id: string }` | Scoped serialization — mutations with same scope id run one at a time |
+| `meta` | `MutationMeta` | Arbitrary metadata |
+| `throwOnError` | `boolean \| fn` | Re-throw errors |
+
+---
+
+## Hydration — SSR
+
+`dehydrate` and `hydrate` serialize and restore cache state across server/client boundaries.
+
+```typescript
+import { dehydrate, hydrate } from '@headless-form/query-core';
+
+// Server: prefetch and serialize
+const queryClient = new QueryClient();
+await queryClient.prefetchQuery({
+  queryKey: ['posts'],
+  queryFn: fetchPosts,
+});
+const dehydratedState = dehydrate(queryClient);
+// Send dehydratedState to the client as JSON
+
+// Client: restore from server state
+const clientQueryClient = new QueryClient();
+hydrate(clientQueryClient, dehydratedState);
+// Queries are now populated — no loading flash
+```
+
+### DehydrateOptions
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `shouldDehydrateQuery` | `(query) => boolean` | Default: dehydrate successful queries only |
+| `shouldDehydrateMutation` | `(mutation) => boolean` | Default: dehydrate pending mutations only |
+| `shouldRedactErrors` | `(error) => boolean` | Return `true` to replace error with `null` in output |
+| `serializeData` | `(data) => unknown` | Transform data before serializing (e.g. Date → string) |
+
+### HydrateOptions
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `defaultOptions.queries` | `QueryOptions` | Defaults applied to hydrated queries |
+| `defaultOptions.mutations` | `MutationOptions` | Defaults applied to hydrated mutations |
+| `deserializeData` | `(data) => unknown` | Inverse of `serializeData` |
+
+---
+
+## FocusManager
+
+Tracks window focus. Controls `refetchOnWindowFocus` behaviour.
+
+```typescript
+import { focusManager } from '@headless-form/query-core';
+
+// Manual override (e.g. in tests or non-browser envs)
+focusManager.setFocused(true);
+focusManager.setFocused(false);
+focusManager.setFocused(undefined); // back to automatic
+
+// Custom event listener (e.g. React Native AppState)
+focusManager.setEventListener((setFocused) => {
+  const subscription = AppState.addEventListener('change', (state) => {
+    setFocused(state === 'active');
+  });
+  return () => subscription.remove();
+});
+
+// Subscribe to focus changes
+const unsubscribe = focusManager.subscribe((focused) => {
+  console.log('window focused:', focused);
+});
+```
+
+---
+
+## OnlineManager
+
+Tracks network connectivity. Controls `refetchOnReconnect` and whether fetches are attempted.
+
+```typescript
+import { onlineManager } from '@headless-form/query-core';
+
+// Manual override
+onlineManager.setOnline(true);
+onlineManager.setOnline(false);
+
+// Custom detection (e.g. React Native NetInfo)
+import NetInfo from '@react-native-community/netinfo';
+
+onlineManager.setEventListener((setOnline) => {
+  const unsubscribe = NetInfo.addEventListener((state) => {
+    setOnline(!!state.isConnected);
+  });
+  return unsubscribe;
+});
+
+console.log(onlineManager.isOnline()); // boolean
+```
+
+### NetworkMode
+
+| Value | Behaviour |
+|-------|-----------|
+| `'online'` | Only fetch when `onlineManager.isOnline()` is `true`. Default. |
+| `'always'` | Always fetch regardless of connectivity. |
+| `'offlineFirst'` | Try the fetch immediately; if it fails, pause and retry when online. |
+
+---
+
+## NotifyManager
+
+Batches subscriber notifications from multiple state updates into a single flush. Called internally by `QueryCache` and `MutationCache`.
+
+```typescript
+import { notifyManager } from '@headless-form/query-core';
+
+// Wrap multiple updates in a single notification batch
+notifyManager.batch(() => {
+  queryClient.setQueryData(['users', 1], updatedUser);
+  queryClient.setQueryData(['users', 2], otherUser);
+  queryClient.invalidateQueries({ queryKey: ['posts'] });
+  // Subscribers notified once after all three
+});
+
+// Override scheduling (e.g. test environments)
+notifyManager.setScheduler(fn => fn()); // synchronous for tests
+```
+
+---
+
+## QueryFilters
+
+A filter object used by `findAll`, `invalidateQueries`, `cancelQueries`, etc.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `queryKey` | `QueryKey` | Match queries with keys that start with this |
+| `exact` | `boolean` | Exact key match instead of partial |
+| `type` | `'active' \| 'inactive' \| 'all'` | Filter by whether a query has active observers |
+| `stale` | `boolean` | Filter by stale state |
+| `fetchStatus` | `'fetching' \| 'paused' \| 'idle'` | Filter by fetch status |
+| `predicate` | `(query) => boolean` | Custom filter function |
+
+```typescript
+// All stale queries under the 'posts' key
+queryClient.invalidateQueries({ queryKey: ['posts'], stale: true });
+
+// All active queries regardless of key
+queryClient.invalidateQueries({ type: 'active' });
+
+// Exact key match only
+queryClient.getQueriesData({ queryKey: ['users', 1], exact: true });
+
+// Custom predicate
+queryClient.cancelQueries({
+  predicate: (query) => query.state.status === 'pending',
+});
+```
+
+---
+
+## skipToken
+
+Pass `skipToken` as `queryFn` to disable a query while preserving its type inference — equivalent to `enabled: false` but works at the type level.
+
+```typescript
+import { skipToken } from '@headless-form/query-core';
+
+const observer = new QueryObserver(queryClient, {
+  queryKey: ['user', userId],
+  queryFn: userId ? () => fetchUser(userId) : skipToken,
+});
+```
+
+---
+
+## TypeScript
+
+### QueryKey
+
+```typescript
+type QueryKey = ReadonlyArray<unknown>
+
+// Valid query keys
+['todos']
+['todos', { status: 'active' }]
+['todos', 1, 'comments']
+```
+
+### Custom error type
+
+```typescript
+import type { Register } from '@headless-form/query-core';
+
+declare module '@headless-form/query-core' {
+  interface Register {
+    defaultError: MyCustomError;
+  }
+}
+// Now all queries use MyCustomError instead of Error
+```
+
+### Typed QueryClient helpers
+
+```typescript
+const user = queryClient.getQueryData<User>(['users', 1]);
+//    ^? User | undefined
+
+const state = queryClient.getQueryState<User, ApiError>(['users', 1]);
+//    ^? QueryState<User, ApiError> | undefined
+```
+
+---
+
+## License
+
+MIT — identical to TanStack Query Core upstream.

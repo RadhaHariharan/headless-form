@@ -1,0 +1,195 @@
+# Query Async Storage Persister
+
+`@headless-form/query-async-storage-persister` creates a `Persister` that stores the entire `QueryClient` snapshot in any async key-value store. Designed for environments where synchronous storage is unavailable — most commonly React Native's `AsyncStorage`, but works with IndexedDB wrappers, filesystem APIs, and custom async backends.
+
+```bash
+pnpm add @headless-form/query-async-storage-persister
+```
+
+Requires `@headless-form/query-persist-client-core` for the `persistQueryClient` lifecycle functions.
+
+---
+
+## createAsyncStoragePersister
+
+```typescript
+import { createAsyncStoragePersister } from '@headless-form/query-async-storage-persister';
+
+const persister = createAsyncStoragePersister({
+  storage: AsyncStorage, // e.g. from @react-native-async-storage/async-storage
+});
+```
+
+### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `storage` | `AsyncStorage \| null \| undefined` | required | Storage backend. If `null` or `undefined`, a no-op persister is returned. |
+| `key` | `string` | `'REACT_QUERY_OFFLINE_CACHE'` | Storage key for the serialized snapshot |
+| `throttleTime` | `number` | `1000` | Minimum ms between write operations (debounce) |
+| `serialize` | `(client: PersistedClient) => string` | `JSON.stringify` | Serializer |
+| `deserialize` | `(str: string) => PersistedClient` | `JSON.parse` | Deserializer |
+
+### AsyncStorage interface
+
+Any object satisfying this shape works:
+
+```typescript
+interface AsyncStorage {
+  getItem(key: string): Promise<string | null | undefined>;
+  setItem(key: string, value: string): Promise<unknown>;
+  removeItem(key: string): Promise<void>;
+}
+```
+
+---
+
+## Usage
+
+### React Native with @react-native-async-storage/async-storage
+
+```typescript
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { QueryClient } from '@headless-form/query-core';
+import { persistQueryClient } from '@headless-form/query-persist-client-core';
+import { createAsyncStoragePersister } from '@headless-form/query-async-storage-persister';
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      gcTime: 1000 * 60 * 60 * 24, // 24h
+    },
+  },
+});
+
+const persister = createAsyncStoragePersister({
+  storage: AsyncStorage,
+  key: 'MY_APP_QUERY_CACHE',
+  throttleTime: 2000,
+});
+
+const [unsubscribe, restorePromise] = await persistQueryClient({
+  queryClient,
+  persister,
+  maxAge: 1000 * 60 * 60 * 24,
+  buster: 'v1',
+  onSuccess: () => console.log('Cache restored'),
+  onError: (err) => console.warn('Cache restore failed:', err),
+});
+
+await restorePromise;
+queryClient.mount();
+```
+
+### With subscribe-only pattern
+
+```typescript
+import { persistQueryClientSubscribe } from '@headless-form/query-persist-client-core';
+
+const unsubscribe = persistQueryClientSubscribe({
+  queryClient,
+  persister,
+  buster: 'v1',
+  onSuccess: () => refetchImportantQueries(),
+});
+
+// Stop persisting
+unsubscribe();
+```
+
+### With IndexedDB via idb-keyval
+
+```typescript
+import { get, set, del } from 'idb-keyval';
+import { createAsyncStoragePersister } from '@headless-form/query-async-storage-persister';
+
+const idbStorage = {
+  getItem: (key: string) => get<string>(key),
+  setItem: (key: string, value: string) => set(key, value),
+  removeItem: (key: string) => del(key),
+};
+
+const persister = createAsyncStoragePersister({ storage: idbStorage });
+```
+
+### With a custom async backend
+
+```typescript
+const apiStorage = {
+  getItem: async (key: string) => {
+    const res = await fetch(`/api/cache/${key}`);
+    return res.ok ? res.text() : null;
+  },
+  setItem: async (key: string, value: string) => {
+    await fetch(`/api/cache/${key}`, {
+      method: 'PUT',
+      body: value,
+      headers: { 'Content-Type': 'text/plain' },
+    });
+  },
+  removeItem: async (key: string) => {
+    await fetch(`/api/cache/${key}`, { method: 'DELETE' });
+  },
+};
+
+const persister = createAsyncStoragePersister({ storage: apiStorage });
+```
+
+---
+
+## asyncThrottle
+
+The underlying throttle utility used internally to rate-limit storage writes. Exported for custom use cases.
+
+```typescript
+import { asyncThrottle } from '@headless-form/query-async-storage-persister';
+
+const throttledSave = asyncThrottle(
+  async (data: unknown) => {
+    await expensiveAsyncWrite(data);
+  },
+  { interval: 2000 }
+);
+
+// Only executes at most once per 2 seconds
+throttledSave(payload);
+throttledSave(payload); // queued, runs after interval
+```
+
+`asyncThrottle` is async-aware — it waits for the previous invocation to complete before scheduling the next, so writes never overlap.
+
+---
+
+## Null-safe storage
+
+Passing `null` or `undefined` as `storage` creates a no-op persister that silently ignores all operations. This is useful for conditional persistence:
+
+```typescript
+const persister = createAsyncStoragePersister({
+  storage: isStorageSupported ? AsyncStorage : null,
+});
+// Works fine in both branches — null just means "don't persist"
+```
+
+---
+
+## Custom serialization
+
+For non-JSON data or when you need to handle special types:
+
+```typescript
+import SuperJSON from 'superjson';
+
+const persister = createAsyncStoragePersister({
+  storage: AsyncStorage,
+  serialize: SuperJSON.stringify,
+  deserialize: SuperJSON.parse,
+});
+// Handles Dates, Maps, Sets, undefined, etc.
+```
+
+---
+
+## License
+
+MIT — identical to TanStack Query Async Storage Persister upstream.

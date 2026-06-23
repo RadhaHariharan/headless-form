@@ -1,0 +1,271 @@
+# Query Persist Client Core
+
+`@headless-form/query-persist-client-core` provides the infrastructure to persist and restore a `QueryClient`'s full cache to any storage backend. Use it to enable offline support, page-reload cache warming, and cross-session continuity.
+
+```bash
+pnpm add @headless-form/query-persist-client-core
+```
+
+---
+
+## Core concepts
+
+| Concept | Description |
+|---------|-------------|
+| **Persister** | An adapter object with `persistClient`, `restoreClient`, and `removeClient` methods |
+| **PersistedClient** | The serialized snapshot: `{ timestamp, buster, clientState: DehydratedState }` |
+| **buster** | A version string — when it changes, the persisted cache is considered invalid and discarded |
+| **maxAge** | Maximum age (ms) of a persisted snapshot before it is discarded on restore |
+
+---
+
+## Persister interface
+
+Any storage adapter must implement this interface:
+
+```typescript
+interface Persister {
+  persistClient(persistedClient: PersistedClient): Promise<void>;
+  restoreClient(): Promise<PersistedClient | undefined>;
+  removeClient(): Promise<void>;
+}
+
+interface PersistedClient {
+  timestamp: number;
+  buster: string;
+  clientState: DehydratedState; // from @headless-form/query-core
+}
+```
+
+You can implement this yourself or use the provided adapters (`createAsyncStoragePersister`, `createSyncStoragePersister`).
+
+---
+
+## persistQueryClient
+
+The lowest-level API — manually control persist/restore/subscribe.
+
+### persistQueryClientRestore
+
+Reads from the persister and hydrates the `QueryClient` if the snapshot is fresh.
+
+```typescript
+import { persistQueryClientRestore } from '@headless-form/query-persist-client-core';
+
+await persistQueryClientRestore({
+  queryClient,
+  persister,
+  maxAge: 1000 * 60 * 60 * 24, // 24 hours (default)
+  buster: process.env.BUILD_ID, // increment to bust old caches
+  dehydrateOptions: {
+    shouldDehydrateQuery: (query) => query.state.status === 'success',
+  },
+});
+```
+
+If the persisted snapshot is expired (older than `maxAge`) or busted (different `buster`), `removeClient()` is called and the cache stays empty.
+
+### persistQueryClientSave
+
+Serializes the current `QueryClient` state and writes it to the persister.
+
+```typescript
+import { persistQueryClientSave } from '@headless-form/query-persist-client-core';
+
+await persistQueryClientSave({
+  queryClient,
+  persister,
+  buster: process.env.BUILD_ID,
+  dehydrateOptions: {
+    shouldDehydrateQuery: (query) => query.state.status === 'success',
+    serializeData: (data) => JSON.stringify(data),
+  },
+});
+```
+
+### persistQueryClientSubscribe
+
+Restores on startup and then saves every time the query cache changes. Returns an `unsubscribe` function.
+
+```typescript
+import { persistQueryClientSubscribe } from '@headless-form/query-persist-client-core';
+
+const unsubscribe = persistQueryClientSubscribe({
+  queryClient,
+  persister,
+  buster: '2024-v1',
+  maxAge: 1000 * 60 * 60 * 24,
+  onSuccess: () => {
+    console.log('Cache restored from storage');
+  },
+  onError: (error) => {
+    console.error('Failed to restore cache:', error);
+  },
+});
+
+// Later
+unsubscribe();
+```
+
+### persistQueryClient (full lifecycle)
+
+Combines restore and subscribe. Returns `[unsubscribe, restorePromise]`.
+
+```typescript
+import { persistQueryClient } from '@headless-form/query-persist-client-core';
+
+const [unsubscribe, restorePromise] = await persistQueryClient({
+  queryClient,
+  persister,
+  maxAge: 1000 * 60 * 60 * 24,
+  buster: process.env.BUILD_ID ?? '',
+  onSuccess: async () => {
+    await refetchCriticalQueries();
+  },
+  onError: async (error) => {
+    console.warn('Restore failed:', error);
+  },
+});
+
+// Wait for restore to complete before rendering
+await restorePromise;
+
+// On teardown
+unsubscribe();
+```
+
+### Options reference
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `queryClient` | `QueryClient` | required | The client to persist |
+| `persister` | `Persister` | required | Storage adapter |
+| `maxAge` | `number` | `86400000` (24h) | Max age (ms) before discarding persisted state |
+| `buster` | `string` | `''` | Version string — change to invalidate old caches |
+| `dehydrateOptions.shouldDehydrateQuery` | `(query) => boolean` | success only | Which queries to include |
+| `dehydrateOptions.shouldDehydrateMutation` | `(mutation) => boolean` | pending only | Which mutations to include |
+| `dehydrateOptions.serializeData` | `(data) => unknown` | — | Transform data before serializing |
+| `onSuccess` | `() => void` | — | Called after successful restore |
+| `onError` | `(error) => void` | — | Called when restore fails |
+
+---
+
+## experimental_createPersister
+
+A query-level persister factory. Instead of persisting the entire client at once, it wraps individual `queryFn`s and reads/writes per-query cache entries. This is useful when you want fine-grained per-query persistence without full-client serialization.
+
+```typescript
+import { experimental_createPersister } from '@headless-form/query-persist-client-core';
+
+const persister = experimental_createPersister({
+  storage: localStorage,
+  maxAge: 1000 * 60 * 60 * 24, // 24 hours
+  buster: 'v2',
+  prefix: 'myapp',
+  serialize: JSON.stringify,
+  deserialize: JSON.parse,
+});
+
+// Use on individual queries
+const observer = new QueryObserver(queryClient, {
+  queryKey: ['posts'],
+  queryFn: fetchPosts,
+  ...persister,  // spreads persisterFn into queryFn wrapper
+});
+```
+
+### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `storage` | `AsyncStorage \| SyncStorage` | required | Storage backend |
+| `maxAge` | `number` | `86400000` | Max age before discarding a stored query |
+| `buster` | `string` | `''` | Cache buster string |
+| `prefix` | `string` | `'rq'` | Storage key prefix |
+| `key` | `string` | — | Override the entire storage key |
+| `serialize` | `(query) => string` | `JSON.stringify` | Serializer |
+| `deserialize` | `(str) => PersistedQuery` | `JSON.parse` | Deserializer |
+
+### Storage interfaces
+
+```typescript
+interface SyncStorage {
+  getItem(key: string): string | null | undefined;
+  setItem(key: string, value: string): unknown;
+  removeItem(key: string): void;
+}
+
+interface AsyncStorage {
+  getItem(key: string): Promise<string | null | undefined>;
+  setItem(key: string, value: string): Promise<unknown>;
+  removeItem(key: string): Promise<void>;
+}
+```
+
+`localStorage` and `sessionStorage` satisfy `SyncStorage`. `AsyncStorage` from React Native satisfies `AsyncStorage`.
+
+---
+
+## Retry strategies
+
+Helper functions for controlling persistence retry behaviour:
+
+```typescript
+import { defaultRetry, defaultRetryDelay } from '@headless-form/query-persist-client-core';
+import type { RetryConfig } from '@headless-form/query-persist-client-core';
+
+// defaultRetry: retries up to 3 times, stops on 4xx errors
+// defaultRetryDelay: exponential backoff capped at 30 seconds
+```
+
+| Export | Description |
+|--------|-------------|
+| `defaultRetry` | Default retry predicate — `3` attempts, aborts on non-retryable errors |
+| `defaultRetryDelay` | Exponential backoff: `Math.min(1000 * 2^n, 30000)` |
+| `RetryConfig` | `{ retries: number; retryDelay: number \| fn }` |
+
+---
+
+## Full example
+
+```typescript
+import { QueryClient } from '@headless-form/query-core';
+import {
+  persistQueryClient,
+  persistQueryClientSubscribe,
+} from '@headless-form/query-persist-client-core';
+import { createSyncStoragePersister } from '@headless-form/query-sync-storage-persister';
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      gcTime: 1000 * 60 * 60 * 24, // 24h — keep data alive for persistence
+    },
+  },
+});
+
+const persister = createSyncStoragePersister({
+  storage: window.localStorage,
+  key: 'MY_APP_CACHE',
+});
+
+// Restore then subscribe
+const [unsubscribe, restorePromise] = await persistQueryClient({
+  queryClient,
+  persister,
+  maxAge: 1000 * 60 * 60 * 24,
+  buster: import.meta.env.VITE_BUILD_HASH ?? '',
+  onSuccess: () => console.log('Cache ready'),
+});
+
+await restorePromise;
+queryClient.mount();
+```
+
+> Set `gcTime` longer than `maxAge` — queries must stay in memory long enough to be serialized.
+
+---
+
+## License
+
+MIT — identical to TanStack Query Persist Client Core upstream.
