@@ -1,0 +1,693 @@
+# RTK Query
+
+RTK Query is a powerful data-fetching and caching solution built into `@headless-form/redux-toolkit`. It eliminates the boilerplate of writing async thunks, reducers, and selectors for server state. It is framework-agnostic and runs on top of Redux.
+
+```bash
+# RTK Query is part of @headless-form/redux-toolkit — no additional install needed
+pnpm add @headless-form/redux-toolkit
+```
+
+---
+
+## Core concepts
+
+| Concept | Description |
+|---------|-------------|
+| **API slice** | Created by `createApi` — defines all endpoints, base URL, and cache configuration |
+| **Endpoint** | A single server operation — either a `query` (read) or a `mutation` (write) |
+| **Cache entry** | State for one endpoint + argument combination, including data, status, and error |
+| **Tag** | A label applied to cache entries; invalidating a tag refetches all matching entries |
+| **Subscription** | A component or listener that holds a cache entry alive |
+
+---
+
+## createApi
+
+The central function. Defines your API — its base URL, all endpoints, and cache behavior.
+
+```typescript
+import { createApi, fetchBaseQuery } from '@headless-form/redux-toolkit/query';
+
+export const postsApi = createApi({
+  reducerPath: 'postsApi',
+  baseQuery: fetchBaseQuery({ baseUrl: '/api' }),
+  tagTypes: ['Post', 'User'],
+  endpoints: (builder) => ({
+    getPosts: builder.query<Post[], void>({
+      query: () => '/posts',
+      providesTags: ['Post'],
+    }),
+    getPost: builder.query<Post, number>({
+      query: (id) => `/posts/${id}`,
+      providesTags: (result, error, id) => [{ type: 'Post', id }],
+    }),
+    createPost: builder.mutation<Post, Partial<Post>>({
+      query: (body) => ({ url: '/posts', method: 'POST', body }),
+      invalidatesTags: ['Post'],
+    }),
+    updatePost: builder.mutation<Post, { id: number } & Partial<Post>>({
+      query: ({ id, ...body }) => ({ url: `/posts/${id}`, method: 'PUT', body }),
+      invalidatesTags: (result, error, { id }) => [{ type: 'Post', id }],
+    }),
+    deletePost: builder.mutation<void, number>({
+      query: (id) => ({ url: `/posts/${id}`, method: 'DELETE' }),
+      invalidatesTags: (result, error, id) => [{ type: 'Post', id }],
+    }),
+  }),
+});
+```
+
+### createApi options
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `reducerPath` | `string` | Key in the Redux state tree (default: `'api'`) |
+| `baseQuery` | `BaseQueryFn` | How to make requests — usually `fetchBaseQuery` |
+| `tagTypes` | `string[]` | Declare all tag types used by endpoints |
+| `endpoints` | `(builder) => Record<string, Endpoint>` | Define all queries and mutations |
+| `keepUnusedDataFor` | `number` | Seconds to keep unused cache entries (default: `60`) |
+| `refetchOnMountOrArgChange` | `boolean \| number` | Refetch when a component mounts or argument changes |
+| `refetchOnFocus` | `boolean` | Refetch when the window regains focus |
+| `refetchOnReconnect` | `boolean` | Refetch when the network reconnects |
+| `extractRehydrationInfo` | `fn` | SSR rehydration support |
+
+### Register the API with the store
+
+```typescript
+import { configureStore } from '@headless-form/redux-toolkit';
+import { postsApi } from './postsApi';
+import { setupListeners } from '@headless-form/redux-toolkit/query';
+
+const store = configureStore({
+  reducer: {
+    [postsApi.reducerPath]: postsApi.reducer,
+  },
+  middleware: (getDefault) =>
+    getDefault().concat(postsApi.middleware),
+});
+
+// Enable refetchOnFocus / refetchOnReconnect
+setupListeners(store.dispatch);
+```
+
+---
+
+## fetchBaseQuery
+
+A pre-built `BaseQueryFn` that wraps `fetch`.
+
+```typescript
+import { fetchBaseQuery } from '@headless-form/redux-toolkit/query';
+
+const baseQuery = fetchBaseQuery({
+  baseUrl: 'https://api.example.com',
+  prepareHeaders: (headers, { getState }) => {
+    const token = (getState() as RootState).auth.token;
+    if (token) headers.set('Authorization', `Bearer ${token}`);
+    return headers;
+  },
+  credentials: 'include',
+  timeout: 10000,
+});
+```
+
+### fetchBaseQuery options
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `baseUrl` | `string` | Prepended to all relative URLs |
+| `prepareHeaders` | `(headers, api) => Headers` | Attach auth tokens, custom headers |
+| `fetchFn` | `typeof fetch` | Override the fetch implementation |
+| `paramsSerializer` | `(params) => string` | Serialize query params |
+| `credentials` | `RequestCredentials` | Cookie handling |
+| `timeout` | `number` | Request timeout in ms |
+| `responseHandler` | `'json' \| 'text' \| 'content-type' \| fn` | Response parsing (default: `'json'`) |
+| `validateStatus` | `(response, body) => boolean` | Consider status codes as error |
+
+### Request shapes
+
+The `query` field of an endpoint can return a `string` (URL) or a `FetchArgs` object:
+
+```typescript
+// Simple string
+query: (id) => `/posts/${id}`
+
+// Object form
+query: ({ id, body }) => ({
+  url: `/posts/${id}`,
+  method: 'PUT',
+  body,           // auto-serialized to JSON
+  params: { v: 2 },
+  headers: { 'X-Custom': 'value' },
+  responseHandler: 'text',
+  validateStatus: (response, result) =>
+    response.status === 200 && !result.isError,
+})
+```
+
+---
+
+## Endpoint types
+
+### Query endpoints
+
+Read-only requests. Results are cached and deduplicated across subscribers.
+
+```typescript
+getPosts: builder.query<Post[], { page: number; limit: number }>({
+  query: ({ page, limit }) => ({
+    url: '/posts',
+    params: { page, limit },
+  }),
+  // Transform the server response before caching
+  transformResponse: (response: { data: Post[]; total: number }) => response.data,
+  // Transform error before storing
+  transformErrorResponse: (response: { status: number; data: unknown }) => ({
+    status: response.status,
+    message: String(response.data),
+  }),
+  // Cache tags this query provides
+  providesTags: (result) =>
+    result
+      ? [...result.map(({ id }) => ({ type: 'Post' as const, id })), 'Post']
+      : ['Post'],
+  // Override global keepUnusedDataFor
+  keepUnusedDataFor: 300,
+  // How often to re-fetch while subscribed (seconds)
+  pollingInterval: 30,
+  // Skip this query until condition is met
+  skip: false,
+})
+```
+
+### Mutation endpoints
+
+Write operations. Dispatched manually. Return a promise.
+
+```typescript
+createPost: builder.mutation<Post, Partial<Post>>({
+  query: (body) => ({
+    url: '/posts',
+    method: 'POST',
+    body,
+  }),
+  invalidatesTags: ['Post'],
+  // Run async side-effects tied to the mutation lifecycle
+  onQueryStarted: async (arg, { dispatch, queryFulfilled, getState }) => {
+    try {
+      const { data: newPost } = await queryFulfilled;
+      // Do something with the result
+    } catch {
+      // Handle error
+    }
+  },
+})
+```
+
+### Streaming / infinite queries
+
+```typescript
+streamUpdates: builder.query<Update[], void>({
+  query: () => '/updates/stream',
+  async onCacheEntryAdded(arg, { updateCachedData, cacheDataLoaded, cacheEntryRemoved }) {
+    const ws = new WebSocket('wss://api.example.com/updates');
+    try {
+      await cacheDataLoaded;
+      ws.onmessage = (event) => {
+        updateCachedData((draft) => {
+          draft.push(JSON.parse(event.data));
+        });
+      };
+    } catch {
+      // no-op
+    }
+    await cacheEntryRemoved;
+    ws.close();
+  },
+})
+```
+
+---
+
+## Tags — cache invalidation
+
+Tags link mutations to queries. When a mutation invalidates a tag, all queries providing that tag refetch.
+
+### providesTags
+
+Attaches tags to a query's cache entry:
+
+```typescript
+// Static tag
+providesTags: ['Post']
+
+// Dynamic tags (include per-entity tags)
+providesTags: (result, error, id) => [{ type: 'Post', id }]
+
+// Full pattern — list + individual entities
+providesTags: (result) =>
+  result
+    ? [
+        ...result.map(({ id }) => ({ type: 'Post' as const, id })),
+        { type: 'Post', id: 'LIST' },
+      ]
+    : [{ type: 'Post', id: 'LIST' }]
+```
+
+### invalidatesTags
+
+Tells a mutation which tags to invalidate:
+
+```typescript
+// Invalidate all Post entries
+invalidatesTags: ['Post']
+
+// Invalidate a specific entity — only that query refetches
+invalidatesTags: (result, error, id) => [{ type: 'Post', id }]
+
+// Invalidate the list but not individual entries
+invalidatesTags: [{ type: 'Post', id: 'LIST' }]
+```
+
+---
+
+## Using endpoints imperatively
+
+Access endpoints directly from the API object — useful outside React or in listeners.
+
+```typescript
+// Initiate a query and get the result
+const result = await store.dispatch(
+  postsApi.endpoints.getPosts.initiate()
+);
+
+// Prefetch (warm the cache before navigating)
+store.dispatch(
+  postsApi.util.prefetch('getPosts', undefined, { force: false })
+);
+
+// Read cached data synchronously
+const state = store.getState();
+const posts = postsApi.endpoints.getPosts.select()(state);
+
+// Manually update cache data (optimistic updates, seeding)
+store.dispatch(
+  postsApi.util.updateQueryData('getPost', 42, (draft) => {
+    draft.title = 'Updated';
+  })
+);
+
+// Upsert query cache entries
+store.dispatch(
+  postsApi.util.upsertQueryData('getPost', 42, newPost)
+);
+
+// Patch cache data
+store.dispatch(
+  postsApi.util.patchQueryData('getPost', 42, [
+    { op: 'replace', path: '/title', value: 'New title' },
+  ])
+);
+
+// Invalidate tags programmatically
+store.dispatch(postsApi.util.invalidateTags(['Post']));
+
+// Reset everything (clear all cache entries)
+store.dispatch(postsApi.util.resetApiState());
+```
+
+---
+
+## onQueryStarted — optimistic updates
+
+Use `onQueryStarted` on a mutation to optimistically update the cache before the server responds, then roll back on error:
+
+```typescript
+updatePost: builder.mutation<Post, { id: number; title: string }>({
+  query: ({ id, title }) => ({
+    url: `/posts/${id}`,
+    method: 'PATCH',
+    body: { title },
+  }),
+  async onQueryStarted({ id, title }, { dispatch, queryFulfilled }) {
+    // Optimistically update
+    const patchResult = dispatch(
+      postsApi.util.updateQueryData('getPost', id, (draft) => {
+        draft.title = title;
+      })
+    );
+    try {
+      await queryFulfilled;
+    } catch {
+      // Roll back on error
+      patchResult.undo();
+    }
+  },
+  invalidatesTags: (result, error, { id }) => [{ type: 'Post', id }],
+})
+```
+
+---
+
+## onCacheEntryAdded — cache lifecycle side effects
+
+Subscribe to cache lifecycle events — useful for WebSockets, SSE, or other long-lived connections:
+
+```typescript
+getMessages: builder.query<Message[], string>({
+  query: (roomId) => `/rooms/${roomId}/messages`,
+  async onCacheEntryAdded(
+    roomId,
+    { updateCachedData, cacheDataLoaded, cacheEntryRemoved, dispatch }
+  ) {
+    const eventSource = new EventSource(`/api/rooms/${roomId}/events`);
+
+    try {
+      // Wait until the initial query resolves before listening
+      await cacheDataLoaded;
+
+      eventSource.onmessage = (event) => {
+        const message: Message = JSON.parse(event.data);
+        updateCachedData((draft) => {
+          draft.push(message);
+        });
+      };
+    } catch {
+      // cacheDataLoaded rejected — query failed, don't connect
+    }
+
+    // Wait until the cache entry is removed (no more subscribers)
+    await cacheEntryRemoved;
+    eventSource.close();
+  },
+})
+```
+
+| API | Description |
+|-----|-------------|
+| `cacheDataLoaded` | Promise that resolves with the first successful query result |
+| `cacheEntryRemoved` | Promise that resolves when the cache entry is removed |
+| `updateCachedData(recipe)` | Immer-based updater for the cached data |
+| `getCacheEntry()` | Returns the current cache entry |
+| `requestId` | Unique ID for this cache subscription |
+| `extra` | Extra argument from thunk middleware |
+| `dispatch` / `getState` | Store access |
+
+---
+
+## Polling
+
+Enable automatic refetching on an interval:
+
+```typescript
+// On the endpoint definition
+getSystemStatus: builder.query<Status, void>({
+  query: () => '/status',
+  pollingInterval: 15000, // every 15 seconds
+})
+
+// Or dynamically when using the endpoint
+// (React example)
+const { data } = useGetSystemStatusQuery(undefined, {
+  pollingInterval: 5000,
+  skipPollingIfUnfocused: true,
+});
+```
+
+---
+
+## Retry
+
+Automatically retry failed requests with exponential backoff.
+
+```typescript
+import { retry, createApi, fetchBaseQuery } from '@headless-form/redux-toolkit/query';
+
+const staggeredBaseQuery = retry(
+  fetchBaseQuery({ baseUrl: '/api' }),
+  { maxRetries: 5 }
+);
+
+const api = createApi({
+  baseQuery: staggeredBaseQuery,
+  endpoints: (builder) => ({
+    getPosts: builder.query<Post[], void>({
+      query: () => '/posts',
+      // Disable retries for this endpoint
+      extraOptions: { maxRetries: 0 },
+    }),
+  }),
+});
+
+// Bail out of retries from inside the base query
+const customBaseQuery = retry(async (args, api, extraOptions) => {
+  const result = await fetchBaseQuery({ baseUrl: '/api' })(args, api, extraOptions);
+  if (result.error?.status === 401) {
+    retry.fail(result.error); // no retry for auth errors
+  }
+  return result;
+});
+```
+
+---
+
+## fakeBaseQuery
+
+A base query that always returns an error. Use it when all your endpoints use `queryFn` (no real HTTP requests).
+
+```typescript
+import { createApi, fakeBaseQuery } from '@headless-form/redux-toolkit/query';
+
+const api = createApi({
+  baseQuery: fakeBaseQuery(),
+  endpoints: (builder) => ({
+    getUser: builder.query<User, number>({
+      async queryFn(userId) {
+        try {
+          const user = await myCustomSDK.getUser(userId);
+          return { data: user };
+        } catch (error) {
+          return { error: { status: 'CUSTOM_ERROR', error: String(error) } };
+        }
+      },
+    }),
+  }),
+});
+```
+
+---
+
+## queryFn — custom fetch logic
+
+Override the base query for individual endpoints:
+
+```typescript
+endpoints: (builder) => ({
+  uploadFile: builder.mutation<{ url: string }, File>({
+    async queryFn(file, _queryApi, _extraOptions, baseQuery) {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const result = await baseQuery({
+        url: '/upload',
+        method: 'POST',
+        body: formData,
+        formData: true,
+      });
+
+      if (result.error) return { error: result.error };
+      return { data: result.data as { url: string } };
+    },
+  }),
+})
+```
+
+---
+
+## setupListeners
+
+Enables `refetchOnFocus` and `refetchOnReconnect` by registering window event listeners.
+
+```typescript
+import { setupListeners } from '@headless-form/redux-toolkit/query';
+
+// Standard setup
+const unsubscribe = setupListeners(store.dispatch);
+
+// Custom dispatch — override event listeners
+const unsubscribe = setupListeners(store.dispatch, (dispatch, actions) => {
+  // actions.onFocus, actions.onFocusLost, actions.onOnline, actions.onOffline
+  const onFocus = () => dispatch(actions.onFocus());
+  window.addEventListener('visibilitychange', onFocus);
+  return () => window.removeEventListener('visibilitychange', onFocus);
+});
+```
+
+---
+
+## API slice utilities
+
+| Utility | Description |
+|---------|-------------|
+| `api.util.updateQueryData(endpointName, arg, recipe)` | Immer-style cache update |
+| `api.util.upsertQueryData(endpointName, arg, data)` | Replace cached data directly |
+| `api.util.patchQueryData(endpointName, arg, patches)` | Apply JSON Patch operations |
+| `api.util.prefetch(endpointName, arg, options)` | Warm cache in advance |
+| `api.util.invalidateTags(tags)` | Invalidate by tag list |
+| `api.util.resetApiState()` | Clear all cache entries and subscriptions |
+| `api.util.selectInvalidatedBy(state, tags)` | Get all cache entries invalidated by tags |
+| `api.util.getRunningQueriesThunk()` | Get all in-flight queries (SSR) |
+| `api.util.getRunningMutationsThunk()` | Get all in-flight mutations (SSR) |
+| `api.endpoints[name].select(arg)` | Memoized selector for a query result |
+| `api.endpoints[name].initiate(arg, opts)` | Dispatch a query directly |
+| `api.injectEndpoints({ endpoints, overrideExisting })` | Add endpoints to an existing API |
+
+---
+
+## Code splitting — injectEndpoints
+
+Add endpoints to an existing API from a separate bundle:
+
+```typescript
+// Base API (loaded eagerly)
+// baseApi.ts
+export const baseApi = createApi({
+  baseQuery: fetchBaseQuery({ baseUrl: '/api' }),
+  tagTypes: ['Post', 'User'],
+  endpoints: () => ({}),
+});
+
+// Feature slice (lazy-loaded)
+// postsApi.ts
+const postsApi = baseApi.injectEndpoints({
+  endpoints: (builder) => ({
+    getPosts: builder.query<Post[], void>({
+      query: () => '/posts',
+      providesTags: ['Post'],
+    }),
+  }),
+  overrideExisting: false,
+});
+
+export const { useGetPostsQuery } = postsApi;
+```
+
+---
+
+## TypeScript — generated endpoint types
+
+`createApi` infers all types from the endpoint definitions. Use the generated types for full end-to-end safety:
+
+```typescript
+// Type of the query result selector
+import type { TypedUseQueryStateResult } from '@headless-form/redux-toolkit/query';
+
+type GetPostResult = TypedUseQueryStateResult<
+  typeof postsApi.endpoints.getPost,
+  number,
+  typeof postsApi
+>;
+
+// Infer the arg type for a mutation
+import type { MutationDefinition } from '@headless-form/redux-toolkit/query';
+import type { BaseQueryFn } from '@headless-form/redux-toolkit/query';
+```
+
+---
+
+## Error handling
+
+`fetchBaseQuery` returns errors in this shape:
+
+```typescript
+// HTTP error (non-2xx response)
+{
+  status: 404,
+  data: { message: 'Not found' }
+}
+
+// Parsing error
+{
+  status: 'PARSING_ERROR',
+  originalStatus: 200,
+  data: '<html>...',
+  error: 'SyntaxError: ...'
+}
+
+// Fetch error (network failure)
+{
+  status: 'FETCH_ERROR',
+  error: 'TypeError: Failed to fetch'
+}
+
+// Custom error (from validateStatus returning false)
+{
+  status: 'CUSTOM_ERROR',
+  error: 'some message',
+  data: { ... }
+}
+```
+
+### Global error handling via baseQuery wrapper
+
+```typescript
+import { fetchBaseQuery } from '@headless-form/redux-toolkit/query';
+import type { BaseQueryFn, FetchArgs, FetchBaseQueryError } from '@headless-form/redux-toolkit/query';
+
+const baseQuery = fetchBaseQuery({ baseUrl: '/api' });
+
+const baseQueryWithAuth: BaseQueryFn<string | FetchArgs, unknown, FetchBaseQueryError> =
+  async (args, api, extraOptions) => {
+    let result = await baseQuery(args, api, extraOptions);
+
+    if (result.error?.status === 401) {
+      // Try to refresh the token
+      const refreshResult = await baseQuery('/auth/refresh', api, extraOptions);
+      if (refreshResult.data) {
+        api.dispatch(tokenRefreshed(refreshResult.data as Token));
+        // Retry the original request
+        result = await baseQuery(args, api, extraOptions);
+      } else {
+        api.dispatch(loggedOut());
+      }
+    }
+
+    return result;
+  };
+
+const api = createApi({
+  baseQuery: baseQueryWithAuth,
+  endpoints: (builder) => ({ /* ... */ }),
+});
+```
+
+---
+
+## SSR — server-side rendering
+
+```typescript
+// Server
+const store = configureStore({ /* ... */ });
+
+// Trigger all queries
+store.dispatch(postsApi.endpoints.getPosts.initiate());
+
+// Wait for all in-flight queries to finish
+await Promise.all(store.dispatch(postsApi.util.getRunningQueriesThunk()));
+
+// Extract and send state to client
+const preloadedState = store.getState();
+const html = renderToString(<App store={store} />);
+
+// Client
+const clientStore = configureStore({
+  reducer: { [postsApi.reducerPath]: postsApi.reducer },
+  preloadedState,
+});
+```
+
+---
+
+## License
+
+MIT — identical to Redux Toolkit v2 upstream.
