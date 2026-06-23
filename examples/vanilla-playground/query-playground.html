@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Query Playground · Headless Form</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0d1117;
+      color: #e6edf3;
+      min-height: 100vh;
+      padding-bottom: 360px;
+    }
+    nav {
+      background: #161b22;
+      border-bottom: 1px solid #30363d;
+      padding: 14px 24px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    nav h1 { font-size: 16px; font-weight: 700; color: #58a6ff; flex: 1; }
+    nav a {
+      color: #8b949e; text-decoration: none; font-size: 13px;
+      padding: 5px 12px; border-radius: 6px; border: 1px solid transparent;
+    }
+    nav a:hover, nav a.active { background: #21262d; border-color: #30363d; color: #e6edf3; }
+    main { max-width: 900px; margin: 0 auto; padding: 28px 24px; }
+    h2 { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+    .subtitle { color: #8b949e; font-size: 13px; margin-bottom: 24px; }
+    .demos { display: flex; flex-direction: column; gap: 20px; }
+    .demo {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    .demo-header {
+      padding: 12px 16px;
+      border-bottom: 1px solid #30363d;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .demo-header h3 { font-size: 14px; font-weight: 600; flex: 1; }
+    .demo-body { padding: 16px; display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+    .btn {
+      background: #21262d; border: 1px solid #30363d; color: #e6edf3;
+      border-radius: 6px; padding: 7px 14px; cursor: pointer;
+      font-size: 13px; transition: all 0.15s; font-family: inherit;
+    }
+    .btn:hover { border-color: #58a6ff; color: #58a6ff; }
+    .btn.primary { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+    .btn.primary:hover { background: #388bfd; border-color: #388bfd; }
+    .btn.danger { }
+    .btn.danger:hover { border-color: #f85149; color: #f85149; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .output {
+      flex: 1;
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 10px 12px;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 12px;
+      min-height: 60px;
+      white-space: pre-wrap;
+      color: #e6edf3;
+      line-height: 1.6;
+    }
+    .status-fetching { color: #a5d6ff; }
+    .status-success  { color: #3fb950; }
+    .status-error    { color: #f85149; }
+    .status-pending  { color: #8b949e; }
+    .controls { display: flex; gap: 8px; flex-wrap: wrap; }
+    .tag {
+      display: inline-block; font-size: 11px; font-family: 'SF Mono', monospace;
+      background: #21262d; border: 1px solid #30363d; border-radius: 4px;
+      padding: 1px 6px; color: #8b949e;
+    }
+    label { font-size: 13px; color: #8b949e; }
+    input[type=range] { accent-color: #58a6ff; }
+    .row { display: flex; align-items: center; gap: 8px; }
+    code { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; color: #a5d6ff; background: #0d1117; padding: 1px 5px; border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <nav>
+    <h1>⚡ Query Playground</h1>
+    <a href="/">Home</a>
+    <a href="/query-playground.html" class="active">Query</a>
+    <a href="/form-playground.html">Form</a>
+  </nav>
+
+  <main>
+    <h2>@headless-form/query-core</h2>
+    <p class="subtitle">Framework-agnostic async state management — open the devtools panel (bottom of screen) to inspect the cache live.</p>
+
+    <div class="demos">
+
+      <!-- Demo 1: Basic fetch -->
+      <div class="demo" id="demo-basic">
+        <div class="demo-header">
+          <h3>1 · Basic query — fetch &amp; cache</h3>
+          <span class="tag">QueryClient.fetchQuery</span>
+        </div>
+        <div class="demo-body">
+          <div class="controls">
+            <button class="btn primary" id="btn-fetch-user">Fetch user #1</button>
+            <button class="btn" id="btn-fetch-user2">Fetch user #2</button>
+            <button class="btn" id="btn-invalidate">Invalidate all</button>
+            <button class="btn danger" id="btn-clear">Clear cache</button>
+          </div>
+          <div class="output" id="out-basic">Click a button to fetch…</div>
+        </div>
+      </div>
+
+      <!-- Demo 2: Stale / refetch -->
+      <div class="demo" id="demo-stale">
+        <div class="demo-header">
+          <h3>2 · Staleness &amp; background refetch</h3>
+          <span class="tag">staleTime</span>
+        </div>
+        <div class="demo-body">
+          <div class="controls">
+            <div class="row">
+              <label>staleTime: <span id="stale-val">3</span>s</label>
+              <input type="range" min="1" max="15" value="3" id="stale-slider" />
+            </div>
+            <button class="btn primary" id="btn-stale-fetch">Fetch + observe</button>
+            <button class="btn" id="btn-stale-refetch">Refetch now</button>
+          </div>
+          <div class="output" id="out-stale">Set a stale time then fetch…</div>
+        </div>
+      </div>
+
+      <!-- Demo 3: Parallel queries -->
+      <div class="demo" id="demo-parallel">
+        <div class="demo-header">
+          <h3>3 · Parallel queries</h3>
+          <span class="tag">Promise.all</span>
+        </div>
+        <div class="demo-body">
+          <div class="controls">
+            <button class="btn primary" id="btn-parallel">Fetch 3 in parallel</button>
+          </div>
+          <div class="output" id="out-parallel">Click to run parallel fetches…</div>
+        </div>
+      </div>
+
+      <!-- Demo 4: Mutation -->
+      <div class="demo" id="demo-mutation">
+        <div class="demo-header">
+          <h3>4 · Mutation + optimistic invalidation</h3>
+          <span class="tag">MutationObserver</span>
+        </div>
+        <div class="demo-body">
+          <div class="controls">
+            <button class="btn primary" id="btn-mutate">Create post</button>
+            <button class="btn" id="btn-mutate-fail">Create post (fail)</button>
+          </div>
+          <div class="output" id="out-mutation">Click to run a mutation…</div>
+        </div>
+      </div>
+
+      <!-- Demo 5: Retry on error -->
+      <div class="demo" id="demo-retry">
+        <div class="demo-header">
+          <h3>5 · Error + retry</h3>
+          <span class="tag">retry · retryDelay</span>
+        </div>
+        <div class="demo-body">
+          <div class="controls">
+            <button class="btn primary" id="btn-retry">Fetch (will fail 2×, then succeed)</button>
+          </div>
+          <div class="output" id="out-retry">Click to see retry in action…</div>
+        </div>
+      </div>
+
+    </div>
+  </main>
+
+  <script type="module">
+    import { QueryClient, QueryCache, MutationObserver } from '@headless-form/query-core'
+    import { QueryDevtools } from '@headless-form/query-devtools'
+
+    // ── Setup ─────────────────────────────────────────────────────────────────
+    const client = new QueryClient({
+      queryCache: new QueryCache(),
+      defaultOptions: { queries: { staleTime: 3000, retry: false } },
+    })
+    client.mount()
+
+    new QueryDevtools({ client, initialOpen: true })
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+    const out = id => document.getElementById(id)
+    const set = (id, html) => { out(id).innerHTML = html }
+    const line = (cls, text) => `<span class="${cls}">${text}</span>\n`
+
+    async function fakeUser(id, delay = 600) {
+      await new Promise(r => setTimeout(r, delay))
+      return { id, name: ['Alice', 'Bob', 'Carol', 'Dave'][id - 1] ?? `User ${id}`, ts: new Date().toISOString() }
+    }
+
+    // ── Demo 1: Basic fetch ───────────────────────────────────────────────────
+    async function fetchUser(id) {
+      set('out-basic', line('status-fetching', `⟳ Fetching user ${id}…`))
+      const t0 = Date.now()
+      const data = await client.fetchQuery({
+        queryKey: ['users', id],
+        queryFn: () => fakeUser(id),
+        staleTime: 5000,
+      })
+      const fromCache = Date.now() - t0 < 10
+      set('out-basic',
+        line('status-success', `✓ user #${id}: ${data.name}`) +
+        line(fromCache ? 'status-fetching' : 'status-pending', fromCache ? '(from cache — instant)' : `(network — ${Date.now() - t0}ms)`) +
+        line('', `ts: ${data.ts}`)
+      )
+    }
+
+    document.getElementById('btn-fetch-user').onclick  = () => fetchUser(1)
+    document.getElementById('btn-fetch-user2').onclick = () => fetchUser(2)
+    document.getElementById('btn-invalidate').onclick  = async () => {
+      await client.invalidateQueries()
+      set('out-basic', line('status-fetching', '⟳ All queries invalidated — they will refetch on next access'))
+    }
+    document.getElementById('btn-clear').onclick = () => {
+      client.clear()
+      set('out-basic', line('status-pending', 'Cache cleared'))
+    }
+
+    // ── Demo 2: Stale ─────────────────────────────────────────────────────────
+    let staleMs = 3000
+    const slider  = document.getElementById('stale-slider')
+    const staleVal = document.getElementById('stale-val')
+    slider.oninput = e => { staleMs = Number(e.target.value) * 1000; staleVal.textContent = e.target.value }
+
+    let staleTick = null
+    async function staleDemo() {
+      clearInterval(staleTick)
+      const key = ['stale-demo']
+      const fetchFn = () => fakeUser(3, 400)
+      set('out-stale', line('status-fetching', '⟳ Fetching…'))
+      await client.fetchQuery({ queryKey: key, queryFn: fetchFn, staleTime: staleMs })
+      let counter = 0
+      staleTick = setInterval(() => {
+        const q = client.getQueryCache().find({ queryKey: key, exact: true })
+        const s = q?.isStale()
+        counter++
+        set('out-stale',
+          line('status-success', `✓ data: ${JSON.stringify(q?.state.data)}`) +
+          line(s ? 'status-fetching' : 'status-success', `stale: ${s}   (${counter}s elapsed)`) +
+          line('', `staleTime: ${staleMs / 1000}s   observers: ${q?.getObservers().length ?? 0}`)
+        )
+      }, 1000)
+    }
+
+    document.getElementById('btn-stale-fetch').onclick = staleDemo
+    document.getElementById('btn-stale-refetch').onclick = async () => {
+      await client.refetchQueries({ queryKey: ['stale-demo'], exact: true })
+      set('out-stale', prev => prev + '\n' + line('status-fetching', '⟳ Refetched'))
+    }
+
+    // ── Demo 3: Parallel ──────────────────────────────────────────────────────
+    document.getElementById('btn-parallel').onclick = async () => {
+      set('out-parallel', line('status-fetching', '⟳ Fetching users 1, 2, 3 in parallel…'))
+      const t0 = Date.now()
+      const [u1, u2, u3] = await Promise.all([
+        client.fetchQuery({ queryKey: ['users', 1], queryFn: () => fakeUser(1, 700) }),
+        client.fetchQuery({ queryKey: ['users', 2], queryFn: () => fakeUser(2, 400) }),
+        client.fetchQuery({ queryKey: ['users', 3], queryFn: () => fakeUser(3, 550) }),
+      ])
+      set('out-parallel',
+        line('status-success', `✓ ${u1.name}, ${u2.name}, ${u3.name}`) +
+        line('status-pending', `Total time: ${Date.now() - t0}ms (sequential would be ~1650ms)`)
+      )
+    }
+
+    // ── Demo 4: Mutation ──────────────────────────────────────────────────────
+    async function runMutation(shouldFail) {
+      const obs = new MutationObserver(client, {
+        mutationFn: async (variables) => {
+          await new Promise(r => setTimeout(r, 600))
+          if (shouldFail) throw new Error('Server error 500')
+          return { id: Math.floor(Math.random() * 1000), ...variables, createdAt: new Date().toISOString() }
+        },
+        onSuccess: async () => {
+          await client.invalidateQueries({ queryKey: ['posts'] })
+        },
+      })
+
+      set('out-mutation', line('status-fetching', '⟳ Mutating…'))
+      try {
+        const result = await obs.mutate({ title: 'Hello world', body: 'My first post' })
+        set('out-mutation',
+          line('status-success', '✓ Post created!') +
+          line('', JSON.stringify(result, null, 2))
+        )
+      } catch (e) {
+        set('out-mutation', line('status-error', `✗ ${e.message}`))
+      }
+    }
+
+    document.getElementById('btn-mutate').onclick      = () => runMutation(false)
+    document.getElementById('btn-mutate-fail').onclick = () => runMutation(true)
+
+    // ── Demo 5: Retry ─────────────────────────────────────────────────────────
+    let retryAttempts = 0
+    document.getElementById('btn-retry').onclick = async () => {
+      retryAttempts = 0
+      const key = ['retry-demo', Date.now()]
+      set('out-retry', line('status-fetching', '⟳ Fetching (will fail twice)…'))
+
+      const update = (attempt, status, msg) => {
+        let html = ''
+        for (let i = 1; i <= attempt; i++) {
+          html += line(i <= 2 ? 'status-error' : 'status-success', i <= 2 ? `✗ Attempt ${i} failed` : `✓ Attempt ${i} succeeded`)
+        }
+        html += line('status-fetching', msg)
+        set('out-retry', html)
+      }
+
+      try {
+        const data = await client.fetchQuery({
+          queryKey: key,
+          retry: 2,
+          retryDelay: 800,
+          queryFn: async () => {
+            retryAttempts++
+            update(retryAttempts, 'pending', retryAttempts <= 2 ? 'retrying in 800ms…' : '')
+            if (retryAttempts < 3) throw new Error(`Simulated failure #${retryAttempts}`)
+            return { value: '🎉 Success after retries!', attempts: retryAttempts }
+          },
+        })
+        let html = ''
+        for (let i = 1; i <= retryAttempts; i++) {
+          html += line(i < retryAttempts ? 'status-error' : 'status-success',
+            i < retryAttempts ? `✗ Attempt ${i} failed` : `✓ Attempt ${i} succeeded`)
+        }
+        html += line('', JSON.stringify(data))
+        set('out-retry', html)
+      } catch (e) {
+        set('out-retry', out('out-retry').innerHTML + line('status-error', `✗ Final error: ${e.message}`))
+      }
+    }
+  </script>
+</body>
+</html>

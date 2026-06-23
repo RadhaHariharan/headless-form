@@ -18,6 +18,12 @@
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--filter", "@headless-form/example-react", "dev"],
       "port": 5175
+    },
+    {
+      "name": "playground",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@headless-form/vanilla-playground", "dev"],
+      "port": 5177
     }
   ]
 }

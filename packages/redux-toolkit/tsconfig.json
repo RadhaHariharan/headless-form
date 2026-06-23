@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    "noUncheckedIndexedAccess": false,
+    "noImplicitReturns": false,
+    "skipLibCheck": true,
+    "exactOptionalPropertyTypes": false,
+    "noEmitOnError": false,
+    "types": ["node"]
+  },
+  "include": ["src"]
+}

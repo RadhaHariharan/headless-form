@@ -1,0 +1,35 @@
+{
+  "name": "@headless-form/redux-toolkit",
+  "version": "2.3.0",
+  "description": "Redux Toolkit — ported as @headless-form/redux-toolkit",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch"
+  },
+  "dependencies": {
+    "@headless-form/redux": "workspace:*",
+    "@standard-schema/spec": "^1.0.0",
+    "@standard-schema/utils": "^0.3.0",
+    "immer": "^11.0.0",
+    "reselect": "^5.1.0",
+    "redux-thunk": "^3.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.0.0"
+  },
+  "sideEffects": false
+}

@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Form Playground · Headless Form</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0d1117;
+      color: #e6edf3;
+      min-height: 100vh;
+      padding-bottom: 80px;
+    }
+    nav {
+      background: #161b22;
+      border-bottom: 1px solid #30363d;
+      padding: 14px 24px;
+      display: flex; align-items: center; gap: 16px;
+    }
+    nav h1 { font-size: 16px; font-weight: 700; color: #7ee787; flex: 1; }
+    nav a {
+      color: #8b949e; text-decoration: none; font-size: 13px;
+      padding: 5px 12px; border-radius: 6px; border: 1px solid transparent;
+    }
+    nav a:hover, nav a.active { background: #21262d; border-color: #30363d; color: #e6edf3; }
+
+    main { max-width: 960px; margin: 0 auto; padding: 28px 24px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    @media (max-width: 700px) { main { grid-template-columns: 1fr; } }
+
+    h2 { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+    .subtitle { color: #8b949e; font-size: 13px; margin-bottom: 0; grid-column: 1 / -1; }
+
+    .card {
+      background: #161b22; border: 1px solid #30363d;
+      border-radius: 10px; overflow: hidden;
+    }
+    .card-header {
+      padding: 12px 16px; border-bottom: 1px solid #30363d;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .card-header h3 { font-size: 14px; font-weight: 600; flex: 1; }
+    .tag { font-size: 11px; font-family: monospace; background: #21262d; border: 1px solid #30363d; border-radius: 4px; padding: 1px 6px; color: #8b949e; }
+    .card-body { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+
+    /* Form elements */
+    .field { display: flex; flex-direction: column; gap: 4px; }
+    label { font-size: 12px; color: #8b949e; font-weight: 500; }
+    input, select, textarea {
+      background: #0d1117; border: 1px solid #30363d; color: #e6edf3;
+      border-radius: 6px; padding: 7px 10px; font-size: 13px; font-family: inherit;
+      outline: none; width: 100%; transition: border-color 0.15s;
+    }
+    input:focus, select:focus, textarea:focus { border-color: #58a6ff; }
+    input.error, select.error, textarea.error { border-color: #f85149; }
+    .error-msg { font-size: 11px; color: #f85149; }
+    .hint { font-size: 11px; color: #8b949e; }
+
+    .btn {
+      background: #21262d; border: 1px solid #30363d; color: #e6edf3;
+      border-radius: 6px; padding: 7px 14px; cursor: pointer;
+      font-size: 13px; font-family: inherit; transition: all 0.15s;
+    }
+    .btn:hover { border-color: #7ee787; color: #7ee787; }
+    .btn.primary { background: #238636; border-color: #2ea043; color: #fff; }
+    .btn.primary:hover { background: #2ea043; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-row { display: flex; gap: 8px; }
+
+    .status-bar {
+      background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
+      padding: 8px 10px; font-family: monospace; font-size: 11px; line-height: 1.7;
+    }
+    .ok   { color: #3fb950; }
+    .err  { color: #f85149; }
+    .warn { color: #d29922; }
+    .dim  { color: #8b949e; }
+
+    .submit-result {
+      background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
+      padding: 10px; font-family: monospace; font-size: 11px;
+      white-space: pre-wrap; color: #e6edf3; min-height: 40px;
+    }
+    .checkbox-row { display: flex; align-items: center; gap: 8px; }
+    .checkbox-row input { width: auto; }
+
+    .array-item {
+      display: flex; align-items: center; gap: 6px;
+    }
+    .array-item input { flex: 1; }
+    .btn-icon {
+      background: #21262d; border: 1px solid #30363d; color: #8b949e;
+      border-radius: 4px; padding: 4px 8px; cursor: pointer; font-size: 14px; line-height: 1;
+    }
+    .btn-icon:hover { border-color: #f85149; color: #f85149; }
+  </style>
+</head>
+<body>
+  <nav>
+    <h1>🗒 Form Playground</h1>
+    <a href="/">Home</a>
+    <a href="/query-playground.html">Query</a>
+    <a href="/form-playground.html" class="active">Form</a>
+  </nav>
+
+  <main>
+    <h2 style="grid-column:1/-1">@headless-form/core</h2>
+    <p class="subtitle">Open the devtools panel (bottom-right) to inspect form state live. All examples share a single devtools sidebar.</p>
+
+    <!-- Form 1: Contact form with sync validators -->
+    <div class="card">
+      <div class="card-header">
+        <h3>1 · Contact form — sync validation</h3>
+        <span class="tag">isNotEmpty · isEmail</span>
+      </div>
+      <div class="card-body" id="contact-form">Loading…</div>
+    </div>
+
+    <!-- Form 2: Async validation + debounce -->
+    <div class="card">
+      <div class="card-header">
+        <h3>2 · Username — async validation</h3>
+        <span class="tag">async validator</span>
+      </div>
+      <div class="card-body" id="username-form">Loading…</div>
+    </div>
+
+    <!-- Form 3: Dynamic array fields -->
+    <div class="card">
+      <div class="card-header">
+        <h3>3 · Tags — dynamic array field</h3>
+        <span class="tag">setFieldValue · array</span>
+      </div>
+      <div class="card-body" id="tags-form">Loading…</div>
+    </div>
+
+    <!-- Form 4: Multi-step -->
+    <div class="card">
+      <div class="card-header">
+        <h3>4 · Multi-step wizard</h3>
+        <span class="tag">step · validate on change</span>
+      </div>
+      <div class="card-body" id="wizard-form">Loading…</div>
+    </div>
+
+  </main>
+
+  <script type="module">
+    import { createFormStore, isNotEmpty, isEmail, hasLength } from '@headless-form/core'
+    import { FormDevtools } from '@headless-form/core-devtools'
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+    const el  = id => document.getElementById(id)
+    const inp = (placeholder, value = '', extraClass = '') =>
+      `<input type="text" placeholder="${placeholder}" value="${value}" class="${extraClass}" />`
+
+    function field(label, inputHtml, errorHtml = '', hintHtml = '') {
+      return `
+        <div class="field">
+          <label>${label}</label>
+          ${inputHtml}
+          ${errorHtml ? `<div class="error-msg">${errorHtml}</div>` : ''}
+          ${hintHtml  ? `<div class="hint">${hintHtml}</div>` : ''}
+        </div>
+      `
+    }
+
+    // ── Form 1: Contact ───────────────────────────────────────────────────────
+    {
+      const form = createFormStore({
+        initialValues: { name: '', email: '', message: '' },
+        validate: {
+          name:    [isNotEmpty('Name is required')],
+          email:   [isNotEmpty('Email is required'), isEmail('Invalid email address')],
+          message: [isNotEmpty('Message is required'), hasLength({ min: 10 }, 'At least 10 characters')],
+        },
+        onSubmit: async (values) => {
+          await new Promise(r => setTimeout(r, 800))
+          el('contact-result').textContent = '✓ Submitted:\n' + JSON.stringify(values, null, 2)
+        },
+      })
+
+      // Attach devtools to the first form
+      new FormDevtools({ form, label: 'Contact Form', initialOpen: true })
+
+      function render() {
+        const snap = form.getSnapshot()
+        const vals = form.getValues()
+        const f = path => ({
+          err: snap.errors[path],
+          touched: snap.touched[path],
+        })
+
+        el('contact-form').innerHTML = `
+          ${field('Name *',
+            `<input type="text" id="cf-name" value="${vals.name}" placeholder="Alice Smith" class="${f('name').err && f('name').touched ? 'error' : ''}" />`,
+            f('name').touched ? (f('name').err || '') : ''
+          )}
+          ${field('Email *',
+            `<input type="email" id="cf-email" value="${vals.email}" placeholder="alice@example.com" class="${f('email').err && f('email').touched ? 'error' : ''}" />`,
+            f('email').touched ? (f('email').err || '') : ''
+          )}
+          ${field('Message *',
+            `<textarea id="cf-message" rows="3" placeholder="Hi there…" class="${f('message').err && f('message').touched ? 'error' : ''}">${vals.message}</textarea>`,
+            f('message').touched ? (f('message').err || '') : '',
+            'Minimum 10 characters'
+          )}
+          <div class="btn-row">
+            <button class="btn primary" id="cf-submit" ${snap.submitting ? 'disabled' : ''}>
+              ${snap.submitting ? 'Sending…' : 'Send message'}
+            </button>
+            <button class="btn" id="cf-reset">Reset</button>
+          </div>
+          <div class="status-bar">
+            <span class="${Object.values(snap.errors).some(Boolean) ? 'err' : 'ok'}">valid: ${!Object.values(snap.errors).some(Boolean)}</span>
+            &nbsp;|&nbsp;<span class="dim">dirty: ${Object.values(snap.dirty).some(Boolean)}</span>
+            &nbsp;|&nbsp;<span class="${snap.submitting ? 'warn' : 'dim'}">submitting: ${snap.submitting}</span>
+          </div>
+          <div class="submit-result" id="contact-result"></div>
+        `
+
+        el('cf-name').addEventListener('change', e => { form.setFieldValue('name', e.target.value); form.setFieldTouched('name', true) })
+        el('cf-email').addEventListener('change', e => { form.setFieldValue('email', e.target.value); form.setFieldTouched('email', true) })
+        el('cf-message').addEventListener('change', e => { form.setFieldValue('message', e.target.value); form.setFieldTouched('message', true) })
+        el('cf-submit').addEventListener('click', () => form.submit())
+        el('cf-reset').addEventListener('click', () => { form.reset(); el('contact-result').textContent = '' })
+      }
+
+      form.subscribe(render)
+      render()
+    }
+
+    // ── Form 2: Async username ────────────────────────────────────────────────
+    {
+      const TAKEN = new Set(['admin', 'root', 'alice', 'bob'])
+      let debounceTimer = null
+
+      const form = createFormStore({
+        initialValues: { username: '' },
+        validate: {
+          username: [
+            isNotEmpty('Username is required'),
+            hasLength({ min: 3 }, 'At least 3 characters'),
+            async (value) => {
+              await new Promise(r => setTimeout(r, 700))
+              if (TAKEN.has(String(value).toLowerCase())) return 'Username already taken'
+              return undefined
+            },
+          ],
+        },
+        onSubmit: async (values) => {
+          await new Promise(r => setTimeout(r, 600))
+          el('un-result').textContent = `✓ Registered as: ${values.username}`
+        },
+      })
+
+      function render() {
+        const snap = form.getSnapshot()
+        const vals = form.getValues()
+        const err = snap.errors['username']
+        const touched = snap.touched['username']
+        const validating = snap.fieldValidating['username']
+
+        el('username-form').innerHTML = `
+          ${field('Username *',
+            `<input type="text" id="un-field" value="${vals.username}" placeholder="e.g. alice" class="${err && touched ? 'error' : ''}" />`,
+            touched ? (err || '') : '',
+            'Try: admin, root, alice, bob (taken) or anything else'
+          )}
+          <div class="status-bar">
+            ${validating ? '<span class="warn">⟳ Checking availability…</span>' : ''}
+            ${!validating && touched && !err ? '<span class="ok">✓ Username available</span>' : ''}
+            ${!validating && touched && err ? `<span class="err">✗ ${err}</span>` : ''}
+            ${!touched ? '<span class="dim">Type to validate…</span>' : ''}
+          </div>
+          <div class="btn-row">
+            <button class="btn primary" id="un-submit" ${snap.submitting || validating ? 'disabled' : ''}>
+              ${snap.submitting ? 'Registering…' : 'Register'}
+            </button>
+            <button class="btn" id="un-reset">Reset</button>
+          </div>
+          <div class="submit-result" id="un-result"></div>
+        `
+
+        el('un-field').addEventListener('input', e => {
+          form.setFieldValue('username', e.target.value)
+          clearTimeout(debounceTimer)
+          debounceTimer = setTimeout(() => {
+            form.setFieldTouched('username', true)
+            form.validateField('username')
+          }, 400)
+        })
+        el('un-submit').addEventListener('click', () => form.submit())
+        el('un-reset').addEventListener('click', () => { form.reset(); el('un-result').textContent = '' })
+      }
+
+      form.subscribe(render)
+      render()
+    }
+
+    // ── Form 3: Dynamic tags ──────────────────────────────────────────────────
+    {
+      const form = createFormStore({
+        initialValues: { tags: ['vanilla', 'js'] },
+        onSubmit: async (values) => {
+          el('tags-result').textContent = '✓ Tags saved:\n' + JSON.stringify(values.tags, null, 2)
+        },
+      })
+
+      function render() {
+        const snap = form.getSnapshot()
+        const tags = form.getValues().tags
+
+        const items = tags.map((tag, i) => `
+          <div class="array-item">
+            <input type="text" value="${tag}" data-idx="${i}" placeholder="tag name" />
+            <button class="btn-icon" data-remove="${i}">✕</button>
+          </div>
+        `).join('')
+
+        el('tags-form').innerHTML = `
+          <div class="field">
+            <label>Tags</label>
+            <div id="tags-list" style="display:flex;flex-direction:column;gap:6px">
+              ${items}
+            </div>
+          </div>
+          <div class="btn-row">
+            <button class="btn" id="tags-add">+ Add tag</button>
+            <button class="btn primary" id="tags-submit">Save</button>
+            <button class="btn" id="tags-reset">Reset</button>
+          </div>
+          <div class="status-bar dim">${tags.length} tag${tags.length !== 1 ? 's' : ''}</div>
+          <div class="submit-result" id="tags-result"></div>
+        `
+
+        el('tags-list').querySelectorAll('input').forEach(inp => {
+          inp.addEventListener('change', e => {
+            const idx = Number(e.target.dataset.idx)
+            const next = [...tags]
+            next[idx] = e.target.value
+            form.setFieldValue('tags', next)
+          })
+        })
+        el('tags-list').querySelectorAll('[data-remove]').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const idx = Number(btn.dataset.remove)
+            form.setFieldValue('tags', tags.filter((_, i) => i !== idx))
+          })
+        })
+        el('tags-add').addEventListener('click', () => form.setFieldValue('tags', [...tags, '']))
+        el('tags-submit').addEventListener('click', () => form.submit())
+        el('tags-reset').addEventListener('click', () => { form.reset(); el('tags-result').textContent = '' })
+      }
+
+      form.subscribe(render)
+      render()
+    }
+
+    // ── Form 4: Multi-step wizard ─────────────────────────────────────────────
+    {
+      let step = 0
+      const steps = ['Personal', 'Account', 'Confirm']
+
+      const form = createFormStore({
+        initialValues: { firstName: '', lastName: '', username: '', password: '' },
+        validate: {
+          firstName: [isNotEmpty('First name required')],
+          lastName:  [isNotEmpty('Last name required')],
+          username:  [isNotEmpty('Username required'), hasLength({ min: 3 }, 'Min 3 characters')],
+          password:  [isNotEmpty('Password required'), hasLength({ min: 8 }, 'Min 8 characters')],
+        },
+        onSubmit: async (values) => {
+          await new Promise(r => setTimeout(r, 800))
+          el('wiz-result').textContent = '✓ Account created!\n' + JSON.stringify(values, null, 2)
+        },
+      })
+
+      const stepFields = [['firstName', 'lastName'], ['username', 'password']]
+
+      async function nextStep() {
+        const fields = stepFields[step]
+        if (!fields) return
+        fields.forEach(f => form.setFieldTouched(f, true))
+        const errs = await form.validateFields(fields)
+        if (errs && fields.some(f => errs[f])) return
+        step++
+        render()
+      }
+
+      function render() {
+        const snap = form.getSnapshot()
+        const vals = form.getValues()
+        const err = path => snap.touched[path] && snap.errors[path]
+
+        const stepDots = steps.map((s, i) =>
+          `<span style="padding:3px 10px;border-radius:10px;font-size:11px;font-weight:600;background:${i === step ? '#1f6feb' : '#21262d'};border:1px solid ${i < step ? '#2ea043' : '#30363d'};color:${i < step ? '#3fb950' : i === step ? '#fff' : '#8b949e'}">${i < step ? '✓ ' : ''}${s}</span>`
+        ).join('')
+
+        let stepContent = ''
+        if (step === 0) {
+          stepContent = `
+            ${field('First name *', `<input type="text" id="wz-fn" value="${vals.firstName}" placeholder="Alice" class="${err('firstName') ? 'error' : ''}" />`, err('firstName') || '')}
+            ${field('Last name *',  `<input type="text" id="wz-ln" value="${vals.lastName}"  placeholder="Smith"  class="${err('lastName')  ? 'error' : ''}" />`, err('lastName')  || '')}
+            <div class="btn-row">
+              <button class="btn primary" id="wz-next">Next →</button>
+            </div>
+          `
+        } else if (step === 1) {
+          stepContent = `
+            ${field('Username *', `<input type="text"     id="wz-un" value="${vals.username}" placeholder="alice"    class="${err('username') ? 'error' : ''}" />`, err('username') || '')}
+            ${field('Password *', `<input type="password" id="wz-pw" value="${vals.password}" placeholder="••••••••" class="${err('password') ? 'error' : ''}" />`, err('password') || '')}
+            <div class="btn-row">
+              <button class="btn" id="wz-back">← Back</button>
+              <button class="btn primary" id="wz-next">Next →</button>
+            </div>
+          `
+        } else {
+          stepContent = `
+            <div class="status-bar" style="line-height:2">
+              <div><span class="dim">Name:</span> ${vals.firstName} ${vals.lastName}</div>
+              <div><span class="dim">Username:</span> ${vals.username}</div>
+              <div><span class="dim">Password:</span> ${'•'.repeat(vals.password.length)}</div>
+            </div>
+            <div class="btn-row">
+              <button class="btn" id="wz-back">← Back</button>
+              <button class="btn primary" id="wz-submit" ${snap.submitting ? 'disabled' : ''}>${snap.submitting ? 'Creating…' : 'Create account'}</button>
+            </div>
+          `
+        }
+
+        el('wizard-form').innerHTML = `
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:4px">${stepDots}</div>
+          ${stepContent}
+          <div class="submit-result" id="wiz-result"></div>
+        `
+
+        if (step === 0) {
+          el('wz-fn').addEventListener('change', e => { form.setFieldValue('firstName', e.target.value); form.setFieldTouched('firstName', true) })
+          el('wz-ln').addEventListener('change', e => { form.setFieldValue('lastName',  e.target.value); form.setFieldTouched('lastName',  true) })
+        } else if (step === 1) {
+          el('wz-un').addEventListener('change', e => { form.setFieldValue('username', e.target.value); form.setFieldTouched('username', true) })
+          el('wz-pw').addEventListener('change', e => { form.setFieldValue('password', e.target.value); form.setFieldTouched('password', true) })
+          el('wz-back').addEventListener('click', () => { step--; render() })
+        } else {
+          el('wz-back').addEventListener('click', () => { step--; render() })
+          el('wz-submit').addEventListener('click', () => form.submit())
+        }
+
+        el('wizard-form').querySelector('#wz-next')?.addEventListener('click', nextStep)
+      }
+
+      form.subscribe(render)
+      render()
+    }
+  </script>
+</body>
+</html>
