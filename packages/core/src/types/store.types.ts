@@ -341,7 +341,7 @@ export interface FormStoreApi<Values, TransformedValues = Values, TError = unkno
    * @param path - Dot-notation path.
    * @param error - The error value to set.
    */
-  setFieldError(path: string, error: TError): void;
+  setFieldError(path: DeepKeys<Values>, error: TError): void;
 
   /**
    * Clears all errors.
@@ -353,7 +353,7 @@ export interface FormStoreApi<Values, TransformedValues = Values, TError = unkno
    *
    * @param path - Dot-notation path.
    */
-  clearFieldError(path: string): void;
+  clearFieldError(path: DeepKeys<Values>): void;
 
   // ── Status — touched & dirty ────────────────────────────────────────────────
 
@@ -365,7 +365,7 @@ export interface FormStoreApi<Values, TransformedValues = Values, TError = unkno
    *
    * @see https://mantine.dev/form/status/
    */
-  isTouched(path?: string): boolean;
+  isTouched(path?: DeepKeys<Values>): boolean;
 
   /**
    * Returns whether the field at `path` (or any field when omitted) is dirty.
@@ -375,7 +375,7 @@ export interface FormStoreApi<Values, TransformedValues = Values, TError = unkno
    *
    * @see https://mantine.dev/form/status/
    */
-  isDirty(path?: string): boolean;
+  isDirty(path?: DeepKeys<Values>): boolean;
 
   /**
    * Returns the full touched record.
@@ -428,7 +428,11 @@ export interface FormStoreApi<Values, TransformedValues = Values, TError = unkno
    *
    * @see https://mantine.dev/form/nested/
    */
-  insertListItem(path: string, item: unknown, index?: number): void;
+  insertListItem<K extends DeepKeys<Values>>(
+    path: K,
+    item: DeepValue<Values, K> extends ReadonlyArray<infer Item> ? Item : never,
+    index?: number,
+  ): void;
 
   /**
    * Removes the item at `index` from the array at `path`.
@@ -438,7 +442,7 @@ export interface FormStoreApi<Values, TransformedValues = Values, TError = unkno
    *
    * @see https://mantine.dev/form/nested/
    */
-  removeListItem(path: string, index: number): void;
+  removeListItem(path: DeepKeys<Values>, index: number): void;
 
   /**
    * Replaces the item at `index` in the array at `path`.
@@ -449,7 +453,11 @@ export interface FormStoreApi<Values, TransformedValues = Values, TError = unkno
    *
    * @see https://mantine.dev/form/nested/
    */
-  replaceListItem(path: string, index: number, item: unknown): void;
+  replaceListItem<K extends DeepKeys<Values>>(
+    path: K,
+    index: number,
+    item: DeepValue<Values, K> extends ReadonlyArray<infer Item> ? Item : never,
+  ): void;
 
   /**
    * Moves the item at `from` to `to` in the array at `path`.
@@ -459,7 +467,7 @@ export interface FormStoreApi<Values, TransformedValues = Values, TError = unkno
    *
    * @see https://mantine.dev/form/nested/
    */
-  reorderListItem(path: string, payload: ReorderPayload): void;
+  reorderListItem(path: DeepKeys<Values>, payload: ReorderPayload): void;
 
   // ── Validation ──────────────────────────────────────────────────────────────
 
@@ -483,7 +491,7 @@ export interface FormStoreApi<Values, TransformedValues = Values, TError = unkno
    * @see https://mantine.dev/form/validation/
    */
   validateField(
-    path: string,
+    path: DeepKeys<Values>,
   ): FormValidateFieldResult<TError> | Promise<FormValidateFieldResult<TError>>;
 
   /**
@@ -494,7 +502,7 @@ export interface FormStoreApi<Values, TransformedValues = Values, TError = unkno
    *
    * @see https://mantine.dev/form/validation/
    */
-  isValid(path?: string): boolean | Promise<boolean>;
+  isValid(path?: DeepKeys<Values>): boolean | Promise<boolean>;
 
   /**
    * `true` while any async validation is pending.
@@ -507,7 +515,7 @@ export interface FormStoreApi<Values, TransformedValues = Values, TError = unkno
    * @param path - Dot-notation path.
    * @returns `true` if that field's validation is pending.
    */
-  isValidating(path: string): boolean;
+  isValidating(path: DeepKeys<Values>): boolean;
 
   // ── Submit / reset handlers ────────────────────────────────────────────────
 
@@ -573,7 +581,10 @@ export interface FormStoreApi<Values, TransformedValues = Values, TError = unkno
    * <input {...form.getInputProps('subscribe', { type: 'checkbox' })} />
    * ```
    */
-  getInputProps(path: string, options?: GetInputPropsOptions<TError>): GetInputPropsResult<TError>;
+  getInputProps<K extends DeepKeys<Values>>(
+    path: K,
+    options?: GetInputPropsOptions<TError>,
+  ): GetInputPropsResult<TError>;
 
   /**
    * Returns the DOM element whose `data-path` attribute equals `path`, or `null` when
@@ -584,7 +595,7 @@ export interface FormStoreApi<Values, TransformedValues = Values, TError = unkno
    *
    * @see https://mantine.dev/form/use-form/
    */
-  getInputNode(path: string): HTMLElement | null;
+  getInputNode(path: DeepKeys<Values>): HTMLElement | null;
 
   // ── Transform ───────────────────────────────────────────────────────────────
 
@@ -644,7 +655,7 @@ export interface FormStoreApi<Values, TransformedValues = Values, TError = unkno
    * <input key={form.key('email')} {...form.getInputProps('email')} />
    * ```
    */
-  key(path: string): string;
+  key(path: DeepKeys<Values>): string;
 
   // ── Subscription (internal — used by wrappers) ─────────────────────────────
 

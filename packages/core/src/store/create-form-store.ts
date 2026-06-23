@@ -882,7 +882,12 @@ export function createFormStore<Values, TransformedValues = Values, TError = unk
     },
 
     getServerSnapshot() {
-      return buildSnapshot();
+      // Must return the same cached reference as getSnapshot() — useSyncExternalStore
+      // treats a new object identity as a change and will loop if this isn't stable.
+      if (!snapshotCache) {
+        snapshotCache = buildSnapshot();
+      }
+      return snapshotCache;
     },
   };
 

@@ -30,6 +30,12 @@
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--filter", "@headless-form/docs-site", "dev"],
       "port": 5180
+    },
+    {
+      "name": "nextjs",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@headless-form/examples-nextjs", "dev", "--", "-p", "3001"],
+      "port": 3001
     }
   ]
 }

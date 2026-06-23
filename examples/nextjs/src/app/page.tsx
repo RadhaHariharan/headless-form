@@ -1,22 +1,36 @@
 "use client"
 
-import Image from "next/image";
-import styles from "./page.module.css";
-import { createFormStore, createStringValidator, toValidationRule } from "@headless-form/core";
+import { useForm, createStringValidator, toValidationRule } from "@headless-form/react";
 
 interface myForm {
   firstname: string,
   lastname: string,
   email: string,
+  user: {
+    age: string,
+    roles: string[],
+    permissions: { name: string }[]
+  }
 }
 
 export default function Home() {
-  const form = createFormStore<myForm>({
+  // useForm bridges the framework-agnostic store to React via useSyncExternalStore,
+  // so the component re-renders whenever validate()/submit() update errors/status.
+  const form = useForm<myForm>({
     mode: "uncontrolled",
     initialValues: {
       firstname: "",
       lastname: "",
       email: "",
+      user: {
+        age: "",
+        roles: [],
+        permissions: [
+          {
+            name: "Create"
+          }
+        ]
+      }
     },
     validate: {
       firstname: toValidationRule(createStringValidator({
@@ -48,6 +62,8 @@ export default function Home() {
       <input type="text" key={form.key("firstname")} {...form.getInputProps("firstname")} />
       <br />
       <input type="text" key={form.key("lastname")} {...form.getInputProps("lastname")} />
+      <br />
+      <input type="text" key={form.key("user.age")} {...form.getInputProps("user.age")} />
 
       <br />
       Email - {form.getValues().email}
@@ -55,6 +71,8 @@ export default function Home() {
       FirstName - {form.getValues().firstname}
       <br />
       LastName - {form.getValues().lastname}
+      <br />
+      Age - {form.getValues().user.age}
       <br />
       Errors - {form.isValid() ? "True" : "False"}
       <br />
