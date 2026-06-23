@@ -25,5 +25,11 @@
       "runtimeArgs": ["--filter", "@headless-form/vanilla-playground", "dev"],
       "port": 5177
     }
+  ,{
+      "name": "docs",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@headless-form/docs-site", "dev"],
+      "port": 5180
+    }
   ]
 }
