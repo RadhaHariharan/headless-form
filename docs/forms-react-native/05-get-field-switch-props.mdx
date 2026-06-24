@@ -1,0 +1,44 @@
+# getFieldSwitchProps
+
+**File:** `src/input-props/get-field-switch-props.ts`
+
+The [useField](../../forms-react/02-use-field) counterpart to [getSwitchProps](./04-get-switch-props).
+
+## Signature
+
+```typescript
+function getFieldSwitchProps<TError>(field: UseFieldReturnType<boolean, TError>): GetSwitchPropsResult
+```
+
+Notice the constraint: `field` must be a `UseFieldReturnType<boolean, TError>` — i.e. the `useField` call it came from should have been declared with a `boolean` value type (and typically `type: 'checkbox'`), since this adapter unconditionally treats the field as a boolean toggle.
+
+## What it actually does
+
+```typescript
+function getFieldSwitchProps(field) {
+  const { checked, defaultChecked, onChange } = field.getInputProps();
+  return {
+    value: Boolean(checked ?? defaultChecked),
+    onValueChange: (next) => onChange(next),
+  };
+}
+```
+
+Same logic as [getSwitchProps](./04-get-switch-props), sourced from a standalone field instead of a form + path.
+
+## Basic usage
+
+```tsx
+import { useField, getFieldSwitchProps } from '@headlesskit/forms-react-native';
+import { Switch } from 'react-native';
+
+function NotificationToggle() {
+  const field = useField({ initialValue: false, type: 'checkbox' });
+  return <Switch {...getFieldSwitchProps(field)} />;
+}
+```
+
+## Common pitfalls
+
+- **Passing a non-boolean field's result to `getFieldSwitchProps` is a type error**, by design — TypeScript enforces `UseFieldReturnType<boolean, TError>` specifically; if your `useField` call's `initialValue` isn't `boolean`, this function won't accept it, which is the intended guardrail against accidentally wiring a `<Switch>` to a non-boolean field.
+- **Remember to pass `type: 'checkbox'` to `useField`** (as shown above) — while `getFieldSwitchProps` itself doesn't strictly require it (it reads `checked`/`defaultChecked` either way), omitting it means the underlying `getInputProps()` call defaults to `type: 'input'`, which produces `value`/`defaultValue` instead of `checked`/`defaultChecked` — and `getFieldSwitchProps` would then read `undefined` for both, always falling back to `value: false`.

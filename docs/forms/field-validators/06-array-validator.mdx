@@ -1,0 +1,63 @@
+# createArrayValidator
+
+**File:** `src/field-validators/array-validator.ts`
+
+For multi-select / list / tag-picker style fields.
+
+## Signature
+
+```typescript
+function createArrayValidator(rules: ArrayValidationRule): FieldValidatorFunction<unknown>
+```
+
+## `ArrayValidationRule` — full options table
+
+| Option | Type | Check |
+|--------|------|-------|
+| `required` | `boolean` (default `true`) | Fails when empty — **deferred** to the `minItems` check when one is configured, so the more specific "at least N items" message wins over the generic required message. |
+| `minItems` / `maxItems` | `number` | Inclusive count bounds. |
+| `uniqueItems` | `boolean` | Rejects duplicate entries (compared via `Set`, so reference/primitive equality — not deep equality for object items). |
+| `allowedValues` | `unknown[]` | Whitelist — every item must appear in this list. |
+| `forbiddenValues` | `unknown[]` | Blacklist — no item may appear in this list. |
+| `customValidation` | `(value: unknown[]) => string \| null` | Runs last. |
+| `messages` | per-check overrides | — |
+
+**Validation order:** required (deferred if `minItems` set) → type (`Array.isArray`) → minItems → maxItems → uniqueItems → allowedValues → forbiddenValues → custom.
+
+## Basic usage
+
+```typescript
+import { createArrayValidator } from '@headlesskit/forms-react';
+
+const skills = createArrayValidator({ minItems: 1, maxItems: 5, uniqueItems: true });
+skills(['JS', 'TS'], 'Skills'); // null
+skills([], 'Skills');           // "Skills must have at least 1 item"
+```
+
+## Advanced: deferred required-vs-minItems messaging
+
+```typescript
+const tags = createArrayValidator({ minItems: 2 }); // required defaults to true
+tags([], 'Tags'); // "Tags must have at least 2 items" — NOT the generic "Please select tags"
+```
+
+Without `minItems` set, an empty array would instead produce the generic required message:
+
+```typescript
+const tags2 = createArrayValidator({}); // no minItems
+tags2([], 'Tags'); // "Please select tags"
+```
+
+## Advanced: a restricted multi-select with an allowlist
+
+```typescript
+const plan = createArrayValidator({
+  allowedValues: ['basic', 'pro', 'enterprise'],
+  messages: { allowedValues: '{fieldName} contains an invalid plan selection' },
+});
+```
+
+## Common pitfalls
+
+- **`uniqueItems` uses `Set`, which only de-duplicates by reference/primitive equality** — an array of object items (`[{ id: 1 }, { id: 1 }]`, two distinct object references with identical contents) will **not** be flagged as a duplicate, since `Set` considers them different values. For object-item de-duplication, write a custom rule comparing by a specific key (e.g. `.id`) instead.
+- **A non-array value fails the type check, but the error message says "must be an array of selections," which can be confusing if the field is actually `null`/`undefined`** (e.g. uninitialized) rather than a wrong-shaped value — consider explicitly initializing array fields to `[]` in `initialValues` to avoid hitting this branch unexpectedly.

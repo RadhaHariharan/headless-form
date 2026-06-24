@@ -98,14 +98,14 @@ A few things to notice, since they're the entire reason this package exists:
    to `<TextInput>`.
 3. **`error` is destructured out before spreading.** `getTextInputProps` includes `error` for
    convenience (so you don't need to separately read `form.errors.name`), but `error` is not a
-   real `TextInput` prop — see [Text Input Props](#forms-react-native/text-input-props) for why
+   real `TextInput` prop — see [getTextInputProps](./02-get-text-input-props) for why
    it's safe to spread anyway, and why destructuring it out is still the clearer pattern.
 
 ---
 
 ## Next steps
 
-- [Text Input Props](#forms-react-native/text-input-props) — `getTextInputProps` / `getFieldTextInputProps` in depth, every option, every value.
-- [Switch Props](#forms-react-native/switch-props) — `getSwitchProps` / `getFieldSwitchProps`, and why `<Switch>` is always controlled.
-- [Submit Handler](#forms-react-native/submit-handler) — `getSubmitHandler`, and the `preventDefault()` crash it exists to prevent.
-- [Full Example](#forms-react-native/full-example) — a complete registration form, text inputs + switch + submit, start to finish.
+- [getTextInputProps](./02-get-text-input-props) / [getFieldTextInputProps](./03-get-field-text-input-props) — in depth, every option, every value.
+- [getSwitchProps](./04-get-switch-props) / [getFieldSwitchProps](./05-get-field-switch-props) — and why `<Switch>` is always controlled.
+- [getSubmitHandler](./06-get-submit-handler) — and the `preventDefault()` crash it exists to prevent.
+- [Full Example](./07-full-example) — a complete registration form, text inputs + switch + submit, start to finish.

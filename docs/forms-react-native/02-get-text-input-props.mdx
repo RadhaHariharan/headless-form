@@ -1,0 +1,73 @@
+# getTextInputProps
+
+**File:** `src/input-props/get-text-input-props.ts`
+
+Adapts `form.getInputProps(path, options)` (HTML-`<input>`-shaped) into React Native's `<TextInput>`-shaped prop object.
+
+## Signature
+
+```typescript
+function getTextInputProps<Values, TransformedValues, TError, K extends DeepKeys<Values>>(
+  form: FormStoreApi<Values, TransformedValues, TError>,
+  path: K,
+  options?: GetTextInputPropsOptions<TError>,
+): GetTextInputPropsResult<TError>
+```
+
+`GetTextInputPropsOptions<TError>` is `Pick<GetInputPropsOptions<TError>, 'withError' | 'withFocus'>` — the same two options [forms](../../forms/types/02-input-props-types)' `getInputProps` accepts, narrowed to just the two that make sense here (`type` is irrelevant — this function is always the text-input case; `value` for radio groups doesn't apply to a single text field).
+
+## What it actually does
+
+```typescript
+function getTextInputProps(form, path, options) {
+  const { value, defaultValue, onChange, onFocus, onBlur, error } = form.getInputProps(path, options);
+  return {
+    value: value as string | undefined,
+    defaultValue: defaultValue as string | undefined,
+    onChangeText: (text: string) => onChange(text),
+    onFocus,
+    onBlur,
+    error,
+  };
+}
+```
+
+Calls the real `getInputProps` underneath (so every behavior documented in [createFormStore](../../forms/store/01-create-form-store)'s `getInputProps` section — controlled vs. uncontrolled `value`/`defaultValue`, `touchTrigger`, `validateInputOnBlur`'s debounce — applies unchanged), then renames `onChange` to `onChangeText` and changes its signature from "accepts an event or raw value" to "accepts the raw string directly," matching what `<TextInput>` actually calls its change handler with.
+
+## `GetTextInputPropsResult<TError>`
+
+| Field | Present when | Notes |
+|-------|---------------|-------|
+| `value` | controlled mode | |
+| `defaultValue` | uncontrolled mode | |
+| `onChangeText` | always | `(text: string) => void` — RN's exact `<TextInput>` prop name and signature. |
+| `onFocus` / `onBlur` | `withFocus !== false` | Same zero-argument callbacks as the web version. |
+| `error` | `withError !== false` (default) | **Not a real `TextInput` prop** — see pitfalls. |
+
+## Basic usage
+
+```tsx
+import { getTextInputProps } from '@headlesskit/forms-react-native';
+import { TextInput, Text } from 'react-native';
+
+const { error, ...inputProps } = getTextInputProps(form, 'email');
+
+return (
+  <>
+    <TextInput key={form.key('email')} {...inputProps} />
+    {error && <Text>{error}</Text>}
+  </>
+);
+```
+
+## Advanced: disabling focus tracking for a field that doesn't need touched-on-focus
+
+```tsx
+const { error, ...inputProps } = getTextInputProps(form, 'searchQuery', { withFocus: false });
+// no onFocus/onBlur in the result at all — useful for a search box where "touched" status is meaningless
+```
+
+## Common pitfalls
+
+- **Spreading the full result (including `error`) directly onto `<TextInput>` works at runtime** (React Native ignores unknown props on most components) **but is poor practice and breaks TypeScript** — `TextInputProps` has no `error` field, so `<TextInput {...getTextInputProps(form, 'email')} />` is a type error. Always destructure `error` out first, as shown in every example.
+- **This function doesn't coerce non-string values** — if the underlying field's value is ever a number (e.g. typed as `number` in `Values` but used with a `<TextInput>`), `value`/`defaultValue` are cast to `string | undefined` via a type assertion only, not an actual runtime `String(...)` conversion; ensure text-input-bound fields are genuinely typed/stored as strings to avoid a runtime type mismatch.

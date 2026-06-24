@@ -1,0 +1,75 @@
+# getSwitchProps
+
+**File:** `src/input-props/get-switch-props.ts`
+
+Adapts a boolean field into React Native's `<Switch>`-shaped prop object.
+
+## Signature
+
+```typescript
+function getSwitchProps<Values, TransformedValues, TError, K extends DeepKeys<Values>>(
+  form: FormStoreApi<Values, TransformedValues, TError>,
+  path: K,
+): GetSwitchPropsResult
+```
+
+No `options` parameter — unlike [getTextInputProps](./02-get-text-input-props), there's nothing to configure here (see below for why).
+
+## Why `<Switch>` is always controlled
+
+```typescript
+function getSwitchProps(form, path) {
+  const { checked, defaultChecked, onChange } = form.getInputProps(path, {
+    type: 'checkbox',
+    withError: false,
+    withFocus: false,
+  });
+  return {
+    value: Boolean(checked ?? defaultChecked),
+    onValueChange: (next) => onChange(next),
+  };
+}
+```
+
+Calls the underlying `getInputProps(path, { type: 'checkbox' })` and reads **whichever** of `checked`/`defaultChecked` is present (exactly one is, depending on the form's `mode` — see [createFormStore](../../forms/store/01-create-form-store)), then unconditionally exposes it as `value`. This is necessary because React Native's `<Switch>` component has **no uncontrolled mode at all** — there's no `defaultValue` prop on `<Switch>` the way there's `defaultChecked` on a DOM checkbox — so regardless of whether the *form* is in controlled or uncontrolled mode, the `<Switch>` component itself must always receive a `value`.
+
+`withError: false, withFocus: false` are hardcoded — `getSwitchProps`'s result type (`GetSwitchPropsResult`) deliberately has no `error`/`onFocus`/`onBlur` fields at all (unlike [getTextInputProps](./02-get-text-input-props)), since a switch typically doesn't render an inline error/focus state the same way a text field does. If you need error display for a switch field, read `form.errors[path]` separately.
+
+## `GetSwitchPropsResult`
+
+```typescript
+interface GetSwitchPropsResult {
+  value: boolean;
+  onValueChange: (value: boolean) => void;
+}
+```
+
+## Basic usage
+
+```tsx
+import { getSwitchProps } from '@headlesskit/forms-react-native';
+import { Switch } from 'react-native';
+
+<Switch {...getSwitchProps(form, 'subscribed')} />
+```
+
+No `key={form.key(...)}` needed here, unlike text inputs — since `<Switch>` is always controlled, there's no uncontrolled-remount concern to work around in the first place.
+
+## Advanced: pairing with a label and reading the error separately
+
+```tsx
+function NotificationToggle({ form }: { form: FormStoreApi<MyValues> }) {
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+      <Text>Enable notifications</Text>
+      <Switch {...getSwitchProps(form, 'notificationsEnabled')} />
+      {form.errors.notificationsEnabled && <Text>{form.errors.notificationsEnabled}</Text>}
+    </View>
+  );
+}
+```
+
+## Common pitfalls
+
+- **Don't try to pass `options` to `getSwitchProps`** — there is no options parameter; `withError`/`withFocus` are hardcoded `false` internally. If you need error/focus behavior for a boolean field, call `form.getInputProps(path, { type: 'checkbox' })` directly instead and adapt it yourself.
+- **The field's underlying value must genuinely be boolean-coercible** — `Boolean(checked ?? defaultChecked)` always produces a real boolean, but if your field stores something unusual (e.g. `'true'`/`'false'` as strings), make sure that's intentional, since the coercion here happens at the `getInputProps`-level checkbox logic (`Boolean(storedValue)`), not specially within `getSwitchProps` itself.

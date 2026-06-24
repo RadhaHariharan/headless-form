@@ -1,0 +1,102 @@
+# path.types
+
+**File:** `src/types/path.types.ts`
+
+The recursive TypeScript generics powering every type-safe dot-notation path API in the package (`setFieldValue`, `getInputProps`, `watch`, `key`, `isDirty`, etc) — an invalid path string is a compile error, not a runtime surprise.
+
+## `DeepKeys<T>`
+
+```typescript
+type DeepKeys<T> = T extends Primitive
+  ? never
+  : T extends ReadonlyArray<infer Item>
+    ? `${number}` | `${number}.${DeepKeys<Item>}`
+    : T extends object
+      ? { [K in keyof T & (string | number)]: ... }[keyof T & (string | number)]
+      : never;
+```
+
+Produces the union of every valid dot-notation path into `T`, recursively, including numeric array-index segments.
+
+```typescript
+type Values = { user: { name: string; age: number }; tags: string[] };
+type Keys = DeepKeys<Values>;
+// 'user' | 'user.name' | 'user.age' | 'tags' | `tags.${number}`
+```
+
+Recursion stops at `Primitive` — `string | number | boolean | null | undefined | symbol | bigint | Date | File` are treated as leaves, never traversed into (so `DeepKeys<{ createdAt: Date }>` is just `'createdAt'`, not an attempt to recurse into `Date`'s own properties).
+
+## `DeepValue<T, Path>`
+
+```typescript
+type DeepValue<T, Path extends string> = Path extends `${infer Key}.${infer Rest}`
+  ? Key extends keyof T ? DeepValue<T[Key], Rest>
+    : Key extends `${number}` ? (T extends ReadonlyArray<infer Item> ? DeepValue<Item, Rest> : never) : never
+  : Path extends keyof T ? T[Path]
+    : Path extends `${number}` ? (T extends ReadonlyArray<infer Item> ? Item : never) : never;
+```
+
+Given a valid `Path` (typically one drawn from `DeepKeys<T>`), resolves the *value type* stored at that path — this is what makes `setFieldValue('user.age', 'not a number')` a type error (`DeepValue<Values, 'user.age'>` resolves to `number`) while `setFieldValue('user.age', 42)` type-checks.
+
+```typescript
+type V1 = DeepValue<{ user: { name: string } }, 'user.name'>; // string
+type V2 = DeepValue<{ tags: string[] }, 'tags.0'>;             // string
+```
+
+## `ShallowKeys<T>`
+
+```typescript
+type ShallowKeys<T> = keyof T & string;
+```
+
+A non-recursive variant — just `T`'s own first-level string keys, used internally for the (intentionally flat, non-nested) `dirty`/`touched` record key types.
+
+## How these compose with `FormStoreApi`
+
+Every path-accepting method on [FormStoreApi](./01-store-types) is written as:
+
+```typescript
+setFieldValue<K extends DeepKeys<Values>>(
+  path: K,
+  value: DeepValue<Values, K> | ((current: DeepValue<Values, K>) => DeepValue<Values, K>),
+  options?: SetFieldValueOptions,
+): void;
+```
+
+`K` is inferred from whatever literal string you pass as `path` — so `form.setFieldValue('user.name', 'Jane')` infers `K = 'user.name'`, then `DeepValue<Values, 'user.name'>` resolves to whatever type that field actually is, and TypeScript checks `value` against exactly that type. This is the mechanism that makes `'user.adress'` (a typo) a compile error, and `setFieldValue('user.age', 'thirty')` (wrong type) also a compile error — both caught before the code ever runs.
+
+## Basic usage (you typically never write these types directly)
+
+```typescript
+import { useForm } from '@headlesskit/forms-react';
+
+const form = useForm({
+  initialValues: { user: { name: '', address: { city: '' } }, tags: ['a', 'b'] },
+});
+
+form.setFieldValue('user.name', 'Jane');           // ✅ string
+form.setFieldValue('user.address.city', 'Boston');  // ✅ nested object — works
+form.setFieldValue('tags.0', 'updated');             // ✅ array index — works
+form.setFieldValue('user.nmae', 'Jane');             // ❌ typo — compile error
+form.setFieldValue('user.address.city', 42);         // ❌ wrong type — compile error
+```
+
+## Advanced: extracting a specific field's type for a reusable component
+
+```typescript
+import type { DeepKeys, DeepValue } from '@headlesskit/forms';
+
+function TypedInput<Values, K extends DeepKeys<Values>>(props: {
+  form: FormStoreApi<Values>;
+  path: K;
+  label: string;
+}) {
+  // DeepValue<Values, K> available here for further typing, e.g. of a custom onChange
+  return <input {...props.form.getInputProps(props.path)} aria-label={props.label} />;
+}
+```
+
+## Common pitfalls
+
+- **`DeepKeys` recursion has practical TypeScript performance limits on very large/deeply-nested `Values` shapes** — extremely large generated types (hundreds of fields, many levels deep) can slow down the TypeScript language server; if you hit this, consider splitting a giant form's values type into smaller logical sub-shapes where possible.
+- **Array index paths are typed as `${number}`, not a literal index** — `DeepKeys<{ items: Item[] }>` includes `` `items.${number}` ``, which means any numeric string type-checks (`'items.0'`, `'items.999'`), not just indices that are actually in range — out-of-range indices are still a runtime concern (`getPath`/`setPath` handle them gracefully, returning `undefined`/extending the array), not something the type system catches.

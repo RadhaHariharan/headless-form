@@ -1,0 +1,79 @@
+# toValidationRule (and humanizeFieldName)
+
+**File:** `src/field-validators/to-rule.ts`
+
+The adapter bridging the [field-validators](./01-types) toolkit's `(value, fieldName) => error` signature into the form's own `ValidationRule` `(value, values, path) => error` signature — required any time you want to use a `create*Validator` factory inside a form's `validate` option.
+
+## `toValidationRule<TValue>(validator, fieldName?)`
+
+```typescript
+function toValidationRule<TValue = unknown>(
+  validator: FieldValidatorFunction<TValue>,
+  fieldName?: string,
+): ValidationRule<TValue, unknown, string>
+```
+
+| Parameter | Description |
+|-----------|--------------|
+| `validator` | Any function built by `createStringValidator`/`createNumberValidator`/`createCheckboxValidator`/`createDateValidator`/`createArrayValidator`. |
+| `fieldName` | The human-readable name to interpolate into error messages. When omitted, derived automatically from the field's path via [humanizeFieldName](#humanizefieldnamepath). |
+
+```typescript
+return (value, _values, path) => validator(value, fieldName ?? humanizeFieldName(path));
+```
+
+## `humanizeFieldName(path)`
+
+```typescript
+function humanizeFieldName(path: string): string
+```
+
+Converts a dot-notation field path into a readable label:
+
+1. Splits on `.` and **drops purely-numeric segments** (array indices) — so a nested array path doesn't produce something like `"0 Email"`.
+2. Takes the **last** remaining segment (so `'user.email'` becomes `'Email'`, not `'User Email'` — nested paths read naturally from their leaf name).
+3. Converts `snake_case`/`kebab-case` to spaces, splits `camelCase` at case boundaries, collapses extra whitespace, and title-cases the first letter.
+
+```typescript
+humanizeFieldName('user.email');     // 'Email'
+humanizeFieldName('items.0.qty');    // 'Qty'
+humanizeFieldName('firstName');      // 'First Name'
+humanizeFieldName('shipping_address'); // 'Shipping address' — only the first letter is capitalized
+```
+
+## Basic usage
+
+```typescript
+import { useForm, createStringValidator, createNumberValidator, toValidationRule } from '@headlesskit/forms-react';
+
+const nameRule = createStringValidator({ minLength: 3 });
+const ageRule = createNumberValidator({ min: 18 });
+
+const form = useForm({
+  initialValues: { name: '', age: '' },
+  validate: {
+    name: toValidationRule(nameRule, 'Name'),
+    age: toValidationRule(ageRule), // fieldName inferred from path → "Age"
+  },
+});
+```
+
+## Advanced: relying on automatic field-name inference for many fields at once
+
+```typescript
+const form = useForm({
+  initialValues: { firstName: '', lastName: '', user: { email: '' } },
+  validate: {
+    firstName: toValidationRule(createStringValidator({ minLength: 1 })), // → "First Name"
+    lastName: toValidationRule(createStringValidator({ minLength: 1 })),  // → "Last Name"
+    user: { email: toValidationRule(createStringValidator({})) },          // → "Email" (leaf segment only)
+  },
+});
+```
+
+Skipping the explicit `fieldName` argument across many fields keeps the rules object terse, while still producing reasonably readable error messages without manually naming every field.
+
+## Common pitfalls
+
+- **`humanizeFieldName` only looks at the *last* path segment** — for two different nested fields that happen to share a leaf name (e.g. `'billingAddress.city'` and `'shippingAddress.city'`), both would humanize to the same `'City'` label unless you pass an explicit `fieldName` to disambiguate them in error messages.
+- **Field validators built without a `fieldName` argument cannot be reused across multiple differently-named fields with one factory instance** — since the name is resolved per-call from the form's own path, this is actually a *feature* (one `createStringValidator({...})` instance works correctly for any field it's attached to via `toValidationRule`), but don't assume the validator function itself "knows" a fixed name; it only knows it at the moment `toValidationRule`'s wrapper calls it.

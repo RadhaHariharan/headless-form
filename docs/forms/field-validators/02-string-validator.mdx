@@ -1,0 +1,78 @@
+# createStringValidator
+
+**File:** `src/field-validators/string-validator.ts`
+
+The most extensive of the field-validator factories — a configurable, opinionated string-field checker covering length, character class, prefix/suffix, content, and forbidden-word rules in one config object.
+
+## Signature
+
+```typescript
+function createStringValidator(rules: StringValidationRule): FieldValidatorFunction<string>
+```
+
+## `StringValidationRule` — full options table
+
+| Option | Type | Default | Check |
+|--------|------|---------|-------|
+| `required` | `boolean` | `true` | Fails when the (trimmed) value is empty. |
+| `minLength` / `maxLength` | `number` | none | Length bounds, measured on the trimmed value. |
+| `allowedCharacters` | `'alphanumeric' \| 'alphabetic' \| 'numeric' \| 'custom'` | none | Restricts to a character class. `'custom'` requires `customPattern`. |
+| `customPattern` | `RegExp` | required if `allowedCharacters: 'custom'` | The pattern used for the custom character class. |
+| `allowSpaces` | `boolean` | `false` | Whether the character-class check also permits whitespace. |
+| `allowSpecialChars` | `boolean` | `true` | When `false` **and** `allowedCharacters` is unset, rejects any character outside `[a-zA-Z0-9\s]`. |
+| `shouldStartWith` / `shouldEndWith` | `string \| RegExp` | none | Value must start/end with this. |
+| `shouldNotStartWith` / `shouldNotEndWith` | `string \| RegExp` | none | Value must NOT start/end with this. |
+| `mustContain` / `mustNotContain` | `string \| RegExp` | none | Substring/pattern presence/absence anywhere in the value. |
+| `forbiddenWords` | `string[]` | none | Value must not contain any of these as a substring. |
+| `caseSensitive` | `boolean` | `true` | Affects `forbiddenWords` matching and a lowercased `processedValue` used for `mustContain`/`mustNotContain`. |
+| `customValidation` | `(value: string) => string \| null` | none | Runs last, after every built-in check passes. |
+| `messages` | per-check override object | built-in defaults | Each message supports a `{fieldName}` placeholder. |
+
+**Validation order:** required → length → character class → special-chars → start/end patterns → contains/not-contains → forbidden words → custom.
+
+## Basic usage
+
+```typescript
+import { createStringValidator } from '@headlesskit/forms-react';
+
+const username = createStringValidator({
+  minLength: 3,
+  maxLength: 20,
+  allowedCharacters: 'alphanumeric',
+  shouldNotStartWith: /^[0-9]/,
+});
+
+username('Iamneo123', 'Username'); // null
+username('jo', 'Username');         // "Username should be at least 3 characters long"
+```
+
+## Advanced: a profanity/forbidden-word filter with custom messages
+
+```typescript
+const displayName = createStringValidator({
+  minLength: 2,
+  maxLength: 30,
+  forbiddenWords: ['admin', 'moderator', 'support'],
+  caseSensitive: false,
+  messages: {
+    forbiddenWords: '{fieldName} cannot contain reserved words',
+    minLength: '{fieldName} is too short',
+  },
+});
+```
+
+## Advanced: a custom character class
+
+```typescript
+const productCode = createStringValidator({
+  allowedCharacters: 'custom',
+  customPattern: /^[A-Z]{2}-\d{4}$/,
+  messages: { allowedCharacters: 'Product code must look like AB-1234' },
+});
+```
+
+## Common pitfalls
+
+- **`allowedCharacters: 'custom'` without a `customPattern` throws synchronously** (not a returned error string) — and only when a non-empty value actually reaches that check, so this bug can hide until the first real (non-empty) input is validated; always supply `customPattern` whenever `allowedCharacters` is `'custom'`.
+- **`mustContain`/`mustNotContain` test against `processedValue` (lowercased if `caseSensitive: false`), but `shouldStartWith`/`shouldEndWith`/`allowedCharacters` test against `trimmedValue` (never case-folded)** — if you set `caseSensitive: false` expecting it to affect *every* check uniformly, note it only actually affects `forbiddenWords` and the `mustContain`/`mustNotContain` pair, not the others.
+- **String/RegExp inputs to `shouldStartWith`/`shouldNotStartWith`/etc are escaped for literal-string use only when passed as a plain `string`** — passing a `RegExp` directly is used as-is, so you have full regex power there but lose the automatic escaping a plain string gets.

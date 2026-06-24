@@ -1,0 +1,51 @@
+# field-validators: types
+
+**File:** `src/field-validators/types.ts`
+
+Defines `FieldValidatorFunction` — the shared signature for everything in the `field-validators` folder, which is a deliberately **separate** validation toolkit from the [validators](../validators/01-is-not-empty) folder.
+
+## How field-validators differ from `validators/`
+
+| | `validators/` (`isEmail`, `isNotEmpty`, etc) | `field-validators/` (`createStringValidator`, etc) |
+|---|---|---|
+| Signature | `ValidationRule<Value, Values, TError>` — `(value, values, path) => error` | `FieldValidatorFunction<TValue>` — `(value, fieldName) => string \| null` |
+| Configuration | One concern per function, called directly | A single config object per factory, covering many related checks at once (length, character class, patterns, forbidden words, etc) |
+| Cross-field access | Yes (`values` argument) | No — purely single-field |
+| Error messages | You always supply the exact message | Built-in sensible defaults per check, each overridable via `messages` |
+| Drop into `validate` directly? | Yes | No — must be adapted via [toValidationRule](./07-to-rule) first |
+
+## `FieldValidatorFunction<TValue>`
+
+```typescript
+type FieldValidatorFunction<TValue = string> = (value: TValue, fieldName: string) => string | null;
+```
+
+| Parameter | Description |
+|-----------|--------------|
+| `value` | The value to validate. String-specific validators expect a real `string`; the others accept `unknown` and coerce/normalize internally (see each validator's own doc). |
+| `fieldName` | A human-readable name interpolated into the default error messages, and into any `{fieldName}` placeholder in a custom `messages` override. |
+
+**Returns:** `null` when valid, a ready-to-display error string otherwise.
+
+## Why this separate toolkit exists
+
+The `field-validators` factories (`createStringValidator`, `createNumberValidator`, `createCheckboxValidator`, `createDateValidator`, `createArrayValidator`) are large, configuration-driven validators meant for "I want a thorough, opinionated check with good default messages and many tunable options" scenarios — closer in spirit to a schema-validation library's per-field rule set than to composing several small `ValidationRule`s by hand. They're independent of form state entirely (no `values`/`path` access) so they can be unit-tested and reused completely outside any form context.
+
+## Basic usage (the bridge into a form's `validate`)
+
+```typescript
+import { useForm, createStringValidator, toValidationRule } from '@headlesskit/forms-react';
+
+const usernameValidator = createStringValidator({ minLength: 3, maxLength: 20 });
+
+const form = useForm({
+  initialValues: { username: '' },
+  validate: { username: toValidationRule(usernameValidator, 'Username') },
+});
+```
+
+See [toValidationRule](./07-to-rule) for the full adapter and its automatic field-name humanization.
+
+## Common pitfalls
+
+- **Don't pass a `FieldValidatorFunction` directly as a form rule** — its signature (`(value, fieldName)`) is incompatible with `ValidationRule`'s (`(value, values, path)`); a form would call it with `values` where it expects `fieldName`, producing nonsensical error message interpolation. Always go through [toValidationRule](./07-to-rule).

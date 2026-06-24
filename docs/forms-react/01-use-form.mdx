@@ -1,11 +1,85 @@
 # useForm
 
-The primary hook that creates and manages form state. It bridges the framework-agnostic
-store from `@headlesskit/forms` to React's rendering model via `useSyncExternalStore` —
-the exact same hook works for React Native through `@headlesskit/forms-react-native`,
-which re-exports it unchanged.
+**File:** `src/hooks/use-form.ts`
 
----
+The primary hook — bridges the framework-agnostic store from [`@headlesskit/forms`](../../forms/store/01-create-form-store) to React's rendering model via `useSyncExternalStore`. The exact same hook works unchanged for React Native through `@headlesskit/forms-react-native`, which re-exports it directly.
+
+## Signature
+
+```typescript
+function useForm<Values = Record<string, unknown>, TransformedValues = Values, TError = ReactNode>(
+  options?: UseFormOptions<Values, TransformedValues, TError>,
+): UseFormReturnType<Values, TransformedValues, TError>
+```
+
+Accepts the exact same `UseFormOptions` as [createFormStore](../../forms/store/01-create-form-store) — see that doc and [store.types](../../forms/types/01-store-types) for the full options table. Two React-specific defaults differ from core:
+
+| | Core (`createFormStore`) default | `useForm` default |
+|---|---|---|
+| `mode` | `'controlled'` | **`'uncontrolled'`** — best performance is the recommended default for React. |
+| `TError` | `unknown` | **`ReactNode`** — lets you return JSX directly as an error value (e.g. `<span className="hint">Required</span>`). |
+
+## How it actually works
+
+```typescript
+const storeRef = useRef<FormStoreApi<Values, TransformedValues, TError> | null>(null);
+if (storeRef.current === null) {
+  storeRef.current = createFormStore<Values, TransformedValues, TError>({
+    mode: 'uncontrolled',
+    ...options,
+  });
+}
+const store = storeRef.current;
+```
+
+The store is created **exactly once** per component instance (the classic `useRef` lazy-init pattern — not `useState`, since there's no need to ever trigger a re-render from *changing* the ref itself) and never recreated across re-renders, regardless of how `options` changes between renders. This means: **`options` is only read on the very first render** — passing a new `initialValues` object on a later render has no effect on the already-created store. If you need to react to changing options later, use the form's own imperative methods (`setValues`, `setInitialValues`, etc.) rather than expecting prop changes to flow through automatically.
+
+```typescript
+const snapshot = useSyncExternalStore(
+  useCallback((onStoreChange) => store.subscribe(onStoreChange), [store]),
+  () => store.getSnapshot(),
+  () => store.getServerSnapshot(),
+);
+```
+
+This is the entire React-reactivity bridge: `useSyncExternalStore` re-renders the component whenever `store.subscribe`'s callback fires (i.e. whenever [createFormStore](../../forms/store/01-create-form-store)'s `notifySubscribers()` runs) and reads the current `snapshot` (errors/touched/dirty/validating/submitting/etc — see [FormStoreSnapshot](../../forms/types/01-store-types)) on every render. The `getServerSnapshot` argument makes this hook safe to call during SSR/RSC rendering, where `getSnapshot`/`getServerSnapshot` must return the same stable reference (the underlying store guarantees this — see [createFormStore](../../forms/store/01-create-form-store)'s subscription contract).
+
+## The returned object is a snapshot/store hybrid, not the store itself
+
+```typescript
+return {
+  ...store,
+  errors: snapshot.errors,
+  validating: snapshot.validating,
+  submitting: snapshot.submitting,
+  initialized: snapshot.initialized,
+  get values() { return store.getValues(); },
+  setFieldValue: store.setFieldValue.bind(store),
+  // ...every other method bound to `store`
+  key: (path) => `${snapshot.formKey}-${path}-${snapshot.fieldKeys[path] ?? 0}`,
+  // ...
+};
+```
+
+Every render builds a **fresh plain object**, but:
+- **Reactive fields** (`errors`, `validating`, `submitting`, `initialized`) are read straight from the current `snapshot` — these are exactly the fields that change identity/value when `useSyncExternalStore` triggers a re-render, so reading them from `snapshot` (rather than calling a store getter) ensures the returned object's values are consistent with *this specific render*.
+- **`values`** is a getter that calls `store.getValues()` live — **not** snapshot-derived, since values are deliberately excluded from the observable snapshot (see [createFormStore](../../forms/store/01-create-form-store)). In uncontrolled mode this means `form.values` read during render reflects the latest *committed* value, but reading it doesn't subscribe you to future value changes the way reading `form.errors` does.
+- **Every mutating/query method** (`setFieldValue`, `validate`, `getInputProps`, etc.) is just `store.<method>.bind(store)` — a stable reference to the underlying store's own implementation, doing no extra work in the React layer.
+- **`key(path)`** is the one method *not* delegated directly — it's reimplemented inline, reading `formKey`/`fieldKeys` from the **current snapshot** rather than calling `store.key()` (which reads the store's live internal state directly). This matters because `key()`'s whole purpose is to drive a React `key` prop, which only causes a remount when its *returned string* changes between renders — reading from the snapshot guarantees the string is computed consistently with the render that's currently happening, in lock-step with `useSyncExternalStore`'s contract.
+
+## `UseFormReturnType<Values, TransformedValues, TError>`
+
+```typescript
+type UseFormReturnType<Values, TransformedValues = Values, TError = ReactNode> =
+  Omit<FormStoreApi<Values, TransformedValues, TError>, 'onSubmit'> & {
+    onSubmit(
+      onValid: (values: TransformedValues, event: FormEvent<HTMLFormElement> | undefined) => void | Promise<void>,
+      onInvalid?: (errors: FormErrors<TError>, values: Values, event: FormEvent<HTMLFormElement> | undefined) => void,
+    ): FormEventHandler<HTMLFormElement>;
+  };
+```
+
+Identical to [FormStoreApi](../../forms/types/01-store-types) except `onSubmit` is re-typed for React specifically: the returned handler is a `FormEventHandler<HTMLFormElement>` (React's exact event-handler type for `<form onSubmit>`), and the callbacks receive React's synthetic `FormEvent` rather than the generic DOM `Event` core's type declares — at runtime this is the same object React actually passes, just typed precisely for React consumers.
 
 ## Basic usage
 
@@ -14,247 +88,14 @@ import { useForm } from '@headlesskit/forms-react';
 
 const form = useForm({
   mode: 'uncontrolled',
-  initialValues: {
-    name: '',
-    email: '',
-  },
+  initialValues: { name: '', email: '' },
 });
 ```
 
-`useForm` is a thin reactive wrapper around `createFormStore` from `@headlesskit/forms` — the
-same store, the same API, just bridged into React's render cycle. Reach for `createFormStore`
-directly only if you're building your own framework adapter or working outside any UI framework.
-
----
-
-## Options
-
-`useForm` accepts the same `UseFormOptions` object as `createFormStore`:
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `mode` | `'controlled' \| 'uncontrolled'` | `'controlled'` | Controls when value changes trigger re-renders. Use `'uncontrolled'` for best performance. |
-| `initialValues` | `Partial<Values>` | `{}` | The starting values for the form. |
-| `initialErrors` | `FormErrors` | `{}` | Errors to show immediately on mount. |
-| `initialTouched` | `Record<string, boolean>` | `{}` | Fields to mark as touched on mount. |
-| `initialDirty` | `Record<string, boolean>` | `{}` | Fields to mark as dirty on mount. |
-| `validate` | `FormValidateInput` | — | Validation rules object or a whole-form validator function. |
-| `validateInputOnChange` | `boolean \| string[]` | `false` | Validate field(s) on every change. |
-| `validateInputOnBlur` | `boolean \| string[]` | `false` | Validate field(s) on blur. |
-| `validateDebounce` | `number` | `0` | Milliseconds to debounce per-field validation triggered by change/blur. |
-| `clearInputErrorOnChange` | `boolean` | `true` | Clear field error when its value changes. |
-| `onValuesChange` | `(values, previous) => void` | — | Called on every value change. |
-| `transformValues` | `(values) => TransformedValues` | — | Transform values before `onSubmit` delivers them. |
-| `enhanceGetInputProps` | `(payload) => Partial<InputProps>` | — | Add extra props to all `getInputProps` results. |
-| `onSubmitPreventDefault` | `'always' \| 'never' \| 'validation-failed'` | `'always'` | Controls when `event.preventDefault()` is called. |
-| `touchTrigger` | `'change' \| 'focus'` | `'change'` | Which interaction marks a field as touched. |
-| `cascadeUpdates` | `boolean` | `false` | Notify `watch` subscribers on ancestor paths. |
-| `name` | `string` | — | Register form in global registry for `createFormActions`. |
-| `resolveValidationError` | `(error: unknown) => TError` | — | Maps thrown async errors to the error type. |
-
----
-
-## Return Value (UseFormReturnType / FormApi)
-
-### Values
-
-```typescript
-// Current form values (reactive in controlled mode, stable ref in uncontrolled)
-form.values
-
-// Always returns the latest values regardless of mode
-form.getValues()
-
-// Returns current initial-values snapshot (used for dirty comparisons)
-form.getInitialValues()
-
-// Set initial values (does not change current values)
-form.setInitialValues({ name: 'Jane' })
-
-// Initialize once: sets both values and initialValues; idempotent
-form.initialize({ name: 'John', email: 'john@example.com' })
-
-// true after initialize() has been called
-form.initialized
-
-// Merge partial values into current values
-form.setValues({ name: 'Jane' })
-form.setValues((current) => ({ ...current, name: current.name.toUpperCase() }))
-
-// Set a single field value
-form.setFieldValue('name', 'Jane')
-form.setFieldValue('name', (current) => current + '!')
-
-// Reset a single field to its initial value
-form.resetField('name')
-
-// Reset entire form (values, errors, touched, dirty, validating)
-form.reset()
-```
-
-### Errors
-
-```typescript
-// Current errors object
-form.errors // { 'user.email': 'Invalid email' }
-
-// Replace all errors
-form.setErrors({ name: 'Too short', email: 'Invalid' })
-
-// Set a single field error
-form.setFieldError('email', 'Invalid email')
-
-// Clear all errors
-form.clearErrors()
-
-// Clear a single field error
-form.clearFieldError('email')
-```
-
-### Validation
-
-```typescript
-// Validate all fields — returns sync result or Promise
-const result = form.validate()
-// result: { hasErrors: boolean, errors: FormErrors }
-
-// Validate a single field
-const fieldResult = form.validateField('email')
-// fieldResult: { hasError: boolean, error: TError | null }
-
-// Check validity without setting errors
-form.isValid()         // true | false | Promise<boolean>
-form.isValid('email')  // check single field
-
-// true while any async validation is pending
-form.validating
-
-// true if a specific field is validating asynchronously
-form.isValidating('email')
-```
-
-### Submission
-
-```typescript
-// onSubmit returns an event handler for <form onSubmit>
-// (on React Native, use getSubmitHandler from @headlesskit/forms-react-native instead —
-// it returns a zero-argument function suitable for <Button onPress>)
-const handleSubmit = form.onSubmit(
-  // Called with transformed values when valid
-  (values, event) => {
-    console.log(values);
-  },
-  // Optional: called with errors when invalid
-  (errors, values, event) => {
-    console.error(errors);
-  }
-);
-
-// true while an async onSubmit handler is pending
-form.submitting
-
-// Manually control submitting state
-form.setSubmitting(true)
-form.setSubmitting(false)
-
-// onReset: prevents default and calls form.reset()
-<form onReset={form.onReset}>
-```
-
-### Input Props
-
-```typescript
-// Returns props to spread onto an input element
-form.getInputProps('name')
-// -> { value, onChange, onFocus, onBlur, error, 'data-path': 'name' }
-
-// Uncontrolled mode returns defaultValue instead of value
-form.getInputProps('name')
-// -> { defaultValue, onChange, onFocus, onBlur, error, 'data-path': 'name' }
-
-// For checkboxes
-form.getInputProps('active', { type: 'checkbox' })
-// -> { checked, onChange, ... }
-
-// For radio inputs
-form.getInputProps('color', { type: 'radio', value: 'red' })
-// -> { checked: color === 'red', value: 'red', onChange, ... }
-
-// Get DOM node (SSR-safe, returns null on server)
-form.getInputNode('email') // HTMLElement | null
-
-// Stable key for uncontrolled remounting
-form.key('name') // string
-```
-
-### Status
-
-```typescript
-// Is a field (or any field) touched?
-form.isTouched('name')  // boolean
-form.isTouched()        // any field touched?
-
-// Is a field (or any field) dirty?
-form.isDirty('name')    // boolean
-form.isDirty()          // any field dirty?
-
-// Read full records
-form.getTouched()  // { name: true, ... }
-form.getDirty()    // { email: true, ... }
-
-// Set full records
-form.setTouched({ name: true })
-form.setDirty({ email: true })
-
-// Reset touched / dirty
-form.resetTouched()
-form.resetDirty()
-form.resetDirty({ name: 'John' }) // update dirty baseline
-```
-
-### Lists
-
-```typescript
-// Append to a list (or insert at index)
-form.insertListItem('users', { name: '', email: '' })
-form.insertListItem('users', { name: '', email: '' }, 0) // insert at index 0
-
-// Remove from a list
-form.removeListItem('users', 0)
-
-// Replace a list item
-form.replaceListItem('users', 0, { name: 'Jane', email: 'jane@example.com' })
-
-// Reorder list items
-form.reorderListItem('users', { from: 0, to: 2 })
-```
-
-### Watch
-
-```typescript
-// Watch a field for changes
-const unsubscribe = form.watch('email', ({ value, previousValue, touched, dirty }) => {
-  console.log('Email changed from', previousValue, 'to', value);
-});
-
-// Unsubscribe later
-unsubscribe();
-```
-
-### Transform
-
-```typescript
-// Apply transformValues to current values
-form.getTransformedValues()
-```
-
----
-
-## Full Example
+## Full example
 
 ```tsx
-import { useForm } from '@headlesskit/forms-react';
-import { isEmail, isNotEmpty, hasLength } from '@headlesskit/forms-react';
+import { useForm, isEmail, isNotEmpty, hasLength } from '@headlesskit/forms-react';
 
 interface FormValues {
   name: string;
@@ -266,22 +107,14 @@ interface FormValues {
 function RegistrationForm() {
   const form = useForm<FormValues>({
     mode: 'uncontrolled',
-    initialValues: {
-      name: '',
-      email: '',
-      password: '',
-      age: 18,
-    },
+    initialValues: { name: '', email: '', password: '', age: 18 },
     validate: {
       name: isNotEmpty('Name is required'),
       email: isEmail('Invalid email'),
       password: hasLength({ min: 8 }, 'Password must be at least 8 characters'),
-      age: (value) => value < 18 ? 'Must be 18 or older' : null,
+      age: (value) => (value < 18 ? 'Must be 18 or older' : null),
     },
-    transformValues: (values) => ({
-      ...values,
-      name: values.name.trim(),
-    }),
+    transformValues: (values) => ({ ...values, name: values.name.trim() }),
   });
 
   return (
@@ -292,12 +125,6 @@ function RegistrationForm() {
       <input key={form.key('email')} {...form.getInputProps('email')} type="email" placeholder="Email" />
       {form.errors.email && <p>{form.errors.email}</p>}
 
-      <input key={form.key('password')} {...form.getInputProps('password')} type="password" placeholder="Password" />
-      {form.errors.password && <p>{form.errors.password}</p>}
-
-      <input key={form.key('age')} {...form.getInputProps('age')} type="number" />
-      {form.errors.age && <p>{form.errors.age}</p>}
-
       <button type="submit" disabled={form.submitting}>
         {form.submitting ? 'Submitting...' : 'Register'}
       </button>
@@ -306,22 +133,17 @@ function RegistrationForm() {
 }
 ```
 
-## TypeScript: UseFormReturnType
+## Advanced: reading the form's transformed-values type elsewhere
 
 ```typescript
-import type { UseFormReturnType } from '@headlesskit/forms-react';
+import type { UseFormReturnType, TransformedValues } from '@headlesskit/forms-react';
 
-// Full type with all generics
-type MyForm = UseFormReturnType<
-  FormValues,        // Values type
-  TransformedValues, // Transformed values (defaults to Values)
-  string             // Error type (defaults to unknown)
->;
-
-// Get the type of form.values
-type Values = MyForm['values'];
-
-// Get the type of errors
-type Errors = MyForm['errors'];
+type MyForm = UseFormReturnType<FormValues, { name: string; email: string; fullName: string }, string>;
+type Output = TransformedValues<MyForm>; // { name: string; email: string; fullName: string }
 ```
 
+## Common pitfalls
+
+- **`options` is only consumed on the first render** — re-rendering a component with `useForm({ initialValues: newValues })` where `newValues` differs from the previous render does **not** update the form; the store was already created. Use `form.setValues(newValues)` or `form.setInitialValues(newValues)` explicitly when you need to react to changed props after mount.
+- **Always pair an uncontrolled-mode input with `key={form.key(path)}`** — see [field-keys](../../forms/store/02-field-keys) for why; forgetting it means programmatic `setFieldValue` calls silently fail to update what's displayed.
+- **`form.values` is not what re-renders the component in uncontrolled mode** — only `errors`/`touched`/`dirty`/`validating`/`submitting`/`initialized`/the field keys do, since those are the snapshot fields `useSyncExternalStore` actually subscribes to; reading `form.values` inside a render doesn't cause future value changes to re-trigger that render the way reading `form.errors` does.

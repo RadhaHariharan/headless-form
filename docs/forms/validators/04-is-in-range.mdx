@@ -1,0 +1,51 @@
+# isInRange
+
+**File:** `src/validators/is-in-range.ts`
+
+## Signature
+
+```typescript
+function isInRange<TError = string>(
+  spec: IsInRangeSpec,
+  error?: TError,
+): ValidationRule<unknown, unknown, TError>
+
+interface IsInRangeSpec {
+  min?: number; // inclusive
+  max?: number; // inclusive
+}
+```
+
+## Behavior
+
+Requires the value to be a `number` (not a numeric string — no coercion happens here, unlike [createNumberValidator](../field-validators/03-number-validator)) and, if numeric, within `[min, max]` inclusive (either bound optional). `NaN` always fails.
+
+```typescript
+isInRange({ min: 0, max: 120 }, 'Age must be 0–120')(45, {}, 'age');  // null
+isInRange({ min: 0, max: 120 }, 'Age must be 0–120')(-5, {}, 'age');  // error
+isInRange({ min: 0 })('45', {}, 'age'); // error — string, not a number; no coercion
+```
+
+## Basic usage
+
+```typescript
+import { useForm, isInRange } from '@headlesskit/forms-react';
+
+const form = useForm({
+  initialValues: { age: 0 },
+  validate: { age: isInRange({ min: 0, max: 120 }, 'Age must be 0–120') },
+});
+```
+
+## Advanced: a one-sided range
+
+```typescript
+validate: {
+  quantity: isInRange({ min: 1 }, 'Must be at least 1'), // no upper bound
+}
+```
+
+## Common pitfalls
+
+- **Calling `isInRange(spec)` with no `error` argument never reports a failure** — the same shared root cause: `error ?? null` resolves to `null` (valid). Always pass an explicit error.
+- **A numeric-string value (e.g. from an uncontrolled `<input type="number">` whose `value`/`defaultValue` round-trips as a string) fails unconditionally**, since `isInRange` requires `typeof value === 'number'` with no coercion — if your field stores numbers as strings (common with native number inputs before any transform step), either coerce with `transformValues`/a `prepare`-style step before validation, or use [createNumberValidator](../field-validators/03-number-validator) instead, which explicitly accepts and coerces numeric strings.

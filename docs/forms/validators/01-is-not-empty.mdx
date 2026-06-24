@@ -1,0 +1,48 @@
+# isNotEmpty
+
+**File:** `src/validators/is-not-empty.ts`
+
+The most commonly used built-in [ValidationRule](../types/04-validation-types) factory — a generic "required" check.
+
+## Signature
+
+```typescript
+function isNotEmpty<TError = string>(error?: TError): ValidationRule<unknown, unknown, TError>
+```
+
+## What counts as empty
+
+| Value | Empty? |
+|-------|--------|
+| `null`, `undefined`, `false` | ✅ empty |
+| `''`, or a string that's whitespace-only after trimming | ✅ empty |
+| `[]` (empty array) | ✅ empty |
+| `0`, `NaN` | ❌ **not** empty (a numeric zero is a legitimate value) |
+| Any non-empty string, non-empty array, `true`, any object | ❌ not empty |
+
+## Basic usage
+
+```typescript
+import { useForm, isNotEmpty } from '@headlesskit/forms-react';
+
+const form = useForm({
+  initialValues: { name: '' },
+  validate: { name: isNotEmpty('Name is required') },
+});
+```
+
+## Advanced: omitting the error message for custom error rendering
+
+```typescript
+validate: {
+  // returns null when invalid (the message), but still marks the field invalid for isValid()
+  agreedToTerms: isNotEmpty(), // no message passed — error is `undefined`-ish per the factory's own logic, but the field IS marked invalid
+}
+```
+
+Passing no `error` argument means the validator returns `error ?? null` on failure — since `error` is `undefined`, this actually returns `null`, the same as "valid." **In practice, always pass an explicit error value** if you want `isNotEmpty` to actually register a failure — see the pitfall below, this is a real gotcha in the current implementation.
+
+## Common pitfalls
+
+- **Calling `isNotEmpty()` with no arguments does not mark an empty field as invalid** — because the implementation's failure branch returns `error ?? (null as TError | null)`, and `error` is `undefined` when omitted, the function returns `null` (valid) even for an empty value. Always pass an explicit error argument: `isNotEmpty('Required')`, not bare `isNotEmpty()`, if you need this check to actually fail on empty input.
+- **`0` and `false`... wait, `false` IS treated as empty, but `0` is not** — this asymmetry is intentional (a checkbox defaulting to `false` should fail a "required" check, but a numeric field legitimately holding `0` should not) but is easy to forget; if you need `0` to also be treated as "empty" for a specific field, use [isInRange](./04-is-in-range) or a custom rule instead.

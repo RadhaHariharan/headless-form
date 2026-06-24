@@ -1,0 +1,85 @@
+# createFormStore
+
+**File:** `src/store/create-form-store.ts` — the engine every framework wrapper (`useForm` in [forms-react](../../forms-react/01-use-form)) builds on.
+
+A framework-agnostic form store: holds all form state (values, errors, touched, dirty, validating, submitting) behind a closure, and exposes a `subscribe`/`getSnapshot` pair so any reactivity model (React's `useSyncExternalStore`, Angular signals, plain vanilla JS) can bridge it to its own re-render mechanism.
+
+## Signature
+
+```typescript
+function createFormStore<Values, TransformedValues = Values, TError = unknown>(
+  options?: UseFormOptions<Values, TransformedValues, TError>,
+): FormStoreApi<Values, TransformedValues, TError>
+```
+
+See [store.types](../types/01-store-types) for the full `UseFormOptions`/`FormStoreApi` shape. The most consequential option is `mode` (`'controlled'` default here; [forms-react](../../forms-react/01-use-form)'s `useForm` flips the *wrapper's* default to `'uncontrolled'`).
+
+## Internal state model
+
+| Variable | Purpose |
+|----------|---------|
+| `refValues` | The single source of truth for form values — always up to date, regardless of mode. |
+| `refInitialValues` | The "clean" baseline `isDirty`/`resetField`/`reset` compare against. |
+| `errors` / `touched` / `dirty` / `fieldValidating` | Flat `Record<path, value>` maps, keyed by dot-notation path. |
+| `formKey` | Bumped on every `reset()` — part of every field's `key()` string, forcing **all** uncontrolled inputs to remount on reset. |
+| `fieldKeys` | Per-path counters, bumped only on a *programmatic* `setFieldValue` (not on typing) — see [field-keys](./02-field-keys). |
+| `validationGeneration` | A counter incremented at the start of every validation run; in-flight async validation whose generation no longer matches the current one discards its result instead of writing stale errors. |
+| `subscribers` / `snapshotCache` | The subscriber-pattern plumbing — see "The subscription contract" below. |
+
+## Controlled vs. uncontrolled: what actually differs
+
+Both modes keep `refValues` as the always-current source of truth. The difference is entirely in `setFieldValueInternal`'s notification logic:
+
+```typescript
+const shouldNotify = mode === 'controlled' || forceUpdate || errorWasCleared;
+if (shouldNotify) notifySubscribers();
+```
+
+- **Controlled**: every value change notifies subscribers → the UI re-renders on every keystroke.
+- **Uncontrolled**: typing (`forceUpdate: false`, what `getInputProps().onChange` passes) does **not** notify subscribers — unless it happened to clear a field error, since the error display still needs to update. Programmatic `setFieldValue` calls (`forceUpdate: true`, the default) always notify, since there's no DOM input keystroke already reflecting the new value.
+
+This is *why* uncontrolled mode achieves zero re-renders while typing: the actual DOM input is uncontrolled (`defaultValue`, not `value`), so the browser handles keystrokes natively, and the store simply never tells React/Angular anything changed unless something *else* (an error, a touched flag) needs to be reflected.
+
+## The subscription contract (`subscribe`, `getSnapshot`, `getServerSnapshot`)
+
+```typescript
+subscribe(callback: () => void): () => void
+getSnapshot(): FormStoreSnapshot<TError>
+getServerSnapshot(): FormStoreSnapshot<TError>
+```
+
+`getSnapshot()` and `getServerSnapshot()` **must return the same cached object reference** as long as nothing has changed — `notifySubscribers()` invalidates the cache (`snapshotCache = null`) precisely once per actual state change, and both methods lazily rebuild from the same `buildSnapshot()` if the cache is empty. This contract exists specifically because React's `useSyncExternalStore` treats a new object identity returned from `getSnapshot`/`getServerSnapshot` as "the store changed," and will infinite-loop if a fresh object is returned on every render even though nothing logically changed.
+
+`FormStoreSnapshot` deliberately excludes `values` — only `errors`/`touched`/`dirty`/`validating`/`fieldValidating`/`submitting`/`initialized`/`fieldKeys`/`formKey` are part of the observable snapshot. Values are read straight from `refValues` (always current), not from the snapshot, which is why controlled mode's `values` getter and uncontrolled mode's `getValues()` both just return `refValues` directly rather than anything snapshot-derived.
+
+## Validation engine: rules object vs. whole-form function
+
+`validate` (see [validation.types](../types/04-validation-types)) accepts either shape, and `createFormStore` branches on `typeof validateOption === 'function'` everywhere validation runs (`runValidateAll`, `runValidateField`, `isValid`):
+
+- **Function form**: called once with the full `values`, expected to return a `FormErrors<TError>` (or a `Promise` of one).
+- **Rules object form**: `walkRules`/`walkForValid` recursively traverse the object, building each rule's full dot-notation path as they go, and invoke each rule function as `rule(value, values, path)`.
+
+Both per-field (`validateField`) and whole-form (`validate`) validation share the same `validationGeneration` guard: starting a new validation run increments the counter, and any in-flight async rule whose captured generation no longer matches the current one discards its result rather than writing it into `errors` — this is what makes a slow, stale validation request never able to overwrite the result of validation that started *after* it.
+
+## `getInputProps` — building the spreadable prop object
+
+See [input-props.types](../types/02-input-props-types) for the full options/result shape. Internally, `getInputProps`:
+
+1. Always sets `data-path` (via [getDataPath](../utils/03-get-data-path)) and a normalized `onChange` (via [getInputOnChange](../utils/04-get-input-on-change)) that calls `setFieldValueInternal(path, value, { forceUpdate: false })` — the `forceUpdate: false` here is exactly what keeps typing silent in uncontrolled mode.
+2. Branches on `type` (`'input' | 'checkbox' | 'radio'`) to decide between `value`/`checked` (controlled) and `defaultValue`/`defaultChecked` (uncontrolled).
+3. Conditionally adds `error` (`withError`), and `onFocus`/`onBlur` (`withFocus`) — `onBlur` is where `validateInputOnBlur` actually triggers (including its debounce).
+4. Runs `enhanceGetInputProps` last, merging its return value onto the result — letting `UseFormOptions.enhanceGetInputProps` add arbitrary extra props globally (e.g. `aria-invalid` whenever `error` is present).
+
+## `onSubmit` — the generated submit handler
+
+```typescript
+onSubmit(onValid, onInvalid?): (event: Event) => void
+```
+
+Returns a handler that: calls `event.preventDefault()` per `onSubmitPreventDefault`'s policy, runs `validate()`, then either calls `onInvalid(errors, values, event)` (re-checking `preventDefault` for the `'validation-failed'` policy specifically, since by the time validation resolves the answer may differ from the pre-validation check) or calls `onValid(transformedValues, event)` — tracking `submitting` around an async `onValid` automatically.
+
+## Common pitfalls
+
+- **`forceUpdate: false` is the uncontrolled-mode "stay silent" signal** — only `getInputProps`'s own `onChange` uses it internally; any direct `setFieldValue` call you make yourself defaults to `forceUpdate: true` (notify + bump the field key), which is correct for programmatic updates but means calling `setFieldValue` in a tight loop (e.g. from a `watch` handler) can still cause the input bound to that path to remount.
+- **The error-cleared exception to "uncontrolled mode doesn't notify on typing"** is easy to miss when reasoning about render counts — if `clearInputErrorOnChange` is `true` (the default) and a field has an active error, the *very next* keystroke after that error appears *will* trigger one extra notification, to clear the error display; this is intentional, not a leak.
+- **`isDirty(path)` checks the explicit `dirty` record before falling back to a live comparison** — once a path has *any* entry in the `dirty` record (even `false`), that explicit value wins over a fresh `computeIsDirty` call; this matters after `resetField`/`resetDirty`, which intentionally remove the explicit entry so the next check recomputes from scratch.

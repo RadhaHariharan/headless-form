@@ -1,0 +1,42 @@
+# shouldValidateOnChange
+
+**File:** `src/utils/should-validate-on-change.ts`
+
+The single predicate behind both `validateInputOnChange` and `validateInputOnBlur` (the same function is reused for both options in [createFormStore](../store/01-create-form-store) — the option name passed in differs, but the matching logic is identical).
+
+## Signature
+
+```typescript
+function shouldValidateOnChange(option: boolean | string[] | undefined, path: string): boolean
+```
+
+| `option` | Result |
+|----------|--------|
+| `true` | Always `true` — validate every field. |
+| `false` / `undefined` | Always `false` — never auto-validate on this trigger. |
+| `string[]` | `true` only if `path` is included in the array — validate just these specific fields. |
+
+```typescript
+shouldValidateOnChange(true, 'email');          // true
+shouldValidateOnChange(false, 'email');         // false
+shouldValidateOnChange(['email'], 'email');     // true
+shouldValidateOnChange(['email'], 'password');  // false
+```
+
+## Where this is used
+
+`createFormStore`'s `setFieldValueInternal` calls this with `validateInputOnChange` after every value change; `getInputProps`'s generated `onBlur` calls it with `validateInputOnBlur`. Both go through this exact same function — so the array-of-paths behavior, the `true`/`false` behavior, are guaranteed consistent between the two triggers.
+
+## Basic usage (driven entirely by form options — rarely called directly)
+
+```typescript
+const form = useForm({
+  initialValues: { email: '', bio: '' },
+  validateInputOnBlur: ['email'], // only `email` validates on blur; `bio` doesn't
+  validateInputOnChange: true,    // every field validates on every change
+});
+```
+
+## Common pitfalls
+
+- **An array containing a path that doesn't exist on the form's values is silently inert** — `shouldValidateOnChange(['emial'], 'email')` (typo in the array) returns `false` for the real `email` field and never matches anything, with no warning; this option isn't path-checked against `DeepKeys` the way the rest of the API is (it's a plain `string[]`, not generically typed against `Values`), so a typo here won't be caught by TypeScript.

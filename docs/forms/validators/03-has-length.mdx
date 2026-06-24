@@ -1,0 +1,55 @@
+# hasLength
+
+**File:** `src/validators/has-length.ts`
+
+## Signature
+
+```typescript
+function hasLength<TError = string>(
+  lengthSpec: number | HasLengthRangeSpec,
+  error?: TError,
+): ValidationRule<unknown, unknown, TError>
+
+interface HasLengthRangeSpec {
+  min?: number; // inclusive
+  max?: number; // inclusive
+}
+```
+
+## Behavior
+
+Works on **strings** (trimmed before measuring) and **arrays** (raw `.length`). Any other value type always fails. `lengthSpec` is either an exact required length (a plain `number`) or a `{ min?, max? }` range — both bounds inclusive, either omittable independently.
+
+```typescript
+hasLength(4, 'Must be exactly 4 characters')('1234', {}, 'pin'); // null — exact match
+hasLength({ min: 3, max: 20 }, 'Must be 3–20 characters')('ab', {}, 'username'); // error — too short
+```
+
+## Basic usage
+
+```typescript
+import { useForm, hasLength } from '@headlesskit/forms-react';
+
+const form = useForm({
+  initialValues: { username: '', pin: '' },
+  validate: {
+    username: hasLength({ min: 3, max: 20 }, 'Must be 3–20 characters'),
+    pin: hasLength(4, 'PIN must be exactly 4 digits'),
+  },
+});
+```
+
+## Advanced: validating an array field's size
+
+```typescript
+validate: {
+  selectedTags: hasLength({ min: 1, max: 5 }, 'Select between 1 and 5 tags'),
+}
+```
+
+Since `hasLength` checks `Array.isArray(value)` before falling back to string-length logic, the same factory works for both string fields and array/list fields without any extra configuration.
+
+## Common pitfalls
+
+- **Calling `hasLength(n)` with no `error` argument never reports a failure** — same root issue shared by every validator in this folder: `error ?? null` resolves to `null` (valid) when `error` is omitted, regardless of whether the length check actually passed. Always pass an explicit error.
+- **Non-string, non-array values (objects, numbers, booleans) always fail**, even a number that could meaningfully have a "length" in some other sense (e.g. digit count) — `hasLength` has no special numeric handling; for digit-count checks on a numeric field, convert to a string first in a custom rule, or use [createNumberValidator](../field-validators/03-number-validator)'s `precision`/`min`/`max` options instead.

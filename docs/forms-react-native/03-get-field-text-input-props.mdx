@@ -1,0 +1,77 @@
+# getFieldTextInputProps
+
+**File:** `src/input-props/get-field-text-input-props.ts`
+
+The [useField](../../forms-react/02-use-field) counterpart to [getTextInputProps](./02-get-text-input-props) — same adapter, but for a standalone field rather than a full form + path.
+
+## Signature
+
+```typescript
+function getFieldTextInputProps<Value, TError>(
+  field: UseFieldReturnType<Value, TError>,
+): GetTextInputPropsResult<TError>
+```
+
+## What it actually does
+
+```typescript
+function getFieldTextInputProps(field) {
+  const { value, defaultValue, onChange, onFocus, onBlur, error } = field.getInputProps();
+  return {
+    value: value as string | undefined,
+    defaultValue: defaultValue as string | undefined,
+    onChangeText: (text) => onChange(text),
+    onFocus,
+    onBlur,
+    error,
+  };
+}
+```
+
+Identical transformation to [getTextInputProps](./02-get-text-input-props), just sourced from `field.getInputProps()` (which already has its path baked in, since [useField](../../forms-react/02-use-field) is scoped to exactly one field) instead of `form.getInputProps(path, options)`.
+
+## Basic usage
+
+```tsx
+import { useField } from '@headlesskit/forms-react-native';
+import { getFieldTextInputProps } from '@headlesskit/forms-react-native';
+import { TextInput, Text } from 'react-native';
+
+function EmailInput() {
+  const field = useField({ initialValue: '', mode: 'uncontrolled' });
+  const { error, ...inputProps } = getFieldTextInputProps(field);
+
+  return (
+    <>
+      <TextInput key={field.key} {...inputProps} />
+      {error && <Text>{error}</Text>}
+    </>
+  );
+}
+```
+
+## Advanced: a reusable validated text input component for React Native
+
+```tsx
+function ValidatedTextInput({ initialValue, validate, label }: {
+  initialValue: string;
+  validate: (v: string) => string | null;
+  label: string;
+}) {
+  const field = useField({ initialValue, validate, validateOnBlur: true, mode: 'uncontrolled' });
+  const { error, ...inputProps } = getFieldTextInputProps(field);
+
+  return (
+    <View>
+      <Text>{label}</Text>
+      <TextInput key={field.key} {...inputProps} />
+      {field.isTouched && error && <Text style={{ color: 'red' }}>{error}</Text>}
+    </View>
+  );
+}
+```
+
+## Common pitfalls
+
+- **Same `error`-isn't-a-real-prop caveat as [getTextInputProps](./02-get-text-input-props)** — always destructure it out before spreading the rest onto `<TextInput>`.
+- **`useField`'s `mode` defaults to `'controlled'`** (see [useField](../../forms-react/02-use-field)) — pass `mode: 'uncontrolled'` explicitly if you want zero re-renders while typing, the same way you would on the web.

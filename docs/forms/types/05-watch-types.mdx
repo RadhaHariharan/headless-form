@@ -1,0 +1,66 @@
+# watch.types
+
+**File:** `src/types/watch.types.ts`
+
+Types for `form.watch(path, handler)` — see [watch-registry](../store/04-watch-registry) for the runtime mechanism.
+
+## `WatchPayload<Value>`
+
+```typescript
+interface WatchPayload<Value> {
+  previousValue: Value;
+  value: Value;
+  touched: boolean;
+  dirty: boolean;
+}
+```
+
+| Field | Description |
+|-------|--------------|
+| `previousValue` | The field's value immediately before this change. |
+| `value` | The field's value immediately after this change. |
+| `touched` | Whether the field is touched *as of this change* (reflects `touchTrigger`'s effect, if any, from this same update). |
+| `dirty` | Whether the field is currently dirty (differs from its initial value). |
+
+## `WatchHandler<Value>`
+
+```typescript
+type WatchHandler<Value> = (payload: WatchPayload<Value>) => void;
+```
+
+The callback shape `form.watch` accepts — note it has **no return value contract** (unlike a `ValidationRule`, which returns an error). A watch handler is purely a side-effecting subscriber, never part of validation or value computation itself.
+
+## `UnsubscribeWatch`
+
+```typescript
+type UnsubscribeWatch = () => void;
+```
+
+What `form.watch(...)` returns — call it to stop receiving notifications. See [watch-registry](../store/04-watch-registry)'s pitfalls for why forgetting to call this matters.
+
+## Basic usage
+
+```typescript
+const unsubscribe = form.watch('email', ({ value, previousValue, touched, dirty }) => {
+  console.log({ value, previousValue, touched, dirty });
+});
+```
+
+## Advanced: typing a generic watch-logging utility
+
+```typescript
+import type { WatchHandler } from '@headlesskit/forms';
+
+function logChanges<Value>(label: string): WatchHandler<Value> {
+  return (payload) => {
+    console.log(`[${label}]`, payload.previousValue, '→', payload.value);
+  };
+}
+
+form.watch('email', logChanges('email'));
+form.watch('age', logChanges('age'));
+```
+
+## Common pitfalls
+
+- **`WatchPayload` doesn't include the field's `path`** — if one handler is registered for multiple purposes (unlikely, since `watch` is per-path) or you've built a generic logger like the example above, the path has to be captured separately (e.g. via a closure argument, as shown) since the payload itself doesn't carry it.

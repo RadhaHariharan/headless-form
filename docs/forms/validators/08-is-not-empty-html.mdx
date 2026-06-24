@@ -1,0 +1,49 @@
+# isNotEmptyHTML
+
+**File:** `src/validators/is-not-empty-html.ts`
+
+A "required" check specifically tailored to rich-text/WYSIWYG editor output, where an "empty" editor still produces a non-empty HTML string like `<p><br></p>`.
+
+## Signature
+
+```typescript
+function isNotEmptyHTML<TError = string>(error?: TError): ValidationRule<unknown, unknown, TError>
+```
+
+## Behavior
+
+Strips all HTML tags (`/<[^>]*>/g`), then checks whether anything non-whitespace remains (`/[^\s<>]/`). A string is considered "empty HTML" when, after stripping tags, only whitespace is left.
+
+```typescript
+isNotEmptyHTML('Bio cannot be empty')('<p><br></p>', {}, 'bio');     // error — no visible content
+isNotEmptyHTML('Bio cannot be empty')('<p>Hello</p>', {}, 'bio');     // null — has content
+isNotEmptyHTML('Bio cannot be empty')('   ', {}, 'bio');                // error — whitespace-only, no tags even
+```
+
+## Basic usage
+
+```typescript
+import { useForm, isNotEmptyHTML } from '@headlesskit/forms-react';
+
+const form = useForm({
+  initialValues: { bio: '<p><br></p>' }, // a typical "empty" rich-text editor value
+  validate: { bio: isNotEmptyHTML('Bio cannot be empty') },
+});
+```
+
+## Advanced: why a plain `isNotEmpty` doesn't work for rich text
+
+```typescript
+// WRONG for rich-text fields — '<p><br></p>' is a non-empty STRING, so isNotEmpty considers it valid:
+validate: { bio: isNotEmpty('Bio cannot be empty') } // never fails, even when the editor is visually empty
+
+// RIGHT:
+validate: { bio: isNotEmptyHTML('Bio cannot be empty') }
+```
+
+This is exactly the scenario `isNotEmptyHTML` exists to solve — [isNotEmpty](./01-is-not-empty) only checks for a literal empty/whitespace string, which an "empty" rich-text editor's serialized output never actually is.
+
+## Common pitfalls
+
+- **Calling `isNotEmptyHTML()` with no `error` argument never reports a failure** — same shared root cause as every validator in this folder. Always pass an explicit error.
+- **This doesn't sanitize or validate the HTML's safety** — it only checks for visible content, not for malicious markup; if you render this field's HTML elsewhere (`dangerouslySetInnerHTML` or equivalent), sanitize it separately regardless of what this validator reports.

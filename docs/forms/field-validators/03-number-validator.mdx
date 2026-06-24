@@ -1,0 +1,70 @@
+# createNumberValidator
+
+**File:** `src/field-validators/number-validator.ts`
+
+## Signature
+
+```typescript
+function createNumberValidator(rules: NumberValidationRule): FieldValidatorFunction<unknown>
+```
+
+## `NumberValidationRule` — full options table
+
+| Option | Type | Check |
+|--------|------|-------|
+| `required` | `boolean` (default `true`) | Fails on `null`/`undefined`/`''`. |
+| `min` / `max` | `number` | Inclusive range. |
+| `integer` | `boolean` | Rejects fractional values. |
+| `positive` / `negative` | `boolean` | Strictly `> 0` / `< 0`. |
+| `multipleOf` | `number` | Value must be evenly divisible. |
+| `precision` | `number` | Max decimal places. |
+| `forbiddenValues` | `number[]` | Explicit blacklist. |
+| `customValidation` | `(value: number) => string \| null` | Runs last. |
+| `messages` | per-check overrides | — |
+
+**Validation order:** required → coerce/parse → type (NaN check) → min/max → integer → sign → multipleOf → precision → forbiddenValues → custom.
+
+## Coercion behavior — the key difference from `isInRange`
+
+Unlike [isInRange](../validators/04-is-in-range) (which requires a real `number` with no coercion), `createNumberValidator` accepts **numeric strings** and parses them with `parseFloat`:
+
+```typescript
+const age = createNumberValidator({ min: 0, max: 120, integer: true });
+age(25, 'Age');     // null
+age('25', 'Age');    // null — string coerced via parseFloat
+age(-5, 'Age');      // "Age must be at least 0"
+age('abc', 'Age');   // "Age must be a valid number"
+```
+
+An empty string is treated as "missing" for the `required` check (not as `NaN`), so `required: false` with an empty string passes cleanly rather than hitting the NaN branch.
+
+## Basic usage
+
+```typescript
+import { createNumberValidator } from '@headlesskit/forms-react';
+
+const quantity = createNumberValidator({ min: 1, integer: true, positive: true });
+quantity(3, 'Quantity');    // null
+quantity(0, 'Quantity');    // "Quantity must be at least 1"
+quantity(2.5, 'Quantity');  // "Quantity must be a whole number"
+```
+
+## Advanced: a currency field with precision and multiple-of constraints
+
+```typescript
+const price = createNumberValidator({
+  min: 0,
+  precision: 2,        // at most 2 decimal places
+  multipleOf: 0.01,     // must be a valid cent amount
+  messages: { precision: '{fieldName} can have at most 2 decimal places' },
+});
+
+price(19.999, 'Price'); // fails — 3 decimal places
+price(19.99, 'Price');   // null
+```
+
+## Common pitfalls
+
+- **`precision`'s decimal-place count is computed from `numValue.toString()`**, which means values affected by floating-point representation quirks (e.g. `0.1 + 0.2` → `0.30000000000000004`) can fail a `precision` check unexpectedly if you're computing the value via floating-point arithmetic rather than receiving it directly from user input — round explicitly before validating if this is a risk for your field.
+- **`multipleOf` uses `%`, which has known floating-point edge cases** (e.g. `0.3 % 0.1` is not exactly `0` due to binary floating-point representation) — for currency-precision `multipleOf` checks, consider validating against integer cents instead of fractional dollars to avoid floating-point surprises.
+- **An empty string with `required: false` returns `null` immediately**, bypassing every other check (`min`, `integer`, etc.) entirely — this is intentional ("nothing to validate yet"), but means a field configured with `required: false` and, say, `min: 10` will accept an empty value even though `0` (a parsed empty string, if it *were* parsed) would otherwise fail `min: 10`.

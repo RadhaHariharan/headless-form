@@ -1,0 +1,65 @@
+# createCheckboxValidator
+
+**File:** `src/field-validators/checkbox-validator.ts`
+
+## Signature
+
+```typescript
+function createCheckboxValidator(rules: BooleanValidationRule): FieldValidatorFunction<unknown>
+```
+
+## `BooleanValidationRule` — full options table
+
+| Option | Type | Check |
+|--------|------|-------|
+| `mustBeTrue` | `boolean` | Box must be checked (e.g. "I accept the terms"). Takes priority over `required`. |
+| `mustBeFalse` | `boolean` | Box must be **unchecked** (e.g. an opt-out toggle that must stay off). |
+| `required` | `boolean` (default `true`) | Box must be checked — skipped entirely when `mustBeFalse` is set, since unchecked is the valid state there. |
+| `customValidation` | `(value: boolean) => string \| null` | Runs last, against the coerced boolean. |
+| `messages` | per-check overrides | — |
+
+**Validation order:** coerce to boolean → `mustBeTrue` → `mustBeFalse` → `required` → custom.
+
+## Coercion behavior
+
+Accepts several common checkbox value representations and normalizes them to a real boolean before any check runs:
+
+| Input | Coerced to |
+|-------|------------|
+| `true` / `false` (real boolean) | unchanged |
+| `'true'`, `'1'`, `'on'` (any case) | `true` |
+| any other string | `false` |
+| `1` (number) | `true` |
+| any other number | `false` |
+| anything else | `Boolean(value)` |
+
+```typescript
+const terms = createCheckboxValidator({ mustBeTrue: true });
+terms(true, 'Terms');   // null
+terms(false, 'Terms');  // "Terms must be accepted"
+terms('on', 'Terms');   // null — coerced to true
+```
+
+## Basic usage
+
+```typescript
+import { createCheckboxValidator } from '@headlesskit/forms-react';
+
+const acceptTerms = createCheckboxValidator({ mustBeTrue: true, messages: { mustBeTrue: 'You must accept the terms to continue' } });
+```
+
+## Advanced: an opt-out toggle that must stay unchecked by default
+
+```typescript
+const optOutMarketing = createCheckboxValidator({
+  mustBeFalse: true,
+  messages: { mustBeFalse: 'Please uncheck this box to proceed' },
+});
+```
+
+Here `required` is automatically bypassed (since the validator skips the `required` check whenever `mustBeFalse` is set) — there's no need to also pass `required: false` yourself.
+
+## Common pitfalls
+
+- **Setting both `mustBeTrue` and `mustBeFalse` to `true` simultaneously is contradictory** — `mustBeTrue` is checked first, so a checked box would actually pass `mustBeTrue` but then immediately fail `mustBeFalse` on the very next line; this configuration combination has no sensible "valid" value and should never be used together.
+- **String coercion of anything other than `'true'`/`'1'`/`'on'` (case-insensitive) becomes `false`**, including things you might expect to be truthy, like `'yes'` or `'checked'` — if your checkbox component emits a different truthy string convention, normalize it to a real boolean before passing it to this validator rather than relying on the built-in string coercion list.

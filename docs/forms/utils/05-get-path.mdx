@@ -1,0 +1,38 @@
+# getPath
+
+**File:** `src/utils/get-path.ts`
+
+Reads a value at a dot-notation path from an arbitrary object — the read-side counterpart to [setPath](./07-set-path), used throughout [createFormStore](../store/01-create-form-store) (reading current/initial values for dirty checks, reading values for validation rules, etc).
+
+## Signature
+
+```typescript
+function getPath(obj: unknown, path: string): unknown
+```
+
+## How it works
+
+Splits `path` via [pathToArray](./06-path-to-array), then walks each segment, indexing into the current value — returning `undefined` immediately if any intermediate value is `null`/`undefined` (rather than throwing on "cannot read property of undefined").
+
+```typescript
+getPath({ user: { name: 'Jane' } }, 'user.name'); // 'Jane'
+getPath({ items: [{ id: 1 }] }, 'items.0.id');     // 1
+getPath({}, 'missing.key');                          // undefined
+```
+
+Array indices are addressed as plain string segments (`'0'`, `'1'`, ...) — since JavaScript array indexing (`arr['0']`) works identically to `arr[0]`, no special-casing is needed for arrays vs. plain objects at the indexing step itself.
+
+## Basic usage
+
+```typescript
+import { getPath } from '@headlesskit/forms';
+
+const values = { user: { address: { city: 'Boston' } }, tags: ['a', 'b'] };
+getPath(values, 'user.address.city'); // 'Boston'
+getPath(values, 'tags.1');             // 'b'
+getPath(values, 'user.address.zip');   // undefined — no error, just undefined
+```
+
+## Common pitfalls
+
+- **A missing intermediate path segment returns `undefined`, never throws** — this is deliberate (form values are often partially populated, especially before `initialize()`/during incremental data loading), but means a genuine typo in a path string (e.g. `'user.adress'`) fails *silently* at the runtime level; the type-safety layer ([DeepKeys](../types/03-path-types)) is what actually catches typos, at compile time, for any call going through `FormStoreApi`'s typed methods — calling `getPath` directly with a raw string bypasses that protection entirely.

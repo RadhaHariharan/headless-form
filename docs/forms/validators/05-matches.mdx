@@ -1,0 +1,48 @@
+# matches
+
+**File:** `src/validators/matches.ts`
+
+## Signature
+
+```typescript
+function matches<TError = string>(regexp: RegExp, error?: TError): ValidationRule<unknown, unknown, TError>
+```
+
+## Behavior
+
+Tests the value against an arbitrary regular expression you provide. Non-string values always fail.
+
+```typescript
+matches(/^\d{10}$/, 'Invalid phone number')('5551234567', {}, 'phone'); // null
+matches(/^\d{10}$/, 'Invalid phone number')('555-1234', {}, 'phone');    // error
+```
+
+## Basic usage
+
+```typescript
+import { useForm, matches } from '@headlesskit/forms-react';
+
+const form = useForm({
+  initialValues: { phone: '', zipCode: '' },
+  validate: {
+    phone: matches(/^\d{10}$/, 'Enter a 10-digit phone number'),
+    zipCode: matches(/^\d{5}(-\d{4})?$/, 'Enter a valid ZIP code'),
+  },
+});
+```
+
+## Advanced: a password-strength pattern
+
+```typescript
+validate: {
+  password: matches(
+    /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/,
+    'Password needs 8+ characters with uppercase, lowercase, and a number',
+  ),
+}
+```
+
+## Common pitfalls
+
+- **Calling `matches(regexp)` with no `error` argument never reports a failure** — same shared root cause as every validator in this folder. Always pass an explicit error.
+- **Forgetting `^`/`$` anchors makes the pattern match a substring anywhere in the value**, not the whole value — `matches(/\d{10}/, '...')` would pass for `'abc5551234567xyz'` since the regex finds a matching substring; anchor your patterns (`^...$`) unless a substring match is genuinely what you intend.

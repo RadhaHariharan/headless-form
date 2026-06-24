@@ -1,0 +1,44 @@
+# field-keys (the uncontrolled remount trick)
+
+**File:** `src/store/field-keys.ts`
+
+The mechanism behind `form.key(path)` — the small but critical piece that makes uncontrolled mode actually work when you need to *programmatically* overwrite an input's value (since `defaultValue` only applies on mount; React/the DOM ignores later changes to it on an already-mounted uncontrolled input).
+
+## The three functions
+
+```typescript
+function createFieldKeys(): Record<string, number>
+function bumpFieldKey(keys: Record<string, number>, path: string): Record<string, number>
+function buildFieldKey(formKey: number, path: string, fieldKeys: Record<string, number>): string
+```
+
+| Function | Behavior |
+|----------|----------|
+| `createFieldKeys()` | Returns `{}` — the initial empty counter record. |
+| `bumpFieldKey(keys, path)` | Returns a **new** record with `keys[path]` incremented by 1 (starting from 0 if absent). Immutable — never mutates `keys`. |
+| `buildFieldKey(formKey, path, fieldKeys)` | Returns the string `` `${formKey}-${path}-${fieldKeys[path] ?? 0}` `` — e.g. `'0-user.name-3'`. |
+
+## Why this exists
+
+An uncontrolled `<input defaultValue={x} />` only honors `defaultValue` on the input's **first mount**. If you later call `form.setFieldValue('email', 'new@value.com')` programmatically (not via the user typing), the underlying DOM input has no way to know to display the new value — React doesn't diff `defaultValue` against anything on subsequent renders.
+
+The fix: give the input a `key` prop that changes whenever the value changes *programmatically*. React treats a changed `key` as "this is a different element" — it unmounts the old one and mounts a fresh one, which *does* honor the new `defaultValue`. [createFormStore](./01-create-form-store)'s `setFieldValueInternal` calls `bumpFieldKey` exactly when `forceUpdate: true` (the default for any call you make yourself; `false` only for `getInputProps`'s own internal `onChange`) — so typing never bumps the key (no remount, no lost cursor position), but a programmatic update does.
+
+`reset()` additionally bumps the form-level `formKey` counter, which appears in *every* field's key string — guaranteeing **all** uncontrolled inputs remount on a full form reset, not just ones whose individual `fieldKeys` counter changed.
+
+## Basic usage
+
+```tsx
+<input key={form.key('email')} {...form.getInputProps('email')} />
+```
+
+Typing in this input never remounts it (key unchanged). Calling `form.setFieldValue('email', 'jane@example.com')` from anywhere else in the app changes the key, remounting the input with the new value as its fresh `defaultValue`.
+
+## Advanced: why the key must include the path
+
+A single shared counter (rather than `bumpFieldKey`'s per-path record) would remount **every** uncontrolled input in the form whenever **any** field changed programmatically — defeating the whole performance benefit of uncontrolled mode for forms with many fields. By keying the bump to a specific `path`, only the field that actually changed remounts; siblings are untouched.
+
+## Common pitfalls
+
+- **Forgetting `key={form.key(path)}` on an uncontrolled input** means programmatic `setFieldValue` calls silently fail to update what's displayed — the store's internal `refValues` is correct, but the DOM shows stale text until the user manually edits the field (which writes a fresh value through the normal typing path). This is the single most common uncontrolled-mode bug.
+- **Don't build your own key string instead of calling `form.key(path)`** — the exact format (`formKey-path-counter`) is an implementation detail that may change; always go through `form.key()` so your code keeps working if the internal format changes.

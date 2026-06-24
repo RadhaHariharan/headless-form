@@ -1,0 +1,70 @@
+# form-store-registry (createFormActions)
+
+**File:** `src/store/form-store-registry.ts`
+
+A global, module-level registry mapping form **names** to their registered store instances — the mechanism behind dispatching to a form from outside the component/scope that created it (no prop-drilling, no context needed), via `createFormActions(name)`.
+
+## `registerForm(name, store)`
+
+```typescript
+function registerForm(name: string, store: FormStoreApi<unknown, unknown, unknown>): () => void
+```
+
+Called automatically by [createFormStore](./01-create-form-store) when the `name` option is set. Adds `store` to a `Set` keyed by `name` (multiple store instances *can* share the same name — all receive dispatched actions, see below) and returns an unregister function that removes only this specific instance.
+
+Form names are validated against `/^[a-zA-Z0-9-]+$/` — an invalid name throws immediately in development (not production, to avoid the validation cost in production builds), since names are also used to build DOM `data-path` attributes via [getDataPath](../utils/03-get-data-path), where unexpected characters could produce broken selectors.
+
+## `getRegisteredForms(name)`
+
+```typescript
+function getRegisteredForms(name: string): FormStoreApi<unknown, unknown, unknown>[]
+```
+
+Returns every store currently registered under `name` (empty array if none) — the read side `createFormActions` builds on.
+
+## `createFormActions<Values>(name)`
+
+```typescript
+function createFormActions<Values>(name: string): Pick<FormStoreApi<Values, Values, unknown>,
+  'setFieldValue' | 'setValues' | 'setErrors' | 'setFieldError' | 'clearErrors' | 'clearFieldError' |
+  'reset' | 'validate' | 'validateField' | 'insertListItem' | 'removeListItem' | 'reorderListItem' |
+  'replaceListItem' | 'setDirty' | 'setTouched' | 'resetDirty' | 'resetTouched' | 'setSubmitting'
+>
+```
+
+Returns an object with the **mutating** subset of `FormStoreApi` — calling any method on it forwards the call to **every** store currently registered under `name`. Notably absent: anything read-only (`getValues`, `isDirty`, `errors`, `values`, etc) — `createFormActions` is a *write-only* dispatch surface by design, since reading state from outside the component that owns the form isn't a supported pattern (read the form's own returned API instead, inside the component/hook that created it).
+
+```typescript
+import { createFormActions } from '@headlesskit/forms';
+
+const actions = createFormActions<{ email: string }>('signup-form');
+
+// from anywhere — a different component, a websocket handler, a keyboard shortcut, etc:
+actions.setFieldValue('email', 'jane@example.com');
+actions.reset();
+```
+
+## Basic usage: a toolbar component resetting a form it doesn't own
+
+```tsx
+function useForm() {
+  return useFormReact({ name: 'profile-form', initialValues: { name: '', bio: '' } });
+}
+
+function ResetToolbarButton() {
+  const actions = createFormActions<{ name: string; bio: string }>('profile-form');
+  return <button onClick={() => actions.reset()}>Reset form</button>;
+}
+```
+
+`ResetToolbarButton` never needs a reference to the actual `form` object — it only needs to agree on the shared name `'profile-form'`.
+
+## Advanced: multiple form instances sharing one name
+
+If two separate `useForm({ name: 'cart-item' })` calls are both mounted (e.g. one row per cart item, all sharing a name for bulk actions), `createFormActions('cart-item').setFieldValue(...)` dispatches to **all** of them — the last store's return value wins as the dispatch function's own return value, but every store's state is updated. This is intentional for bulk-action scenarios (e.g. "clear all quantities"), but easy to trip over if you expected per-instance addressing.
+
+## Common pitfalls
+
+- **An invalid form name throws only in development** — production builds skip the regex check entirely for performance, so a name with disallowed characters won't throw in production; always verify form names locally in development before shipping, since the failure mode in production (a broken `data-path` selector, `getInputNode` silently returning `null`) is much harder to diagnose than a thrown error.
+- **`createFormActions` requires at least one store to actually be registered under that name when you call a method** — calling `actions.reset()` before any matching `useForm({ name })` has mounted is a silent no-op (the `dispatch` helper iterates zero stores), not an error; double-check mount ordering if actions seem to do nothing.
+- **Read-only access isn't available through `createFormActions`** — if you need to *read* a form's current values/errors from outside its owning component, that's a sign the form's API should be passed down (context, a returned ref, a shared store reference) rather than reached for through the name-based registry, which is intentionally write-only.

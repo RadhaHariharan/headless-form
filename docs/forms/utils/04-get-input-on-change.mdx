@@ -1,0 +1,60 @@
+# getInputOnChange
+
+**File:** `src/utils/get-input-on-change.ts`
+
+Normalizes whatever a real DOM `onChange` handler actually receives into a plain value — the function every `getInputProps().onChange` handler runs its argument through before calling `setFieldValue` internally.
+
+## Signature
+
+```typescript
+function getInputOnChange(eventOrValue: unknown): unknown
+```
+
+## The three cases it handles
+
+| Input | Behavior |
+|-------|----------|
+| `null`/`undefined` | Returned as-is. |
+| `boolean` | Returned as-is — supports custom checkbox/switch components that call `onChange(true)`/`onChange(false)` directly, bypassing a native DOM event entirely. |
+| A DOM `Event` / React `SyntheticEvent` (anything with a `.target` object) | Reads `target.checked` (coerced to `Boolean`) if `target.type === 'checkbox'`, otherwise reads `target.value`. |
+| Anything else | Returned as-is (a raw value passed directly, e.g. from a custom `<Select>` component's `onChange(selectedValue)`). |
+
+```typescript
+function getInputOnChange(eventOrValue: unknown): unknown {
+  if (eventOrValue === null || eventOrValue === undefined) return eventOrValue;
+  if (typeof eventOrValue === 'boolean') return eventOrValue;
+  if (typeof eventOrValue === 'object' && 'target' in eventOrValue && ...) {
+    const target = eventOrValue.target;
+    if (target.type === 'checkbox') return Boolean(target.checked);
+    if ('value' in target) return target.value;
+  }
+  return eventOrValue;
+}
+```
+
+## Why this exists
+
+`getInputProps`'s `onChange` needs to work identically whether it's spread onto:
+- a native `<input type="text" onChange={...}>` (receives a DOM event, read `.target.value`),
+- a native `<input type="checkbox" onChange={...}>` (receives a DOM event, read `.target.checked`),
+- a custom UI-library component that calls `onChange(value)` directly with the raw selected value (no event at all), or
+- a custom switch/toggle component that calls `onChange(true)`/`onChange(false)` directly.
+
+Without this normalization, `getInputProps` would need a separate code path (or a separate `type` option value) for every one of these shapes; instead, one `onChange` handles all of them uniformly.
+
+## Basic usage (internal — wired automatically by getInputProps)
+
+```typescript
+getInputOnChange(new Event('change'));                       // reads event.target.value (or .checked for checkboxes)
+getInputOnChange(true);                                        // true
+getInputOnChange('hello');                                     // 'hello'
+getInputOnChange({ target: { type: 'checkbox', checked: true } }); // true
+getInputOnChange({ target: { value: 'typed text' } });          // 'typed text'
+```
+
+This isn't something you typically call directly — it's invoked automatically inside the `onChange` function `getInputProps` returns. You'd only reach for it directly if building a custom input-binding helper that needs the same event-or-raw-value normalization outside of `getInputProps`'s own flow.
+
+## Common pitfalls
+
+- **A custom component whose change payload is an object that happens to have a `target` key** (unrelated to DOM events) will be misinterpreted as a DOM event — if your custom input component's `onChange` callback signature collides with this shape coincidentally, either rename that field, or don't rely on `getInputProps`'s default `onChange` for that component and wire your own handler that calls `form.setFieldValue` directly with the real value.
+- **A `<select multiple>` element's value isn't read correctly by this function** — `target.value` for a multi-select doesn't reflect the full selection; for multi-selects, read `target.selectedOptions` yourself and call `form.setFieldValue` directly rather than relying on `getInputProps`'s default `onChange`.

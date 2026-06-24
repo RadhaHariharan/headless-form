@@ -1,0 +1,31 @@
+# pathToArray
+
+**File:** `src/utils/path-to-array.ts`
+
+The single-line primitive both [getPath](./05-get-path) and [setPath](./07-set-path) build on.
+
+## Signature
+
+```typescript
+function pathToArray(path: string): string[]
+```
+
+## What it does
+
+```typescript
+function pathToArray(path: string): string[] {
+  return path.split('.');
+}
+```
+
+Splits a dot-notation path string into its segments — that's the entire implementation.
+
+```typescript
+pathToArray('user.address.city'); // ['user', 'address', 'city']
+pathToArray('items.0.name');      // ['items', '0', 'name']
+pathToArray('name');              // ['name']
+```
+
+## Common pitfalls
+
+- **There is no escaping mechanism for a literal `.` inside a field name** — a values object with a key literally named `'first.name'` (containing a dot) is indistinguishable from the nested path `first.name` (an object `{ first: { name } }`); the path syntax assumes field names never contain `.` themselves. Avoid dots in actual property names if you intend to use this library's path-based APIs against them.

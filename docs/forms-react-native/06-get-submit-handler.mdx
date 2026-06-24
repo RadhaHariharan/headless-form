@@ -1,0 +1,71 @@
+# getSubmitHandler
+
+**File:** `src/handlers/get-submit-handler.ts`
+
+Adapts `form.onSubmit(onValid, onInvalid?)` (which returns a DOM `FormEventHandler`, expecting to be called with a real `Event`) into a zero-argument function suitable for `<Button onPress>` / `<Pressable onPress>` — React Native has no native form-submit event at all.
+
+## Signature
+
+```typescript
+function getSubmitHandler<Values, TransformedValues, TError>(
+  form: FormStoreApi<Values, TransformedValues, TError>,
+  onValid: (values: TransformedValues) => void | Promise<void>,
+  onInvalid?: (errors: FormErrors<TError>, values: Values) => void,
+): () => void
+```
+
+## The bug this exists to prevent
+
+```typescript
+const handler = form.onSubmit(
+  (values) => onValid(values),
+  (errors, values) => onInvalid?.(errors, values),
+);
+
+const noopEvent = { preventDefault: () => {} } as unknown as Event;
+
+return () => {
+  handler(noopEvent);
+};
+```
+
+[createFormStore](../../forms/store/01-create-form-store)'s `onSubmit`-generated handler **unconditionally calls `event.preventDefault()`** whenever `onSubmitPreventDefault` is `'always'` (the default) — or conditionally, for the other policy values. If you called `form.onSubmit(...)` directly and passed its result straight to `<Button onPress={handler}>`, React Native would invoke `handler(undefined)` (since `onPress` callbacks receive a `GestureResponderEvent`, not the `Event` the form handler expects, and there's no `.preventDefault()` on it the way the form handler assumes) — calling `.preventDefault()` on the actual press event, or on `undefined`, throws.
+
+`getSubmitHandler` solves this by constructing a **fake event object** with only a no-op `preventDefault()` method, and passing that fake object to the real handler internally — `onPress` is given a wrapper that takes no arguments at all and supplies the fake event itself, so callers never need to think about this.
+
+## Basic usage
+
+```tsx
+import { getSubmitHandler } from '@headlesskit/forms-react-native';
+import { Button } from 'react-native';
+
+<Button
+  title="Submit"
+  onPress={getSubmitHandler(form, (values) => console.log(values))}
+/>
+```
+
+## Advanced: handling both success and validation failure
+
+```tsx
+<Button
+  title="Save"
+  onPress={getSubmitHandler(
+    form,
+    async (values) => {
+      await saveToServer(values);
+      navigation.goBack();
+    },
+    (errors) => {
+      Alert.alert('Please fix the errors', Object.values(errors).join('\n'));
+    },
+  )}
+/>
+```
+
+Since the underlying `onValid` may return a `Promise`, `form.submitting` is automatically tracked exactly as it would be on the web — see [createFormStore](../../forms/store/01-create-form-store)'s `onSubmit` section.
+
+## Common pitfalls
+
+- **Don't call `form.onSubmit(...)` directly and wire its result to `onPress`** — that bypasses this adapter's fake-event handling entirely and will throw the moment `onSubmitPreventDefault` causes `event.preventDefault()` to actually run. Always use `getSubmitHandler` in a React Native context.
+- **`getSubmitHandler` builds a brand-new submit handler (and re-runs `form.onSubmit(...)`) every time it's called** — if you call it inline inside `render`/JSX (as in every example above), this is harmless (cheap to construct, and `onPress` doesn't need referential stability the way a `useEffect` dependency would), but if you want a stable reference across renders for some other reason, wrap the call in `useMemo`/`useCallback` yourself.

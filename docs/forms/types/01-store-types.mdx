@@ -1,0 +1,91 @@
+# store.types
+
+**File:** `src/types/store.types.ts`
+
+Defines `UseFormOptions` (everything you can pass to `createFormStore`/`useForm`) and `FormStoreApi` (everything a form instance exposes) — the two central interfaces of the entire package.
+
+## `FormMode`, `OnSubmitPreventDefault`, `TouchTrigger`
+
+```typescript
+type FormMode = 'controlled' | 'uncontrolled';                       // default: 'controlled' in core, 'uncontrolled' in forms-react's useForm
+type OnSubmitPreventDefault = 'always' | 'never' | 'validation-failed'; // default: 'always'
+type TouchTrigger = 'change' | 'focus';                                // default: 'change'
+```
+
+| Type | Values | Behavior |
+|------|--------|----------|
+| `FormMode` | `'controlled'` | Every value change re-renders. `'uncontrolled'` | Typing doesn't re-render; see [createFormStore](../store/01-create-form-store). |
+| `OnSubmitPreventDefault` | `'always'` | Always call `event.preventDefault()`. `'never'` | Never call it — you manage the native form submission yourself. `'validation-failed'` | Only prevent default when validation actually fails (lets a *valid* submit proceed as a native form post, useful for progressive-enhancement forms). |
+| `TouchTrigger` | `'change'` | A field becomes touched on its first value change. `'focus'` | A field becomes touched on its first focus event. |
+
+## `UseFormOptions<Values, TransformedValues, TError>`
+
+| Option | Type | Default | Description |
+|--------|------|---------|--------------|
+| `name` | `string` | none | Registers the form for [createFormActions](../store/03-form-store-registry) dispatch. |
+| `mode` | `FormMode` | `'controlled'` (core) | See above. |
+| `initialValues` | `Partial<Values>` | `{}` | Seeds both `values` and the dirty-comparison baseline. Drives every path-typed method's inferred types via [DeepKeys](./03-path-types). |
+| `initialErrors` / `initialDirty` / `initialTouched` | respective record types | `{}` | Pre-seed state as if the form had already been interacted with — useful for SSR-hydrated forms with server-validated errors. |
+| `clearInputErrorOnChange` | `boolean` | `true` | Clear a field's error the moment its value changes again. |
+| `validateInputOnChange` / `validateInputOnBlur` | `boolean \| string[]` | `false` | Trigger per-field validation on change/blur — `true` for all fields, an array to scope to specific paths. |
+| `onValuesChange` | `(values, previous) => void` | none | Fires on every value change, in both modes — the recommended substitute for a `useEffect` watching `values` in uncontrolled mode (where `values` is a stable ref and won't trigger effects). |
+| `transformValues` | `(values: Values) => TransformedValues` | identity | Reshapes values right before `onSubmit`'s `onValid` callback and `getTransformedValues()`. |
+| `enhanceGetInputProps` | `(payload) => Partial<GetInputPropsResult> \| undefined` | none | Globally augments every `getInputProps()` result — see [input-props.types](./02-input-props-types). |
+| `validate` | `FormRulesRecord \| (values) => FormErrors` | none | See [validation.types](./04-validation-types). |
+| `onSubmitPreventDefault` | `OnSubmitPreventDefault` | `'always'` | See above. |
+| `touchTrigger` | `TouchTrigger` | `'change'` | See above. |
+| `cascadeUpdates` | `boolean` | `false` | Whether `watch` notifies ancestor-path handlers too — see [watch-registry](../store/04-watch-registry). |
+| `validateDebounce` | `number` (ms) | `0` | Debounce applied to change/blur-triggered validation. |
+| `resolveValidationError` | `(error: unknown) => TError` | `Error → .message`, else `String(error)` | Maps a thrown value (from an async validator or schema resolver) to your `TError` type. |
+
+## `FormStoreApi<Values, TransformedValues, TError>` — grouped by concern
+
+| Group | Members |
+|-------|---------|
+| Values | `values`, `getValues()`, `getInitialValues()`, `setInitialValues()`, `initialize()`, `initialized`, `setValues()`, `setFieldValue()`, `resetField()`, `reset()` |
+| Errors | `errors`, `setErrors()`, `setFieldError()`, `clearErrors()`, `clearFieldError()` |
+| Status | `isTouched()`, `isDirty()`, `getTouched()`, `getDirty()`, `setTouched()`, `setDirty()`, `resetTouched()`, `resetDirty()` |
+| Lists | `insertListItem()`, `removeListItem()`, `replaceListItem()`, `reorderListItem()` |
+| Validation | `validate()`, `validateField()`, `isValid()`, `validating`, `isValidating()` |
+| Submit | `onSubmit()`, `onReset()`, `submitting`, `setSubmitting()` |
+| Input props / DOM | `getInputProps()`, `getInputNode()` |
+| Transform | `getTransformedValues()` |
+| Watch | `watch()` |
+| Meta | `key()` |
+| Subscription (internal) | `subscribe()`, `getSnapshot()`, `getServerSnapshot()` |
+
+Every path-accepting method (`setFieldValue`, `resetField`, `isTouched`, `isDirty`, `getInputProps`, `watch`, `key`, the list methods, `setFieldError`/`clearFieldError`, `validateField`, `isValid`, `isValidating`, `getInputNode`) is generic over `K extends DeepKeys<Values>` — see [path.types](./03-path-types) — so an invalid path is a **compile-time** TypeScript error, not a silent runtime no-op.
+
+## `SetFieldValueOptions` / `ReorderPayload`
+
+```typescript
+interface SetFieldValueOptions { forceUpdate?: boolean; } // default: true
+interface ReorderPayload { from: number; to: number; }
+```
+
+`forceUpdate: false` is what makes uncontrolled-mode typing silent — see [createFormStore](../store/01-create-form-store) and [field-keys](../store/02-field-keys).
+
+## `FormStoreSnapshot<TError>`
+
+The shape returned by `getSnapshot()`/`getServerSnapshot()` — deliberately **excludes** `values` (read those via `getValues()`/the `values` getter instead). Contains `errors`, `touched`, `dirty`, `validating`, `fieldValidating`, `submitting`, `initialized`, `fieldKeys`, `formKey`.
+
+## `TransformedValues<Form>` — extracting a form's output type
+
+```typescript
+type TransformedValues<Form> = Form extends FormStoreApi<unknown, infer T, unknown> ? T : never;
+```
+
+```typescript
+const form = useForm({
+  initialValues: { first: '', last: '' },
+  transformValues: (v) => ({ ...v, fullName: `${v.first} ${v.last}` }),
+});
+type Transformed = TransformedValues<typeof form>; // { first: string; last: string; fullName: string }
+```
+
+Useful when a submit handler, API call, or sibling component needs to reference the *shape after* `transformValues`, without manually re-declaring it.
+
+## Common pitfalls
+
+- **`mode` defaults differently between core and `forms-react`'s `useForm`** — `createFormStore` itself defaults to `'controlled'`; the React wrapper overrides this default to `'uncontrolled'`. If you're calling `createFormStore` directly (bypassing the React hook), you get the *core* default, not the React-recommended one.
+- **`onSubmitPreventDefault: 'validation-failed'`'s effective behavior is checked twice** — once before validation runs (using whatever `errors` already held), and once after validation resolves (using the fresh result) — because async validation means the answer can change between the initial event and the final outcome; don't assume the pre-validation check is the only one that matters.

@@ -1,0 +1,50 @@
+# isEmail
+
+**File:** `src/validators/is-email.ts`
+
+## Signature
+
+```typescript
+function isEmail<TError = string>(error?: TError): ValidationRule<unknown, unknown, TError>
+```
+
+## Behavior
+
+Tests the value against a regular expression matching most common valid email address formats (local part with standard special characters, domain with valid label rules, a 2+ character TLD). Non-string values always fail the check.
+
+```typescript
+const EMAIL_REGEX = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$/;
+```
+
+This is a pragmatic, RFC-5322-inspired pattern — it rejects most malformed addresses and accepts the overwhelming majority of real-world ones, but (like virtually every regex-based email validator) isn't a fully spec-compliant email-address parser. For genuinely strict validation, pair this with a server-side check (e.g. actually attempting delivery / a verification email).
+
+## Basic usage
+
+```typescript
+import { useForm, isEmail } from '@headlesskit/forms-react';
+
+const form = useForm({
+  initialValues: { email: '' },
+  validate: { email: isEmail('Please enter a valid email address') },
+});
+```
+
+## Advanced: combining with isNotEmpty for a clearer two-stage message
+
+```typescript
+import { isNotEmpty, isEmail } from '@headlesskit/forms-react';
+
+// Rules objects only support one function per field — combine manually:
+validate: {
+  email: (value, values, path) => {
+    const requiredError = isNotEmpty('Email is required')(value, values, path);
+    if (requiredError) return requiredError;
+    return isEmail('Please enter a valid email address')(value, values, path);
+  },
+},
+```
+
+## Common pitfalls
+
+- **Calling `isEmail()` with no `error` argument never reports a failure** — same root cause as [isNotEmpty](./01-is-not-empty)'s pitfall: the failure branch returns `error ?? null`, which is `null` (valid) when `error` is omitted. Always pass an explicit message.
+- **A non-string value (e.g. `null`, a number) always fails this check**, even with `withError: false`-style "no error yet" semantics elsewhere in the library — if a field can legitimately be `null` before the user interacts with it, combine this with [isNotEmpty](./01-is-not-empty) deliberately (as shown above) rather than relying on `isEmail` alone to also handle the "empty" case gracefully.

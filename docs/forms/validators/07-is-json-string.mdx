@@ -1,0 +1,51 @@
+# isJSONString
+
+**File:** `src/validators/is-json-string.ts`
+
+## Signature
+
+```typescript
+function isJSONString<TError = string>(error?: TError): ValidationRule<unknown, unknown, TError>
+```
+
+## Behavior
+
+Attempts `JSON.parse(value)` inside a `try`/`catch` — valid JSON (including primitives like `'"hello"'`, `'42'`, `'null'`, since these are all technically valid JSON documents per the spec, not just objects/arrays) passes; anything that throws fails. Non-string values always fail outright (without attempting to parse).
+
+```typescript
+isJSONString('Must be valid JSON')('{"a":1}', {}, 'config'); // null
+isJSONString('Must be valid JSON')('{a:1}', {}, 'config');    // error — invalid JSON
+isJSONString('Must be valid JSON')('42', {}, 'config');         // null — '42' is valid JSON (the number 42)
+```
+
+## Basic usage
+
+```typescript
+import { useForm, isJSONString } from '@headlesskit/forms-react';
+
+const form = useForm({
+  initialValues: { config: '{}' },
+  validate: { config: isJSONString('Must be valid JSON') },
+});
+```
+
+## Advanced: validating JSON *and* its shape
+
+```typescript
+validate: {
+  config: (value, _values, path) => {
+    const jsonError = isJSONString('Must be valid JSON')(value, _values, path);
+    if (jsonError) return jsonError;
+    const parsed = JSON.parse(value as string);
+    if (typeof parsed !== 'object' || parsed === null) {
+      return 'Config must be a JSON object';
+    }
+    return null;
+  },
+}
+```
+
+## Common pitfalls
+
+- **Calling `isJSONString()` with no `error` argument never reports a failure** — same shared root cause as every validator in this folder. Always pass an explicit error.
+- **A bare primitive like `'42'` or `'"text"'` passes** — if your field is meant to hold a JSON *object* or *array* specifically (not any valid JSON value), you need an additional shape check after parsing, as shown in the advanced example, since `isJSONString` alone only confirms parseability.

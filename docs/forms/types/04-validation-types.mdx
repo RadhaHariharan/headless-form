@@ -1,0 +1,135 @@
+# validation.types
+
+**File:** `src/types/validation.types.ts`
+
+Defines the shape of the `validate` option and everything `validate()`/`validateField()` return.
+
+## `FormError` / `FormErrors<TError>`
+
+```typescript
+type FormError = unknown;
+type FormErrors<TError = FormError> = Partial<Record<string, TError>>;
+```
+
+`FormErrors` is a flat record keyed by dot-notation path — `{ 'user.email': 'Invalid email', 'tags.0': 'Required' }` — regardless of how deeply nested the *values* themselves are. Core keeps `TError` as `unknown` so each framework wrapper can specialize the default (e.g. [forms-react](../../forms-react/01-use-form) defaults `TError = React.ReactNode`, letting you return JSX as an error directly).
+
+## `ValidationRule<Value, Values, TError>`
+
+```typescript
+type ValidationRule<Value, Values = unknown, TError = FormError> = (
+  value: Value,
+  values: Values,
+  path: string,
+) => TError | null | undefined | Promise<TError | null | undefined>;
+```
+
+The function signature every individual field rule must satisfy — return `null`/`undefined` for "valid," anything else (or a `Promise` resolving to anything else) is stored as that field's error.
+
+```typescript
+const required: ValidationRule<string> = (v) => v.trim() ? null : 'Required';
+const passwordsMatch: ValidationRule<string, { password: string }> = (v, values) =>
+  v === values.password ? null : 'Passwords must match'; // `values` gives cross-field access
+```
+
+## `FormRulesRecord<Values, TError>`
+
+```typescript
+type FormRulesRecord<Values, TError = FormError> =
+  { [K in DeepKeys<Values> as ...]?: ValidationRule<DeepValue<Values, K>, Values, TError> } &
+  { [K in keyof Values & string]?: Values[K] extends object
+      ? FormRulesRecord<Values[K], TError> | ValidationRule<Values[K], Values, TError>
+      : ValidationRule<Values[K], Values, TError>
+  };
+```
+
+The "rules object" shape `validate` accepts — keys can be flat dot-notation paths (`'user.email'`) **or** nested objects mirroring the values shape (`{ user: { email: rule } }`), both ultimately resolving to the same flat-path errors internally (see [createFormStore](../store/01-create-form-store)'s `walkRules`).
+
+```typescript
+const rules: FormRulesRecord<{ user: { email: string }; age: number }> = {
+  // nested form — mirrors the values shape
+  user: { email: isEmail('Invalid email') },
+  // OR flat dot-notation — equivalent
+  // 'user.email': isEmail('Invalid email'),
+  age: isInRange({ min: 0 }, 'Must be non-negative'),
+};
+```
+
+## `FormValidateInput<Values, TError>`
+
+```typescript
+type FormValidateInput<Values, TError = FormError> =
+  | FormRulesRecord<Values, TError>
+  | ((values: Values) => FormErrors<TError> | Promise<FormErrors<TError>>);
+```
+
+What the `validate` option itself accepts — either the rules-object form above, or a single whole-form function (the shape [schemaResolver](../resolvers/01-schema-resolver) produces, for instance).
+
+## `FormValidateResult<TError>` / `FormValidateFieldResult<TError>`
+
+```typescript
+interface FormValidateResult<TError = FormError> {
+  hasErrors: boolean;
+  errors: FormErrors<TError>;
+}
+interface FormValidateFieldResult<TError = FormError> {
+  hasError: boolean;
+  error: TError | null;
+}
+```
+
+Returned by `form.validate()` and `form.validateField(path)` respectively — both may be returned synchronously or as a `Promise`, depending on whether any involved rule is async.
+
+## `formRootRule` — validating a whole sub-object, not just its fields
+
+```typescript
+const formRootRule: unique symbol = Symbol('headlesskit/formRootRule');
+type FormRootRuleSymbol = typeof formRootRule;
+```
+
+A special `Symbol` key usable inside a `FormRulesRecord` to attach a validator that runs against an entire object/array **alongside** its individual field rules — e.g. validating that an `items` array isn't empty, in addition to validating each item's own fields. A `Symbol` key (rather than a string like `'__root__'`) guarantees no collision with any real field name.
+
+```typescript
+import { formRootRule } from '@headlesskit/forms';
+
+const rules = {
+  items: {
+    [formRootRule]: (items: unknown[]) => (items.length === 0 ? 'Add at least one item' : null),
+    // per-item field rules would go here too, addressed by index
+  },
+};
+```
+
+## Basic usage
+
+```typescript
+import { useForm, isEmail, isNotEmpty } from '@headlesskit/forms-react';
+
+const form = useForm({
+  initialValues: { name: '', email: '' },
+  validate: {
+    name: isNotEmpty('Name is required'),
+    email: isEmail('Invalid email address'),
+  },
+});
+```
+
+## Advanced: a whole-form async validator hitting an API
+
+```typescript
+const form = useForm({
+  initialValues: { username: '' },
+  validate: async (values) => {
+    const errors: FormErrors<string> = {};
+    if (values.username) {
+      const taken = await checkUsernameTaken(values.username);
+      if (taken) errors.username = 'Username already taken';
+    }
+    return errors;
+  },
+});
+```
+
+## Common pitfalls
+
+- **Mixing flat dot-notation keys and nested-object keys for the same path in one rules object is undefined/ambiguous** — pick one style per form (or per sub-tree) for clarity; the underlying traversal (`walkRules`) handles both, but mixing them for the *same logical path* makes the rules object harder to reason about, not technically broken.
+- **A rule returning `undefined` and a rule returning `null` are treated identically (valid)** — but a rule returning the empty string `''` is **not** treated as valid (only `null`/`undefined` are), since `''` is a legitimate non-null error value (e.g. you might intentionally return an empty string as a "show an error indicator with no message" signal); be deliberate about what a "no error" return actually is in your own rules.

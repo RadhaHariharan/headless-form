@@ -1,0 +1,65 @@
+# createDateValidator
+
+**File:** `src/field-validators/date-validator.ts`
+
+The most behaviorally subtle field validator — date handling is full of timezone traps, and this module is explicit about exactly which semantics it uses.
+
+## Signature
+
+```typescript
+function createDateValidator(rules: DateValidationRule): FieldValidatorFunction<unknown>
+```
+
+## `DateValidationRule` — full options table
+
+| Option | Type | Check |
+|--------|------|-------|
+| `required` | `boolean` (default `true`) | Fails on empty/missing value. |
+| `dateFormat` | `string` | Cosmetic only — appended to the `invalidDate` message as a hint; does **not** drive parsing. |
+| `minDate` / `maxDate` | `string \| Date` | Inclusive range, compared at local start-of-day / end-of-day. |
+| `inFuture` / `inPast` | `boolean` | Strictly tomorrow-or-later / yesterday-or-earlier, at **local day granularity** (today itself fails both). |
+| `inFutureDateTime` / `inPastDateTime` | `boolean` | Strictly after/before the exact current instant (`Date.now()`), not day-rounded. |
+| `customValidation` | `(value: Date) => string \| null` | Runs last, against the parsed `Date`. |
+| `messages` | per-check overrides | — |
+
+## `parseLocalDate` / `formatLocalDate` — also exported
+
+```typescript
+function parseLocalDate(value: string | number | Date): Date
+function formatLocalDate(date: Date): string // → 'YYYY-MM-DD'
+```
+
+The single most important detail in this file: a bare `'YYYY-MM-DD'` string is parsed as **local midnight** (`new Date(year, month - 1, day)`), not UTC midnight. This deliberately differs from the native `new Date('YYYY-MM-DD')`, which the ECMAScript spec parses as **UTC midnight** — in any negative-UTC-offset timezone (most of the Americas), that native behavior shifts the displayed date back by one calendar day from what the user actually typed. Strings carrying an explicit time/timezone, real `Date` instances, and numeric timestamps are passed through to the native constructor unchanged, since their absolute instant is already unambiguous.
+
+```typescript
+new Date('2024-01-15');           // UTC midnight — may display as Jan 14 in US timezones!
+parseLocalDate('2024-01-15');     // local midnight — always displays as Jan 15, everywhere
+```
+
+## Basic usage
+
+```typescript
+import { createDateValidator } from '@headlesskit/forms-react';
+
+const dob = createDateValidator({ maxDate: '2024-01-01', inPast: true });
+dob('1990-05-20', 'Date of birth'); // null
+dob('2999-01-01', 'Date of birth'); // "Date of birth cannot be after 2024-01-01"
+```
+
+## Advanced: a future-appointment field requiring an exact time, not just a date
+
+```typescript
+const appointment = createDateValidator({
+  inFutureDateTime: true, // must be strictly after the current moment, not just "today or later"
+  messages: { inFutureDateTime: 'Please choose a future date and time' },
+});
+
+appointment(new Date(Date.now() + 3600_000), 'Appointment'); // null — 1 hour from now
+appointment(new Date(), 'Appointment');                        // fails — not strictly in the future by the time it's checked
+```
+
+## Common pitfalls
+
+- **`inFuture`/`inPast` treat "today" as neither future nor past** — both checks fail for the exact current calendar day; if you want "today or later" / "today or earlier" semantics instead, you need a custom rule (these two options are intentionally strict/exclusive).
+- **Mixing `minDate`/`maxDate` (day-granularity) with `inFutureDateTime`/`inPastDateTime` (instant-granularity) checks on the same field can produce results that look inconsistent** if you're not tracking which check operates at which granularity — e.g. a `maxDate` of today (end-of-day) combined with `inPastDateTime` (strictly before *now*, not end-of-day) means a value of "later today" can pass `maxDate` but fail `inPastDateTime`.
+- **`dateFormat` is purely cosmetic** — setting it does not enable parsing dates in that format; if your input genuinely needs a non-ISO date format parsed, parse it yourself before passing the resulting `Date`/timestamp into this validator.

@@ -1,0 +1,70 @@
+# list-handlers
+
+**File:** `src/utils/list-handlers.ts`
+
+Four small, pure array-manipulation functions backing [FormStoreApi](../types/01-store-types)'s `insertListItem`/`removeListItem`/`replaceListItem`/`reorderListItem` — each returns a **new** array, never mutating the input.
+
+## `insertAt(list, item, index?)`
+
+```typescript
+function insertAt<T>(list: T[], item: T, index?: number): T[]
+```
+
+Inserts `item` at `index`, or appends it when `index` is omitted (or `>= list.length`).
+
+```typescript
+insertAt([1, 2, 3], 99, 1); // [1, 99, 2, 3]
+insertAt([1, 2, 3], 99);    // [1, 2, 3, 99]
+```
+
+## `removeAt(list, index)`
+
+```typescript
+function removeAt<T>(list: T[], index: number): T[]
+```
+
+```typescript
+removeAt([1, 2, 3], 1); // [1, 3]
+```
+
+## `replaceAt(list, index, item)`
+
+```typescript
+function replaceAt<T>(list: T[], index: number, item: T): T[]
+```
+
+```typescript
+replaceAt([1, 2, 3], 1, 99); // [1, 99, 3]
+```
+
+## `reorder(list, { from, to })`
+
+```typescript
+function reorder<T>(list: T[], payload: ReorderPayload): T[]
+```
+
+Moves the item at `from` to position `to`, shifting everything between.
+
+```typescript
+reorder([1, 2, 3], { from: 0, to: 2 }); // [2, 3, 1]
+```
+
+See [ReorderPayload](../types/01-store-types) for the `{ from, to }` shape.
+
+## Where these are used
+
+[FormStoreApi](../types/01-store-types)'s list methods are thin wrappers: read the current array via [getPath](./05-get-path), call the matching `list-handlers` function, write the result back via [setPath](./07-set-path), bump the field key (so an uncontrolled list re-renders correctly — see [field-keys](../store/02-field-keys)), and notify subscribers.
+
+## Basic usage (via the form API — rarely called directly)
+
+```typescript
+form.insertListItem('todos', { id: '4', text: 'New todo' });        // append
+form.insertListItem('todos', { id: '0', text: 'First' }, 0);          // insert at index 0
+form.removeListItem('todos', 2);                                       // remove index 2
+form.replaceListItem('todos', 1, { id: '1', text: 'Edited' });       // replace index 1
+form.reorderListItem('todos', { from: 0, to: 2 });                    // move index 0 to index 2
+```
+
+## Common pitfalls
+
+- **`insertAt`/`removeAt`/`replaceAt`/`reorder` don't validate `index` is in range** — an out-of-bounds index on `removeAt`/`replaceAt` (via `Array.prototype.splice`) is a silent no-op or produces a sparse array, not a thrown error; double-check index bounds in your own code if you're calling these list methods with computed (not literal) indices.

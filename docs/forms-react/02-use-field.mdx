@@ -1,11 +1,75 @@
 # useField
 
-A standalone single-field hook for managing field-level state without a full form. Useful
-for composing custom inputs, building field-as-a-component patterns, or isolating field
-logic in a library. Works unchanged in React Native via `@headlesskit/forms-react-native`,
-which re-exports it.
+**File:** `src/hooks/use-field.ts`
 
----
+A standalone single-field hook — internally a stripped-down `useForm` scoped to exactly one value, useful for composing custom inputs, building field-as-a-component patterns, or isolating field logic in a library without requiring a full form. Works unchanged in React Native via `@headlesskit/forms-react-native`, which re-exports it directly.
+
+## Signature
+
+```typescript
+function useField<Value, TError = ReactNode>(options: UseFieldOptions<Value, TError>): UseFieldReturnType<Value, TError>
+```
+
+## How it actually works: a one-field form in disguise
+
+```typescript
+type FieldValues = { field: Value };
+
+const storeOptions: UseFormOptions<FieldValues, FieldValues, TError> = {
+  mode,
+  initialValues: { field: initialValue },
+  validateInputOnChange: validateOnChange,
+  validateInputOnBlur: validateOnBlur,
+  ...(validateFn !== undefined ? { validate: { field: (v) => validateFn(v) } } : {}),
+};
+
+const storeRef = useRef<FormStoreApi<FieldValues, FieldValues, TError> | null>(null);
+if (storeRef.current === null) {
+  storeRef.current = createFormStore<FieldValues, FieldValues, TError>(storeOptions);
+}
+```
+
+`useField` doesn't reimplement any form logic — it builds a real [createFormStore](../../forms/store/01-create-form-store) instance whose `Values` type is the single-key object `{ field: Value }`, then exposes a narrower, field-shaped API over that one-field store. This is why `useField` gets validation debouncing, async validation generation-guarding, dirty/touched tracking, and the uncontrolled remount trick *for free* — it's all the exact same machinery [useForm](./01-use-form) uses, just pre-wired to operate on the single synthetic `'field'` path.
+
+```typescript
+const snapshot = useSyncExternalStore(
+  useCallback((cb) => store.subscribe(cb), [store]),
+  () => store.getSnapshot(),
+  () => store.getServerSnapshot(),
+);
+
+const error = (snapshot.errors['field'] ?? null) as TError | null;
+const isValidating = snapshot.fieldValidating['field'] === true;
+const isDirty = store.isDirty('field');
+const isTouched = store.isTouched('field');
+const fieldKey = `${snapshot.formKey}-field-${snapshot.fieldKeys['field'] ?? 0}`;
+```
+
+Same `useSyncExternalStore` bridging pattern as [useForm](./01-use-form) — every reactive value is read off the snapshot for the `'field'` path specifically.
+
+## `UseFieldOptions<Value, TError>`
+
+| Option | Type | Default | Description |
+|--------|------|---------|--------------|
+| `initialValue` | `Value` | *(required)* | The field's starting value — becomes `{ field: initialValue }` internally. |
+| `validate` | `(value: Value) => TError \| null \| undefined \| Promise<...>` | none | A single-field rule — note the signature takes only `value` (no `values`/`path`, unlike core's `ValidationRule`), since there's no meaningful "whole form" or "other fields" in a standalone field. |
+| `validateOnChange` / `validateOnBlur` | `boolean` | `false` | Maps directly to the underlying store's `validateInputOnChange`/`validateInputOnBlur`. |
+| `resolveValidationError` | `(error: unknown) => TError` | none | Same semantics as [UseFormOptions](../../forms/types/01-store-types)'s option of the same name. |
+| `type` | `'input' \| 'checkbox' \| 'radio'` | `'input'` | Forwarded to the internal `getInputProps('field', { type })` call. |
+| `mode` | `FormMode` | `'controlled'` | **Note:** unlike [useForm](./01-use-form), `useField` does **not** override this to `'uncontrolled'` — it keeps core's own default. Pass `mode: 'uncontrolled'` explicitly if you want the same zero-re-render-on-typing behavior `useForm` gives you by default. |
+
+## `UseFieldReturnType<Value, TError>`
+
+| Property | Description |
+|----------|--------------|
+| `key` | Stable remount key — same purpose as `form.key(path)`, pre-resolved for the single field. |
+| `getValue()` / `setValue(value \| updater)` | Read/write the field's value directly, bypassing `getInputProps` (useful for non-DOM-event-driven updates). |
+| `reset()` | Resets to `initialValue`, clearing error/touched/dirty for this field. |
+| `getInputProps()` | Returns the same shape as `form.getInputProps(path, { type })` would, with no arguments needed since there's only one field. |
+| `error` | `TError \| null` — read directly, not a method. |
+| `validate()` | Returns a `Promise` (always, regardless of whether the underlying rule is sync) resolving to the error or `null`/`undefined`. |
+| `isValidating` / `isDirty` / `isTouched` | Booleans, read directly. |
+| `setError(error)` / `clearError()` | Manual error control, equivalent to `form.setFieldError`/`clearFieldError` scoped to this field. |
 
 ## Basic usage
 
@@ -21,235 +85,36 @@ function EmailInput() {
 
   return (
     <div>
-      <input
-        key={field.key}
-        {...field.getInputProps()}
-        type="email"
-        placeholder="Email"
-      />
+      <input key={field.key} {...field.getInputProps()} type="email" placeholder="Email" />
       {field.error && <span style={{ color: 'red' }}>{field.error}</span>}
     </div>
   );
 }
 ```
 
-## UseFieldOptions
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `initialValue` | `Value` | **required** | The starting value for the field. |
-| `validate` | `(value) => error \| null \| Promise<error \| null>` | — | Validation rule; return `null` or `undefined` when valid. |
-| `validateOnChange` | `boolean` | `false` | Run validation on every value change. |
-| `validateOnBlur` | `boolean` | `false` | Run validation on blur. |
-| `type` | `'input' \| 'checkbox' \| 'radio'` | `'input'` | Input type hint forwarded to `getInputProps`. |
-| `mode` | `'controlled' \| 'uncontrolled'` | `'controlled'` | Same semantics as `useForm`. |
-| `resolveValidationError` | `(error: unknown) => TError` | — | Maps thrown async errors to the error type. |
-
----
-
-## UseFieldReturnType
-
-| Property / Method | Type | Description |
-|-------------------|------|-------------|
-| `key` | `string` | Stable key for uncontrolled remounting (`<input key={field.key} />`) |
-| `getValue()` | `() => Value` | Returns the latest field value |
-| `setValue(value)` | `(value \| updater) => void` | Sets the field value |
-| `reset()` | `() => void` | Resets field to `initialValue` |
-| `getInputProps()` | `() => InputProps` | Returns props to spread onto an input element |
-| `error` | `TError \| null` | Current error, or `null` when valid |
-| `validate()` | `() => Promise<TError \| null>` | Manually trigger validation |
-| `isValidating` | `boolean` | `true` while async validation is pending |
-| `isDirty` | `boolean` | `true` when value differs from `initialValue` |
-| `isTouched` | `boolean` | `true` when the field has been interacted with |
-| `setError(error)` | `(TError) => void` | Manually set an error |
-| `clearError()` | `() => void` | Clear the current error |
-
----
-
-## Validation
-
-### validateOnChange
-
-Validates the field on every keystroke:
+## Advanced: a reusable validated-input component built entirely on `useField`
 
 ```tsx
-import { useField } from '@headlesskit/forms-react';
-
-function Demo() {
-  const field = useField({
-    initialValue: '',
-    validate: (value) => value.trim().length < 2 ? 'Too short' : null,
-    validateOnChange: true,
-  });
-
-  return (
-    <div>
-      <input key={field.key} {...field.getInputProps()} />
-      {field.error && <p style={{ color: 'red' }}>{field.error}</p>}
-    </div>
-  );
-}
-```
-
-### validateOnBlur
-
-Validates the field when focus leaves:
-
-```tsx
-import { useField } from '@headlesskit/forms-react';
-
-function Demo() {
-  const field = useField({
-    initialValue: '',
-    validate: (value) => value.trim().length < 2 ? 'Too short' : null,
-    validateOnBlur: true,
-  });
-
-  return (
-    <div>
-      <input key={field.key} {...field.getInputProps()} />
-      {field.error && <p style={{ color: 'red' }}>{field.error}</p>}
-    </div>
-  );
-}
-```
-
-### Async Validation
-
-The `validate` function may return a `Promise`:
-
-```tsx
-import { useField } from '@headlesskit/forms-react';
-
-function UsernameInput() {
-  const field = useField({
-    initialValue: '',
-    validateOnChange: true,
-    validate: async (value) => {
-      if (value.trim().length < 3) return 'Too short';
-      const taken = await checkUsernameAvailability(value);
-      return taken ? 'Username is already taken' : null;
-    },
-  });
-
-  return (
-    <div>
-      <input key={field.key} {...field.getInputProps()} placeholder="Username" />
-      {field.isValidating && <span>Checking...</span>}
-      {field.error && <p style={{ color: 'red' }}>{field.error}</p>}
-    </div>
-  );
-}
-```
-
----
-
-## Touched and Dirty
-
-```tsx
-import { useField } from '@headlesskit/forms-react';
-
-function Demo() {
-  const field = useField({
-    initialValue: '',
-  });
-
-  return (
-    <div>
-      <input key={field.key} {...field.getInputProps()} />
-      <p>Touched: {String(field.isTouched)}</p>
-      <p>Dirty: {String(field.isDirty)}</p>
-    </div>
-  );
-}
-```
-
----
-
-## Uncontrolled Mode
-
-Use `mode: 'uncontrolled'` to prevent re-renders on every keystroke:
-
-```tsx
-import { useField } from '@headlesskit/forms-react';
-
-function Demo() {
-  const field = useField({
-    initialValue: '',
-    mode: 'uncontrolled',
-    validateOnBlur: true,
-    validate: (value) => value.trim().length < 2 ? 'Too short' : null,
-  });
-
-  return (
-    <div>
-      {/* key prop ensures remount when value is programmatically set */}
-      <input key={field.key} {...field.getInputProps()} />
-      {field.error && <p style={{ color: 'red' }}>{field.error}</p>}
-      <button onClick={() => field.setValue('preset')}>Set preset</button>
-      <button onClick={field.reset}>Reset</button>
-    </div>
-  );
-}
-```
-
----
-
-## Manually Triggering Validation
-
-Call `field.validate()` programmatically:
-
-```tsx
-import { useField } from '@headlesskit/forms-react';
-
-function Demo() {
-  const field = useField({
-    initialValue: '',
-    validate: (value) => value.trim().length < 2 ? 'Too short' : null,
-  });
-
-  const handleCheck = async () => {
-    const error = await field.validate();
-    if (error) {
-      console.log('Validation failed:', error);
-    } else {
-      console.log('Valid!');
-    }
-  };
-
-  return (
-    <div>
-      <input key={field.key} {...field.getInputProps()} />
-      {field.error && <p style={{ color: 'red' }}>{field.error}</p>}
-      <button onClick={handleCheck}>Check</button>
-    </div>
-  );
-}
-```
-
----
-
-## Checkbox Field
-
-```tsx
-import { useField } from '@headlesskit/forms-react';
-
-function Demo() {
-  const field = useField({
-    initialValue: false,
-    type: 'checkbox',
-    validate: (value) => value ? null : 'You must accept the terms',
-  });
-
+function ValidatedInput({ label, initialValue, validate }: {
+  label: string;
+  initialValue: string;
+  validate: (value: string) => string | null;
+}) {
+  const field = useField({ initialValue, validate, validateOnBlur: true, mode: 'uncontrolled' });
   return (
     <label>
-      <input key={field.key} {...field.getInputProps()} type="checkbox" />
-      I accept the terms
-      {field.error && <p style={{ color: 'red' }}>{field.error}</p>}
+      {label}
+      <input key={field.key} {...field.getInputProps()} />
+      {field.isTouched && field.error && <span>{field.error}</span>}
     </label>
   );
 }
 ```
 
----
+This component has zero awareness of any enclosing form — it's entirely self-contained, which is exactly the use case `useField` targets: composable, independently-testable field components.
 
+## Common pitfalls
+
+- **`useField`'s `mode` defaults to `'controlled'`, unlike `useForm`'s `'uncontrolled'` default** — if you want the same typing-performance benefit `useForm` gives you out of the box, you must explicitly pass `mode: 'uncontrolled'` to `useField`.
+- **A `useField` instance is entirely independent of any `useForm` instance** — there's no automatic way to compose a `useField`-managed value into a larger form's `values`; if you need both a full form *and* an independently-validated standalone field's value, you'll need to manually bridge them (e.g. via `form.watch`/`form.setFieldValue` and the field's own `getValue`/`setValue`), since they're backed by two entirely separate store instances.
+- **`options` is read only once**, exactly like [useForm](./01-use-form) — changing `initialValue`/`validate` on a later render has no effect on the already-created internal store.

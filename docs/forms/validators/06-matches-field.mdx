@@ -1,0 +1,61 @@
+# matchesField
+
+**File:** `src/validators/matches-field.ts`
+
+The standard "confirm password" style cross-field validator.
+
+## Signature
+
+```typescript
+function matchesField<TError = string>(otherFieldPath: string, error?: TError): ValidationRule<unknown, unknown, TError>
+```
+
+## Behavior
+
+Reads `otherFieldPath` out of the full `values` object (via [getPath](../utils/05-get-path), so nested paths work) and compares with strict equality (`===`) against the field's own value.
+
+```typescript
+matchesField('password', 'Passwords do not match')('secret123', { password: 'secret123' }, 'confirmPassword'); // null
+matchesField('password', 'Passwords do not match')('typo', { password: 'secret123' }, 'confirmPassword');       // error
+```
+
+Strict equality means this is only reliable for primitives (strings, numbers, booleans) — comparing two structurally-identical-but-distinct objects/arrays would incorrectly report a mismatch, since `{} === {}` is `false` even when their contents match.
+
+## Basic usage
+
+```typescript
+import { useForm, matchesField } from '@headlesskit/forms-react';
+
+const form = useForm({
+  initialValues: { password: '', confirmPassword: '' },
+  validate: {
+    password: hasLength({ min: 8 }, 'At least 8 characters'),
+    confirmPassword: matchesField('password', 'Passwords do not match'),
+  },
+});
+```
+
+## Advanced: re-validating the confirmation field when the primary field changes
+
+Since `matchesField` only runs when *its own* field's rule is triggered, changing `password` alone doesn't automatically re-validate `confirmPassword` (unless `validateInputOnChange` covers it too, or you re-validate manually):
+
+```typescript
+const form = useForm({
+  initialValues: { password: '', confirmPassword: '' },
+  validate: { password: ..., confirmPassword: matchesField('password', '...') },
+});
+
+useEffect(() => {
+  return form.watch('password', () => {
+    if (form.isTouched('confirmPassword')) {
+      void form.validateField('confirmPassword');
+    }
+  });
+}, []);
+```
+
+## Common pitfalls
+
+- **Calling `matchesField(path)` with no `error` argument never reports a failure** — same shared root cause as every validator in this folder. Always pass an explicit error.
+- **Don't use this for object/array field comparisons** — strict equality will almost always report a false mismatch for non-primitive values; write a custom rule using [deepEqual](../utils/02-deep-equal) if you need structural comparison between two fields.
+- **The compared field not existing (a typo in `otherFieldPath`) silently resolves to comparing against `undefined`** — `getPath` returns `undefined` for a missing path rather than throwing, so a typo here produces a confusing "always mismatches unless this field is also literally `undefined`" bug rather than an immediate error.

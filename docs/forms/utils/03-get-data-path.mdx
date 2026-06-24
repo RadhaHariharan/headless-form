@@ -1,0 +1,35 @@
+# getDataPath
+
+**File:** `src/utils/get-data-path.ts`
+
+Builds the `data-path` attribute value [createFormStore](../store/01-create-form-store)'s `getInputProps` writes onto every input, and that `getInputNode` later queries for.
+
+## Signature
+
+```typescript
+function getDataPath(path: string, formName?: string): string
+```
+
+| Parameter | Description |
+|-----------|--------------|
+| `path` | The field's dot-notation path. |
+| `formName` | The form's `name` option, if set. |
+
+**Returns:** `` `${formName}/${path}` `` when a form name is set, otherwise just `path` unchanged.
+
+## Why the form name is prefixed
+
+```typescript
+getDataPath('user.name');           // 'user.name'
+getDataPath('user.name', 'signup'); // 'signup/user.name'
+```
+
+Without a name, two separate forms on the same page that both have a field at `'user.name'` would write the *same* `data-path` attribute, and `getInputNode('user.name')`'s `document.querySelector` would ambiguously match whichever one comes first in the DOM, regardless of which form instance called it. Prefixing with the form's `name` makes the attribute globally unique per form, so `getInputNode` always finds the correct element even with multiple same-shaped forms mounted simultaneously.
+
+## Basic usage (internal — you don't call this directly)
+
+This is purely plumbing inside `getInputProps`/`getInputNode`; application code never needs to compute a `data-path` value itself. If you need to query a form's input from outside the library (e.g. for a focus-management utility), use `form.getInputNode(path)` rather than reconstructing this string format yourself — the exact prefixing scheme is an implementation detail.
+
+## Common pitfalls
+
+- **Two unnamed forms with overlapping field paths on the same page will produce colliding `data-path` attributes** — if you have multiple forms mounted at once with structurally similar values (e.g. a list of repeated sub-forms), give each a unique `name` so `getInputNode` resolves correctly for each instance.

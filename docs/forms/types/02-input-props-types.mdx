@@ -1,0 +1,85 @@
+# input-props.types
+
+**File:** `src/types/input-props.types.ts`
+
+Types for `form.getInputProps(path, options)` — the API that bridges form state to a spreadable `{...props}` object for a real DOM input.
+
+## `InputType`
+
+```typescript
+type InputType = 'input' | 'checkbox' | 'radio';
+```
+
+| Value | Result includes |
+|-------|-------------------|
+| `'input'` (default) | `value`/`defaultValue` — for text, number, textarea, select, etc. |
+| `'checkbox'` | `checked`/`defaultChecked`, computed as `Boolean(storedValue)`. |
+| `'radio'` | `checked`/`defaultChecked`, computed as `storedValue === options.value`; also echoes `radioValue` and sets `value` to `options.value` (the DOM `value` attribute identifying *this* radio option, not the field's stored value). |
+
+## `GetInputPropsOptions<TError>`
+
+| Option | Type | Default | Description |
+|--------|------|---------|--------------|
+| `type` | `InputType` | `'input'` | See above. |
+| `withError` | `boolean` | `true` | Include `error` in the result when the field has one. |
+| `withFocus` | `boolean` | `type !== 'radio'` | Include `onFocus`/`onBlur`. Off by default for radios since a radio *group* typically only needs one shared focus/blur concern, not one per option. |
+| `value` | `unknown` | none | Required for `type: 'radio'` — the value this specific radio button represents. |
+| `[key: string]` | `unknown` | — | Any extra keys are forwarded through to `enhanceGetInputProps` and merged into the result, unmodified. |
+
+## `GetInputPropsResult<TError>`
+
+```typescript
+interface GetInputPropsResult<TError = unknown> {
+  'data-path': string;
+  onChange: (eventOrValue: unknown) => void;
+  value?: string | number | readonly string[] | undefined;
+  defaultValue?: string | number | readonly string[] | undefined;
+  checked?: boolean;
+  defaultChecked?: boolean;
+  radioValue?: unknown;
+  error?: TError;
+  onFocus?: () => void;
+  onBlur?: () => void;
+}
+```
+
+Exactly one of each pair (`value`/`defaultValue`, `checked`/`defaultChecked`) is ever present on a given result, determined by the form's `mode` — never both, since React/the DOM treats mixing controlled and uncontrolled props on the same input as an error.
+
+## `EnhanceGetInputPropsPayload<Values, TError>`
+
+```typescript
+interface EnhanceGetInputPropsPayload<Values, TError = unknown> {
+  inputProps: GetInputPropsResult<TError>;
+  field: string;
+  options: GetInputPropsOptions<TError>;
+  form: FormStoreApi<Values, Values, unknown>;
+}
+```
+
+The argument passed to `UseFormOptions.enhanceGetInputProps` — see [store.types](./01-store-types). Note `form` here is typed with `TransformedValues = Values` (the enhancer always sees the raw, untransformed form API, regardless of what `transformValues` the actual form uses).
+
+## Basic usage
+
+```tsx
+<input {...form.getInputProps('email')} />
+<input type="checkbox" {...form.getInputProps('subscribe', { type: 'checkbox' })} />
+<input type="radio" {...form.getInputProps('plan', { type: 'radio', value: 'pro' })} />
+```
+
+## Advanced: globally adding `aria-invalid` via `enhanceGetInputProps`
+
+```typescript
+const form = useForm({
+  initialValues: { email: '' },
+  enhanceGetInputProps: ({ inputProps }) => ({
+    'aria-invalid': inputProps.error !== undefined,
+  }),
+});
+```
+
+Every call to `form.getInputProps(...)` across the entire form now automatically includes `aria-invalid`, without needing to repeat the logic at each call site.
+
+## Common pitfalls
+
+- **`GetInputPropsOptions`'s index signature (`[key: string]: unknown`) means typos in option names don't get caught by TypeScript** — passing `{ typ: 'checkbox' }` (misspelled) silently does nothing rather than erroring, since the index signature happily accepts it as an "extra" forwarded key; double-check option spelling when a checkbox/radio isn't behaving as configured.
+- **`radioValue` is the *option's* value, distinct from the field's current stored value** — don't confuse `options.value` (which radio button this is) with what's actually selected; the selected state is derived (`storedValue === options.value`), not read directly from `options.value`.

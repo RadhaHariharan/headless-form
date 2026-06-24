@@ -1,0 +1,107 @@
+# schemaResolver
+
+**File:** `src/resolvers/schema-resolver.ts`
+
+Bridges any [Standard Schema](https://standardschema.dev)-compatible validation library (Zod v4, Valibot, ArkType, Effect Schema, and others implementing the spec) into the form's `validate` option, without this package depending on any of those libraries directly.
+
+## Signature
+
+```typescript
+function schemaResolver<Values, TError = string>(
+  schema: StandardSchema<Values>,
+  options?: SchemaResolverOptions,
+): (values: Values) => FormErrors<TError> | Promise<FormErrors<TError>>
+```
+
+| Parameter | Description |
+|-----------|--------------|
+| `schema` | Any object implementing the Standard Schema v1 `~standard.validate(value)` interface. |
+| `options.sync` | `boolean`, default `false`. When `true`, throws immediately if the schema's `validate` call returns a `Promise` — use this to assert at runtime that you intentionally expect a synchronous schema. |
+
+**Returns:** a whole-form validator function — pass it directly as `UseFormOptions.validate`.
+
+## `StandardSchema<Output>` — the minimal interface this accepts
+
+```typescript
+interface StandardSchema<Output> {
+  readonly '~standard': {
+    readonly version: 1;
+    readonly vendor: string;
+    validate(value: unknown): StandardSchemaResult<Output> | Promise<StandardSchemaResult<Output>>;
+  };
+}
+```
+
+Any schema object satisfying this shape works — `schemaResolver` never imports or depends on Zod/Valibot/etc itself, it just calls `schema['~standard'].validate(values)` and interprets the result.
+
+## How schema issues become form errors
+
+```typescript
+function processResult(r) {
+  if (r.issues === undefined) return {};
+  const errors = {};
+  for (const issue of r.issues) {
+    if (issue.path && issue.path.length > 0) {
+      const path = issuePathToString(issue.path); // joins path segments with '.'
+      if (!(path in errors)) errors[path] = issue.message; // first issue per path wins
+    }
+  }
+  return errors;
+}
+```
+
+Each schema issue's `path` (an array of string/number segments, or `{ key }` objects per the spec) is joined into the same dot-notation format the rest of the library uses (`'user.email'`). **Only the first issue per path is kept** — if a schema reports multiple issues for the same field, only the first one becomes that field's error message.
+
+Issues with no `path` (or an empty one) — i.e. whole-object-level issues not attributable to a specific field — are currently **dropped**, not surfaced anywhere. If you need form-level (non-field) error reporting from a schema, handle that separately (e.g. checking the schema result yourself outside `schemaResolver`, or using [formRootRule](../types/04-validation-types) in a complementary rules object).
+
+## Basic usage
+
+```typescript
+import { z } from 'zod';
+import { useForm, schemaResolver } from '@headlesskit/forms-react';
+
+const schema = z.object({
+  email: z.string().email(),
+  age: z.number().min(18),
+});
+
+const form = useForm({
+  initialValues: { email: '', age: 0 },
+  validate: schemaResolver(schema),
+});
+```
+
+## Advanced: a nested schema producing nested field paths
+
+```typescript
+const schema = z.object({
+  user: z.object({
+    name: z.string().min(1),
+    address: z.object({ city: z.string().min(1) }),
+  }),
+});
+
+const form = useForm({
+  initialValues: { user: { name: '', address: { city: '' } } },
+  validate: schemaResolver(schema),
+});
+
+// a Zod issue at path ['user', 'address', 'city'] becomes errors['user.address.city']
+```
+
+## Advanced: asserting a schema is synchronous
+
+```typescript
+const form = useForm({
+  initialValues: { email: '' },
+  validate: schemaResolver(schema, { sync: true }),
+});
+```
+
+If `schema` unexpectedly turns out to validate asynchronously (e.g. it has an async refinement you forgot about), this throws immediately with a clear message rather than silently returning a `Promise` your code wasn't expecting.
+
+## Common pitfalls
+
+- **Whole-object-level schema issues (no `path`, or an empty `path`) are silently dropped** — if your schema has a top-level `.refine()`/`.superRefine()`-style check not attached to a specific field, its message currently never reaches `errors`; structure such checks to attach to a specific field's path if you need the message to surface through this resolver.
+- **Only the first issue per field path is kept** — if a single field can fail multiple schema rules at once (e.g. both "too short" and "must contain a number"), only the first one your schema reports is shown; design your schema's rule order (or combine messages within one rule) if you want a specific message to take priority.
+- **`schema` must implement the Standard Schema interface, not just "be a Zod schema"** — older Zod versions (pre-v4) didn't implement `~standard` by default; verify your validation library's version actually implements the spec before assuming `schemaResolver` will work with it.

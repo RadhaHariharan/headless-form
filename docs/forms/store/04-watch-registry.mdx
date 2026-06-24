@@ -1,0 +1,74 @@
+# watch-registry
+
+**File:** `src/store/watch-registry.ts`
+
+The pub/sub mechanism behind `form.watch(path, handler)` — entirely independent of the main subscriber pattern that drives re-renders (see [createFormStore](./01-create-form-store)'s subscription contract). Watch handlers fire on **every** value change at their path, even in uncontrolled mode where typing doesn't trigger a re-render — this is precisely why `watch` exists: to observe value changes without needing `values` itself to be reactive.
+
+## `createWatchRegistry()`
+
+```typescript
+interface WatchRegistry {
+  subscribe(path: string, handler: WatchHandler<unknown>): () => void;
+  notify(path: string, payload: WatchPayload<unknown>, cascade: boolean): void;
+}
+function createWatchRegistry(): WatchRegistry
+```
+
+Internally just a `Map<path, Set<handler>>` — `subscribe` adds a handler to the path's set (creating the set on first use, removing it on last unsubscribe to avoid an ever-growing empty-set leak), and `notify` looks up and calls every handler registered for that exact path.
+
+## The `cascade` parameter
+
+```typescript
+notify(path, payload, cascade: boolean)
+```
+
+When `cascade` is `true` (driven by [createFormStore](./01-create-form-store)'s `cascadeUpdates` option), a change at `'a.b.c'` also notifies any handler registered on **ancestor** paths — `'a.b'` and `'a'` — with the *same* payload (the leaf's before/after value, not some computed parent-level diff). This lets a single `form.watch('items')` handler react to a change at `'items.0.name'` without needing to also watch every possible leaf path under `items` individually.
+
+```typescript
+form.watch('user', (payload) => {
+  console.log('something under user changed:', payload);
+});
+// with cascadeUpdates: true, this fires even when only 'user.address.city' changes
+```
+
+Without `cascadeUpdates` (the default, `false`), only an exact-path match notifies — a `watch('user')` handler does **not** fire when `'user.address.city'` changes, only when `'user'` itself is set directly (e.g. via `setValues` replacing the whole `user` object).
+
+## Basic usage
+
+```typescript
+const unsubscribe = form.watch('email', ({ value, previousValue, touched, dirty }) => {
+  console.log(`email changed from "${previousValue}" to "${value}"`);
+});
+
+// later, e.g. on component unmount:
+unsubscribe();
+```
+
+## Advanced: deriving a computed field from a watched value
+
+```typescript
+const form = useForm({
+  initialValues: { firstName: '', lastName: '', fullName: '' },
+});
+
+useEffect(() => {
+  const unsubFirst = form.watch('firstName', () => {
+    form.setFieldValue('fullName', `${form.getValues().firstName} ${form.getValues().lastName}`.trim());
+  });
+  const unsubLast = form.watch('lastName', () => {
+    form.setFieldValue('fullName', `${form.getValues().firstName} ${form.getValues().lastName}`.trim());
+  });
+  return () => {
+    unsubFirst();
+    unsubLast();
+  };
+}, []);
+```
+
+This pattern works identically in controlled *and* uncontrolled mode — `watch` fires regardless of mode, which is what makes it the recommended tool for "derive field B from field A" logic instead of relying on `values` being reactive (which it deliberately isn't, in uncontrolled mode).
+
+## Common pitfalls
+
+- **`cascadeUpdates` defaults to `false`** — if a parent-path `watch` handler isn't firing when you expect it to, check whether `cascadeUpdates: true` was set on the form; without it, only exact-path matches notify.
+- **Calling `setFieldValue` from inside a `watch` handler that watches an ancestor of the path you're setting can cascade back into itself** if `cascadeUpdates` is on and the paths overlap carelessly — guard against infinite update loops by ensuring a watch handler's own writes don't fall under the same path it's watching (or an ancestor of it).
+- **Forgetting to call the returned unsubscribe function** leaks the handler for the lifetime of the form store — in a component, always pair `form.watch(...)` with cleanup (e.g. inside `useEffect`'s return function), exactly like the advanced example above.

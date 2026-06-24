@@ -1,0 +1,41 @@
+# deepEqual
+
+**File:** `src/utils/deep-equal.ts`
+
+Structural equality check used exclusively for dirty-state detection (`computeIsDirty` inside [createFormStore](../store/01-create-form-store) compares the current value at a path against the initial one).
+
+## Signature
+
+```typescript
+function deepEqual(a: unknown, b: unknown): boolean
+```
+
+## What it handles (and doesn't)
+
+| Type | Supported |
+|------|-----------|
+| Primitives (via `===`) | ✅ |
+| `Date` | ✅ — compared via `.getTime()`, so two distinct `Date` instances representing the same instant are equal |
+| Arrays | ✅ — recursive, length-checked, order-sensitive |
+| Plain objects | ✅ — recursive, key-count-checked, each key compared via `hasOwnProperty` + recursion |
+| `Map`, `Set` | ❌ — not specially handled; falls through to plain-object comparison, which is almost certainly not what you want |
+| `RegExp` | ❌ — not specially handled |
+| Circular references | ❌ — will recurse infinitely / stack overflow |
+
+## Basic usage
+
+```typescript
+deepEqual({ x: 1 }, { x: 1 });   // true
+deepEqual([1, 2], [1, 2]);        // true
+deepEqual({ x: 1 }, { x: 2 });   // false
+deepEqual(new Date('2024-01-01'), new Date('2024-01-01')); // true — same instant, different instances
+```
+
+## Where this is used
+
+Exclusively by `computeIsDirty(path)` inside [createFormStore](../store/01-create-form-store): a field is dirty when `!deepEqual(currentValue, initialValue)`. This is also the fallback `isDirty()` (with no path argument) uses when checking the *whole form*: `!deepEqual(refValues, refInitialValues)`.
+
+## Common pitfalls
+
+- **Storing a `Map`, `Set`, or `RegExp` as a field's value breaks dirty detection** — since none of these are specially handled, two structurally-identical-but-distinct instances will be reported as *not* equal (falling through to the generic object comparison, which compares enumerable own keys — `Map`/`Set` have none in the way `deepEqual` looks, while `RegExp`'s `source`/`flags` aren't read either). If your form genuinely needs to store one of these types, be aware dirty-checking for that field may always report `true` after any reassignment, even to an equivalent value.
+- **Don't store values with circular references in form state** — `deepEqual` will recurse infinitely the first time dirty-checking runs against such a value.

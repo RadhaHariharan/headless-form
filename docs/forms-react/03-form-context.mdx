@@ -1,235 +1,136 @@
-# Form Context
+# createFormContext
 
-Form context lets you access the form object from deeply nested components without
-manually passing props. This is useful for complex forms with many sub-components.
+**File:** `src/context/create-form-context.ts`
 
----
+A typed React Context factory for sharing one form instance across deeply nested components without prop-drilling — generates a matched `FormProvider`/`useFormContext`/`useForm` triple, all pre-typed to the same `Values` shape.
 
-## createFormContext
+## Signature
 
-`createFormContext` returns a tuple of three items:
+```typescript
+function createFormContext<Values, TransformedValues = Values, TError = ReactNode>(): [
+  FormProvider: (props: { form: UseFormReturnType<Values, TransformedValues, TError>; children: ReactNode }) => ReactNode,
+  useFormContext: () => UseFormReturnType<Values, TransformedValues, TError>,
+  useForm: (options?: UseFormOptions<Values, TransformedValues, TError>) => UseFormReturnType<Values, TransformedValues, TError>,
+]
+```
 
-1. `FormProvider` — a context provider component
-2. `useFormContext` — a hook to read the form from context
-3. `useForm` — a typed version of `useForm` with the values type pre-applied
+Returns a 3-tuple — call it once per distinct form *shape* (typically at module scope, not inside a component), then destructure and rename to your liking.
+
+## How it actually works
+
+```typescript
+const FormContext = createContext<UseFormReturnType<Values, TransformedValues, TError> | null>(null);
+
+function FormProvider({ form, children }) {
+  return createElement(FormContext.Provider, { value: form }, children);
+}
+
+function useFormContext() {
+  const ctx = useContext(FormContext);
+  if (ctx === null) {
+    throw new Error('[headlesskit/useFormContext] No FormProvider found in the component tree. Wrap your component with <FormProvider form={form}>.');
+  }
+  return ctx;
+}
+
+function useTypedForm(options = {}) {
+  return useForm<Values, TransformedValues, TError>(options);
+}
+```
+
+Three things worth noting about this implementation:
+
+1. **`FormProvider` doesn't create the form itself** — it only *provides* a form instance you already created (typically via the returned `useTypedForm`, i.e. the third tuple element) to a `React.Context`. The form's lifecycle (when it's created, when its state resets) is entirely controlled by wherever you call `useForm()`, not by `FormProvider` mounting/unmounting.
+2. **`useFormContext` throws, rather than returning `null` or `undefined`, when called outside a provider** — a deliberate fail-fast choice: a component built to consume form context has no sensible fallback behavior without one, so a clear, immediate error beats a confusing `undefined.getInputProps is not a function` crash deeper in the component.
+3. **Each `createFormContext()` call creates a fully independent `React.Context`** — nested/sibling contexts from separate calls never collide or interfere, even if their `Values` shapes happen to be identical; this is what lets you safely use this pattern for multiple distinct forms across an app (or even nested forms-within-forms) without any cross-talk.
+
+## Basic usage
 
 ```tsx
 import { createFormContext } from '@headlesskit/forms-react';
 
-// Define form values type (required)
 interface FormValues {
   age: number;
   name: string;
   email: string;
 }
 
-// createFormContext returns [FormProvider, useFormContext, useForm]
 const [FormProvider, useFormContext, useForm] = createFormContext<FormValues>();
-```
 
-### Usage
-
-```tsx
-// ContextField.tsx — consumes the form from context
 function NameField() {
   const form = useFormContext();
-
   return (
     <div>
-      <label>Name</label>
-      <input
-        key={form.key('name')}
-        {...form.getInputProps('name')}
-        placeholder="Your name"
-      />
+      <input key={form.key('name')} {...form.getInputProps('name')} placeholder="Your name" />
       {form.errors.name && <p style={{ color: 'red' }}>{form.errors.name}</p>}
     </div>
   );
 }
 
-// ParentForm.tsx — creates the form and wraps with FormProvider
 function ParentForm() {
-  const form = useForm({
-    mode: 'uncontrolled',
-    initialValues: {
-      age: 0,
-      name: '',
-      email: '',
-    },
-    validate: {
-      name: (v) => v.trim().length < 2 ? 'Too short' : null,
-      email: (v) => !/^\S+@\S+/.test(v) ? 'Invalid email' : null,
-      age: (v) => v < 0 ? 'Invalid age' : null,
-    },
-  });
-
+  const form = useForm({ initialValues: { age: 0, name: '', email: '' } });
   return (
-    // Wrap with FormProvider, passing the form instance
     <FormProvider form={form}>
-      <form onSubmit={form.onSubmit(console.log)}>
-        <NameField />
-        {/* EmailField, AgeField, etc. — all read from context */}
-        <button type="submit">Submit</button>
-      </form>
+      <NameField />
+      {/* other field components consuming the same context */}
     </FormProvider>
   );
 }
 ```
 
----
-
-## Store Context in a Separate File
-
-Avoid dependency cycles by keeping form context in a dedicated file:
-
-```typescript
-// form-context.ts
-import { createFormContext } from '@headlesskit/forms-react';
-
-interface UserFormValues {
-  firstName: string;
-  lastName: string;
-  email: string;
-  age: number;
-}
-
-// Export the three items with descriptive names
-export const [UserFormProvider, useUserFormContext, useUserForm] =
-  createFormContext<UserFormValues>();
-```
-
-Then import from any component:
+## Advanced: a multi-step form sharing one context across separate step components
 
 ```tsx
-// fields/EmailField.tsx
-import { useUserFormContext } from '../form-context';
+const [FormProvider, useFormContext, useForm] = createFormContext<CheckoutValues>();
 
-export function EmailField() {
-  const form = useUserFormContext();
+function CheckoutWizard() {
+  const form = useForm({ initialValues: initialCheckoutValues });
+  const [step, setStep] = useState(0);
 
   return (
-    <div>
-      <label>Email</label>
-      <input
-        key={form.key('email')}
-        {...form.getInputProps('email')}
-        type="email"
-        placeholder="your@email.com"
-      />
-      {form.errors.email && <p>{form.errors.email}</p>}
-    </div>
+    <FormProvider form={form}>
+      {step === 0 && <ShippingStep onNext={() => setStep(1)} />}
+      {step === 1 && <PaymentStep onNext={() => setStep(2)} onBack={() => setStep(0)} />}
+      {step === 2 && <ReviewStep onSubmit={() => form.onSubmit(handleSubmit)} />}
+    </FormProvider>
+  );
+}
+
+function ShippingStep({ onNext }: { onNext: () => void }) {
+  const form = useFormContext(); // same instance the wizard created — state persists across steps
+  return <input key={form.key('address')} {...form.getInputProps('address')} />;
+}
+```
+
+Because all three steps read the *same* form instance via `useFormContext`, navigating between steps preserves every field's value, error, and touched/dirty state automatically — there's no need to manually lift state up or pass it through props at each step boundary.
+
+## Advanced: nested, independent contexts
+
+```tsx
+const [OuterProvider, useOuterForm] = createFormContext<OuterValues>();
+const [InnerProvider, useInnerForm] = createFormContext<InnerValues>();
+
+function App() {
+  const outer = useOuterForm({ initialValues: {...} });
+  return (
+    <OuterProvider form={outer}>
+      <SomeComponent />
+    </OuterProvider>
+  );
+}
+
+function SomeComponent() {
+  const inner = useInnerForm({ initialValues: {...} });
+  return (
+    <InnerProvider form={inner}>
+      {/* a deeply nested component can call useOuterForm's context hook OR useInnerForm's — independently */}
+    </InnerProvider>
   );
 }
 ```
 
-```tsx
-// fields/NameFields.tsx
-import { useUserFormContext } from '../form-context';
+## Common pitfalls
 
-export function NameFields() {
-  const form = useUserFormContext();
-
-  return (
-    <div>
-      <input
-        key={form.key('firstName')}
-        {...form.getInputProps('firstName')}
-        placeholder="First name"
-      />
-      <input
-        key={form.key('lastName')}
-        {...form.getInputProps('lastName')}
-        placeholder="Last name"
-      />
-    </div>
-  );
-}
-```
-
-```tsx
-// UserForm.tsx
-import { UserFormProvider, useUserForm } from './form-context';
-import { EmailField } from './fields/EmailField';
-import { NameFields } from './fields/NameFields';
-import { isEmail, isNotEmpty } from '@headlesskit/forms-react';
-
-export function UserForm() {
-  const form = useUserForm({
-    mode: 'uncontrolled',
-    initialValues: {
-      firstName: '',
-      lastName: '',
-      email: '',
-      age: 0,
-    },
-    validate: {
-      firstName: isNotEmpty('First name is required'),
-      lastName: isNotEmpty('Last name is required'),
-      email: isEmail('Invalid email'),
-    },
-  });
-
-  return (
-    <UserFormProvider form={form}>
-      <form onSubmit={form.onSubmit(console.log)}>
-        <NameFields />
-        <EmailField />
-        <button type="submit">Create Account</button>
-      </form>
-    </UserFormProvider>
-  );
-}
-```
-
----
-
-## Multiple Contexts
-
-You can create as many independent form contexts as needed:
-
-```typescript
-import { createFormContext } from '@headlesskit/forms-react';
-
-interface ShippingFormValues {
-  street: string;
-  city: string;
-  country: string;
-}
-
-interface BillingFormValues {
-  cardNumber: string;
-  expiry: string;
-  cvv: string;
-}
-
-export const [ShippingFormProvider, useShippingForm, useShipping] =
-  createFormContext<ShippingFormValues>();
-
-export const [BillingFormProvider, useBillingForm, useBilling] =
-  createFormContext<BillingFormValues>();
-```
-
----
-
-## Error When No Context Is Found
-
-`useFormContext` throws if called outside a `FormProvider`:
-
-```
-[headlesskit/useFormContext] No FormProvider found in the component tree.
-Wrap your form with <FormProvider form={form}>.
-```
-
----
-
-## CreateFormContextResult Type
-
-```typescript
-import type { CreateFormContextResult } from '@headlesskit/forms-react';
-
-type Result = CreateFormContextResult<FormValues>;
-// -> [FormProvider, useFormContext, useForm]
-// [0]: React.FC<{ form: UseFormReturnType<FormValues> }>
-// [1]: () => UseFormReturnType<FormValues>
-// [2]: (options: UseFormOptions<FormValues>) => UseFormReturnType<FormValues>
-```
+- **Calling the third tuple element's `useForm` more than once for the same logical form creates two independent form instances** — only the instance you actually pass into `<FormProvider form={...}>` is the one descendants will see via `useFormContext`; calling `useForm()` again elsewhere (even with identical options) produces a completely separate, unsynchronized store.
+- **`useFormContext()` throwing means you must always render inside the matching `<FormProvider>`** — a common mistake is forgetting the provider wrapper during a refactor (e.g. extracting a field component for reuse) and only discovering the missing-provider error at runtime; there's no way to make this check compile-time in plain TSX without additional tooling.
+- **Don't call `createFormContext()` inside a component body** — it creates a brand-new `React.Context` (and a brand-new `FormProvider`/`useFormContext` pair) every time it runs; calling it per-render would mean every render produces a context none of the previous renders' providers/consumers are compatible with. Always call it once, at module scope.

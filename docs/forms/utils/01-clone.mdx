@@ -1,0 +1,46 @@
+# clone
+
+**File:** `src/utils/clone.ts`
+
+Deep-clones a value — used everywhere [createFormStore](../store/01-create-form-store) needs to snapshot `initialValues`/`refValues` so later mutation of one doesn't bleed into the other.
+
+## Signature
+
+```typescript
+function clone<T>(value: T): T
+```
+
+## What it does
+
+```typescript
+function clone<T>(value: T): T {
+  if (typeof structuredClone === 'function') {
+    return structuredClone(value);
+  }
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+```
+
+Prefers the native `structuredClone` (Node ≥ 17, all modern browsers) when available, falling back to the classic `JSON.parse(JSON.stringify(...))` trick otherwise.
+
+| | `structuredClone` | JSON fallback |
+|---|---|---|
+| `Date` | Preserved as a `Date` | Converted to an ISO string |
+| `Map`/`Set` | Preserved | Becomes `{}` / `[]` (data lost) |
+| Functions | Throws (not cloneable) | Silently dropped |
+| `undefined` values in objects | Preserved | Silently dropped |
+| Circular references | Preserved | Throws |
+
+## Basic usage
+
+```typescript
+const a = { x: { y: 1 } };
+const b = clone(a);
+b.x.y = 2;
+a.x.y; // still 1 — independent deep copies
+```
+
+## Common pitfalls
+
+- **Form values containing functions, `Map`/`Set`, or other non-JSON-serializable data lose fidelity on environments without `structuredClone`** — for modern JS runtimes this is rarely an issue (`structuredClone` has wide support), but if you target an older runtime and store such values in form state, verify cloning behavior explicitly rather than assuming `structuredClone`-level fidelity.
+- **`clone` is called on every `reset()`, `setInitialValues()`, and store creation** — for very large form values, this has a real (if usually negligible) per-call cost; it's not something to call manually in a hot path of your own code without reason.

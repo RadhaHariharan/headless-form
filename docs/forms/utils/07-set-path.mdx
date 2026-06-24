@@ -1,0 +1,46 @@
+# setPath
+
+**File:** `src/utils/set-path.ts`
+
+Immutably sets a value at a dot-notation path — the write-side counterpart to [getPath](./05-get-path), and the mechanism behind every value mutation in [createFormStore](../store/01-create-form-store) (`setFieldValue`, list operations, etc never mutate `refValues` in place; they always call `setPath` and reassign).
+
+## Signature
+
+```typescript
+function setPath(obj: unknown, path: string, value: unknown): unknown
+```
+
+## How it works
+
+Recursively walks the path segments, shallow-cloning **every level along the path** (and only those levels — sibling branches that aren't on the path keep their original references, which is what makes structural-sharing-friendly updates possible):
+
+```typescript
+setPath({ user: { name: 'Joe' } }, 'user.name', 'Jane');
+// { user: { name: 'Jane' } } — a NEW top-level object and a NEW `user` object,
+// but if there were a sibling key like `tags`, that array reference would be untouched
+
+setPath({ items: ['a', 'b'] }, 'items.1', 'c');
+// { items: ['a', 'c'] } — items is a new array, but elements other than index 1 are untouched
+```
+
+When the path doesn't exist yet, intermediate objects are created on the fly (`current ?? {}`):
+
+```typescript
+setPath({}, 'user.name', 'Jane'); // { user: { name: 'Jane' } }
+```
+
+Arrays are detected (`Array.isArray(current)`) and indexed numerically (`Number(head)`), so writing through an array segment correctly produces a new array rather than accidentally converting it to a plain object.
+
+## Basic usage (internal — exposed for advanced/custom use)
+
+```typescript
+import { setPath } from '@headlesskit/forms';
+
+const next = setPath({ user: { name: 'Joe' } }, 'user.name', 'Jane');
+// { user: { name: 'Jane' } } — original object untouched
+```
+
+## Common pitfalls
+
+- **Writing to a numeric path segment on something that isn't an array creates a plain object with a numeric-string key, not an array** — `setPath({}, 'items.0', 'x')` produces `{ items: { '0': 'x' } }`, **not** `{ items: ['x'] }`, since there's no existing array at `items` to detect; always seed array-shaped fields with an actual `[]` in `initialValues` if you intend to use array-index paths against them (which `createFormStore`'s `initialValues` requirement effectively already encourages).
+- **Every level along the path is cloned on every write** — for a very deeply nested path (many segments) updated very frequently, this has a real (if typically negligible) allocation cost per call; it's the necessary cost of the immutable-update model the rest of the store relies on for reference-equality-based dirty/re-render logic.
