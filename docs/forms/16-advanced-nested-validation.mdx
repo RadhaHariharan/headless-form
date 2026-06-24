@@ -1,0 +1,325 @@
+# Advanced: Nested Forms with Conditional & Cross-Field Validation
+
+A worked, real-world example of the validation patterns that come up once a form grows beyond
+flat fields: **conditional requirements** (a field is only required depending on another
+field's value — e.g. "if age ≥ 18, a license number is required"), **nested objects**,
+**arrays of nested objects**, and mixing the small composable [validators](./08-validators)
+with the configurable [field-validators](./14-field-validators) toolkit in the same form.
+
+Everything here builds on [Nested Fields](./09-nested-fields) and [Form Validation](./06-form-validation) —
+read those first if the dot-notation path / rules-object basics are unfamiliar.
+
+---
+
+## The core idea: conditional rules just read `values`
+
+Every [ValidationRule](./types/04-validation-types) receives `(value, values, path)` —
+`values` is the **entire** form, not just the field being validated. A conditional / cross-field
+rule is nothing more than a rule that branches on a sibling field instead of (or in addition to)
+its own `value`:
+
+```typescript
+const licenseNumber = (value: string, values: { age: number }) => {
+  const isAdult = values.age >= 18;
+  if (!isAdult) return null;          // not required at all under 18
+  return value.trim() ? null : 'License number is required for applicants 18 or older';
+};
+```
+
+That's the entire pattern this doc explores at increasing depth — nothing more exotic is needed.
+
+---
+
+## Basic example: age-gated license number
+
+```tsx
+import { useForm } from '@headlesskit/forms-react';
+import { isNotEmpty, isInRange } from '@headlesskit/forms-react';
+
+interface DriverApplication {
+  fullName: string;
+  age: number;
+  licenseNumber: string;
+}
+
+function DriverApplicationForm() {
+  const form = useForm<DriverApplication>({
+    mode: 'uncontrolled',
+    initialValues: { fullName: '', age: 0, licenseNumber: '' },
+    validate: {
+      fullName: isNotEmpty('Full name is required'),
+      age: isInRange({ min: 0, max: 120 }, 'Enter a valid age'),
+
+      // Conditional rule: only enforced when `values.age >= 18`.
+      licenseNumber: (value: string, values: DriverApplication) => {
+        if (values.age < 18) return null; // minors don't need a license at all
+        return value.trim() ? null : 'License number is required for applicants 18 or older';
+      },
+    },
+  });
+
+  return (
+    <form onSubmit={form.onSubmit((values) => console.log(values))}>
+      <input key={form.key('fullName')} {...form.getInputProps('fullName')} placeholder="Full name" />
+      {form.errors.fullName && <p>{form.errors.fullName}</p>}
+
+      <input key={form.key('age')} {...form.getInputProps('age')} type="number" placeholder="Age" />
+      {form.errors.age && <p>{form.errors.age}</p>}
+
+      {/* Only show the field at all once it's relevant — purely a UI decision, the rule above
+          already handles the "don't require it" half on its own */}
+      <input key={form.key('licenseNumber')} {...form.getInputProps('licenseNumber')} placeholder="License number" />
+      {form.errors.licenseNumber && <p>{form.errors.licenseNumber}</p>}
+
+      <button type="submit">Apply</button>
+    </form>
+  );
+}
+```
+
+A few things worth noticing already:
+
+- **The conditional check lives entirely in the rule, not in the UI.** Whether or not you choose
+  to visually hide `licenseNumber` for an under-18 applicant is a separate, purely cosmetic
+  decision — `form.validate()` is correct either way.
+- **Re-validating `licenseNumber` when `age` changes isn't automatic** — a rules object only
+  re-runs a field's rule when *that field itself* is the one being validated (on submit, on its
+  own change/blur if configured, or via an explicit `validateField` call). See
+  [Re-validating a dependent field when its sibling changes](#re-validating-a-dependent-field-when-its-sibling-changes)
+  below for the pattern that keeps them in sync live, not just at submit time.
+
+---
+
+## Advanced example: a full nested driver-registration form
+
+This combines everything: nested objects, an array of nested objects, conditional/cross-field
+rules at multiple levels, `formRootRule` for array-level checks, and the
+[field-validators](./14-field-validators) toolkit bridged in via
+[`toValidationRule`](./14-field-validators#using-with-a-form) wherever a configurable,
+opinionated check is a better fit than a one-line rule.
+
+```tsx
+import { useForm, formRootRule } from '@headlesskit/forms-react';
+import {
+  isNotEmpty,
+  isEmail,
+  matchesField,
+  createStringValidator,
+  createNumberValidator,
+  createDateValidator,
+  createCheckboxValidator,
+  toValidationRule,
+} from '@headlesskit/forms-react';
+
+interface Vehicle {
+  plate: string;
+  type: 'car' | 'motorcycle' | 'truck';
+  insurancePolicyNumber: string; // only required when type === 'truck'
+}
+
+interface EmergencyContact {
+  name: string;
+  relationship: string;
+  phone: string;
+}
+
+interface DriverRegistration {
+  personal: {
+    fullName: string;
+    age: number;
+    email: string;
+    confirmEmail: string;
+  };
+  license: {
+    number: string;
+    expiryDate: string;
+  };
+  address: {
+    street: string;
+    city: string;
+    zip: string;
+  };
+  vehicles: Vehicle[];
+  emergencyContacts: EmergencyContact[];
+  acceptedTerms: boolean;
+}
+
+// Reusable field-validators — built once, adapted into form rules with toValidationRule below.
+const nameValidator = createStringValidator({ minLength: 2, maxLength: 60 });
+const zipValidator = createStringValidator({ allowedCharacters: 'numeric', minLength: 5, maxLength: 5 });
+const ageValidator = createNumberValidator({ min: 0, max: 120, integer: true });
+const expiryDateValidator = createDateValidator({
+  inFuture: true,
+  messages: { inFuture: 'License must not be expired' },
+});
+const termsValidator = createCheckboxValidator({ mustBeTrue: true });
+
+function DriverRegistrationForm() {
+  const form = useForm<DriverRegistration>({
+    mode: 'uncontrolled',
+    initialValues: {
+      personal: { fullName: '', age: 0, email: '', confirmEmail: '' },
+      license: { number: '', expiryDate: '' },
+      address: { street: '', city: '', zip: '' },
+      vehicles: [{ plate: '', type: 'car', insurancePolicyNumber: '' }],
+      emergencyContacts: [{ name: '', relationship: '', phone: '' }],
+      acceptedTerms: false,
+    },
+    validate: {
+      // ── Nested object: personal ──────────────────────────────────────────
+      personal: {
+        fullName: toValidationRule(nameValidator, 'Full name'),
+        age: toValidationRule(ageValidator, 'Age'),
+        email: isEmail('Enter a valid email address'),
+        confirmEmail: matchesField('personal.email', 'Emails do not match'),
+      },
+
+      // ── Nested object: license, with a CROSS-OBJECT conditional rule ────
+      // Reads `values.personal.age` from a sibling top-level branch — cross-field rules
+      // work across nested boundaries exactly the same way they do at the top level.
+      license: {
+        number: (value: string, values: DriverRegistration) => {
+          if (values.personal.age < 18) return null;
+          return value.trim() ? null : 'License number is required for applicants 18 or older';
+        },
+        expiryDate: (value: string, values: DriverRegistration) => {
+          if (values.personal.age < 18) return null; // no license expected at all yet
+          if (!value) return 'License expiry date is required';
+          return toValidationRule(expiryDateValidator, 'License expiry date')(value, values, 'license.expiryDate');
+        },
+      },
+
+      // ── Nested object: address ───────────────────────────────────────────
+      address: {
+        street: isNotEmpty('Street address is required'),
+        city: isNotEmpty('City is required'),
+        zip: toValidationRule(zipValidator, 'ZIP code'),
+      },
+
+      // ── Array of nested objects: vehicles, with a PER-ITEM conditional rule ──
+      // Each vehicle's own `insurancePolicyNumber` rule reads that SAME vehicle's `type` —
+      // not a sibling field at the form root, but a sibling within the same array item.
+      vehicles: {
+        plate: isNotEmpty('License plate is required'),
+        insurancePolicyNumber: (value: string, _values: DriverRegistration, path: string) => {
+          // `path` looks like 'vehicles.0.insurancePolicyNumber' — walk back up to the item.
+          const index = Number(path.split('.')[1]);
+          const vehicle = _values.vehicles[index];
+          if (vehicle.type !== 'truck') return null; // only trucks require a policy number
+          return value.trim() ? null : 'Insurance policy number is required for trucks';
+        },
+        // Array-level rule: at least one vehicle must be registered.
+        [formRootRule]: (value: Vehicle[]) =>
+          value.length === 0 ? 'Register at least one vehicle' : null,
+      },
+
+      // ── Array of nested objects: emergencyContacts ───────────────────────
+      emergencyContacts: {
+        name: isNotEmpty('Contact name is required'),
+        relationship: isNotEmpty('Relationship is required'),
+        phone: createStringValidator({
+          customPattern: /^\d{10}$/,
+          allowedCharacters: 'custom',
+          messages: { allowedCharacters: 'Enter a 10-digit phone number' },
+        }) as never, // see note below — wrap with toValidationRule in real code
+        [formRootRule]: (value: EmergencyContact[]) =>
+          value.length < 1 ? 'Add at least one emergency contact' : null,
+      },
+
+      // ── Top-level boolean ─────────────────────────────────────────────────
+      acceptedTerms: toValidationRule(termsValidator, 'Terms and conditions'),
+    },
+  });
+
+  return form; // wiring inputs is identical to the simpler examples above — omitted for brevity
+}
+```
+
+> **Note on the `emergencyContacts.phone` line above:** it's written inline as a raw
+> `FieldValidatorFunction` to keep the snippet's shape visible at a glance — in real code,
+> always wrap a field-validator with `toValidationRule(...)` before placing it in a `validate`
+> object, exactly like every other field-validator usage in this example. The cast is there
+> only to keep this illustrative snippet type-checking; don't copy that part.
+
+### What makes this "advanced," concretely
+
+| Pattern | Where above |
+|---------|---------------|
+| Conditional requirement based on a **sibling field at the form root** | `license.number` / `license.expiryDate` depend on `personal.age` |
+| Conditional requirement based on a **sibling field within the same array item** | `vehicles[i].insurancePolicyNumber` depends on `vehicles[i].type` |
+| **Cross-field equality** check | `personal.confirmEmail` vs `personal.email` via `matchesField` |
+| **Array-level** ("at least N items") validation alongside per-item validation | `formRootRule` on both `vehicles` and `emergencyContacts` |
+| Bridging the **field-validators toolkit** into nested rule paths | `toValidationRule(nameValidator, ...)`, `toValidationRule(zipValidator, ...)`, etc., used identically whether the field is top-level or nested |
+| Reusing **one configured validator instance** across the whole form | `nameValidator`/`ageValidator`/etc. are each created once, outside the component, and adapted per-field via `toValidationRule` |
+
+---
+
+## Re-validating a dependent field when its sibling changes
+
+The conditional rules above are correct at submit time and whenever `licenseNumber`/`license.expiryDate`
+are themselves re-validated — but if a user flips from 17 to 18 by editing `age`, the
+`license.number` field's *displayed* error won't update until something re-validates it. Use
+`watch` to keep dependent fields live:
+
+```tsx
+import { useEffect } from 'react';
+
+useEffect(() => {
+  return form.watch('personal.age', () => {
+    // Only bother re-checking fields the user has already touched, to avoid
+    // surfacing errors on fields they haven't reached yet.
+    if (form.isTouched('license.number')) void form.validateField('license.number');
+    if (form.isTouched('license.expiryDate')) void form.validateField('license.expiryDate');
+  });
+}, []);
+```
+
+This is the same `watch`-driven re-validation pattern documented in
+[matchesField](./validators/06-matches-field)'s own advanced example, generalized to a
+conditional-requirement scenario instead of a confirm-field scenario.
+
+---
+
+## Advanced: a whole-form function instead of a rules object, for very entangled conditions
+
+Once several fields' requirements depend on *each other* in ways that don't cleanly decompose
+into independent per-field rules (e.g. "exactly one of `email` or `phone` must be provided,
+and whichever one is missing should show the error on *that* field specifically"), a whole-form
+validator function — the other shape `validate` accepts — is often clearer than forcing the
+rules-object form to express it:
+
+```tsx
+const form = useForm<{ email: string; phone: string }>({
+  initialValues: { email: '', phone: '' },
+  validate: (values) => {
+    const errors: Record<string, string> = {};
+    if (!values.email.trim() && !values.phone.trim()) {
+      errors.email = 'Provide an email or a phone number';
+      errors.phone = 'Provide an email or a phone number';
+    }
+    return errors;
+  },
+});
+```
+
+This is a deliberate escape hatch: prefer the rules-object form (and conditional rules like the
+driver-registration example above) for anything that decomposes per-field; reach for a whole-form
+function only when the validity of one field is genuinely inseparable from another's.
+
+---
+
+## Common pitfalls specific to conditional/nested validation
+
+- **A conditional rule returning `null` for the "not applicable" branch is correct — returning
+  `undefined` works identically**, but don't return `false` or `''` thinking it means "no error";
+  only `null`/`undefined` are treated as valid (see [validation.types](./types/04-validation-types)).
+- **Per-array-item conditional rules must derive the item's own sibling data from `path`**, not
+  from a fixed index — as shown in the `vehicles.insurancePolicyNumber` rule above, parse the
+  index out of `path` (`path.split('.')[1]`) rather than hardcoding `values.vehicles[0]`, since
+  the same rule function runs once per array item, with a different `path` each time.
+- **`formRootRule`'s validator receives the array itself as `value`, not the full form** — it's
+  scoped exactly like any other rule at that nesting level; reach into `values` (the second
+  argument) if the array-level check also needs sibling data outside the array.
+- **Conditional rules don't automatically re-run when their dependency changes** — pair them
+  with a `watch`-driven re-validation (shown above) for any field whose requirement should update
+  live, not just at submit time.
