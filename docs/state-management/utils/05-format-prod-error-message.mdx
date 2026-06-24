@@ -1,0 +1,64 @@
+# formatProdErrorMessage
+
+**File:** `src/utils/formatProdErrorMessage.ts` · Internal helper, not exported from the package root.
+
+Builds the minified error message shown in **production** builds, in place of the full descriptive message shown in development. Every throw site in this package (in [createStore](../02-create-store) and [combineReducers](../03-combine-reducers)) has a numeric code, looked up against this function.
+
+## Signature
+
+```typescript
+function formatProdErrorMessage(code: number): string
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `code` | `number` | A stable numeric ID assigned to one specific error condition. |
+
+**Returns:** a short string pointing to the public error code lookup table, e.g.:
+
+```
+Minified Redux error #7; visit https://redux.js.org/Errors?code=7 for the full message or use the non-minified dev environment for full errors.
+```
+
+## Why error messages are minified in production at all
+
+Every throw site looks like this (paraphrased):
+
+```typescript
+throw new Error(
+  process.env['NODE_ENV'] === 'production'
+    ? formatProdErrorMessage(7)
+    : `Actions must be plain objects. Instead, received: '${kindOf(action)}'. ...` // long descriptive string
+);
+```
+
+The long, helpful, multi-sentence messages (with full explanations and doc links) only exist in the development build. Production bundlers (when `NODE_ENV=production` is set, e.g. via a Vite/webpack production build) tree-shake/dead-code-eliminate the unreached branch, so **only the short numeric-code string ships to users** — shaving real, measurable bytes off the production bundle since these descriptive strings appear dozens of times across the package.
+
+## What each code currently means (the ones used in this package)
+
+| Code | Condition |
+|------|-----------|
+| 0 | Passed both a function `preloadedState` *and* a function `enhancer` to `createStore` (ambiguous — compose your enhancers into one instead). |
+| 1 | The `enhancer` argument to `createStore` isn't a function. |
+| 2 | The `reducer` argument to `createStore` isn't a function. |
+| 3 | Called `store.getState()` while a reducer is currently executing. |
+| 4 | `store.subscribe(listener)` — `listener` isn't a function. |
+| 5 | Called `store.subscribe()` while a reducer is currently executing. |
+| 6 | Called `unsubscribe()` while a reducer is currently executing. |
+| 7 | Dispatched a non-plain-object action. |
+| 8 | Dispatched an action with `type: undefined`. |
+| 9 | Called `store.dispatch()` from inside a reducer. |
+| 10 | `store.replaceReducer(nextReducer)` — `nextReducer` isn't a function. |
+| 11 | `store.subscribe`'s Observable adapter — the `observer` argument isn't an object. |
+| 12 | [combineReducers](../03-combine-reducers): a slice reducer returned `undefined` during setup-time initialization. |
+| 13 | `combineReducers`: a slice reducer returned `undefined` when probed with a random unknown action type. |
+| 14 | `combineReducers`: a slice reducer returned `undefined` for a real dispatched action. |
+| 17 | Dispatched an action whose `type` isn't a string. |
+
+## Basic usage (you'll almost never call this directly)
+
+This exists purely to be the production half of the throw-site ternaries shown above — application code has no reason to call it directly. If you do see a minified message like `"Minified Redux error #7..."` in a production error report, the table above (or the live page at the printed URL) tells you exactly which validation failed without needing a development build to reproduce it.
+
+## Advanced: mapping a production error code back to its cause during incident response
+
+If your error-reporting tool (Sentry, Datadog, etc.) captures a minified message like `Minified Redux error #9`, you now know — from the table above — that *some code path dispatched an action from inside a reducer*, without needing to redeploy a dev build or reproduce the bug locally first. This is the entire point of the numeric code scheme: it keeps production bundles small while still letting you diagnose the *exact* failure class from the number alone.

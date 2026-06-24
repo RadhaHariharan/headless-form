@@ -1,0 +1,71 @@
+# getDefaultMiddleware
+
+**File:** `src/getDefaultMiddleware.ts`
+
+The function [configureStore](./04-configure-store) passes into your `middleware` callback — returns the standard set of middleware Redux Toolkit considers good defaults, so you can `.concat()` your own onto it instead of rebuilding the whole list by hand.
+
+## Signature
+
+```typescript
+function getDefaultMiddleware(options?: GetDefaultMiddlewareOptions): Tuple<Middleware[]>
+```
+
+| Option | Type | Default | Adds |
+|--------|------|---------|------|
+| `thunk` | `boolean \| { extraArgument: E }` | `true` | A thunk middleware — lets `dispatch` accept functions `(dispatch, getState, extra) => ...`, not just plain action objects. Pass `{ extraArgument }` to inject a custom value (e.g. an API client) as every thunk's third argument. Pass `false` to omit entirely. |
+| `immutableCheck` | `boolean \| ImmutableStateInvariantMiddlewareOptions` | `true` (dev only) | [immutableStateInvariantMiddleware](./13-immutable-state-invariant-middleware) — warns if you ever mutate state outside a reducer. |
+| `serializableCheck` | `boolean \| SerializableStateInvariantMiddlewareOptions` | `true` (dev only) | [serializableStateInvariantMiddleware](./14-serializable-state-invariant-middleware) — warns about non-serializable values in actions/state. |
+| `actionCreatorCheck` | `boolean \| ActionCreatorInvariantMiddlewareOptions` | `true` (dev only) | [actionCreatorInvariantMiddleware](./12-action-creator-invariant-middleware) — warns if you dispatch an action creator function itself instead of calling it. |
+
+**Returns:** a `Tuple` (a typed array subclass — see [Tuple](./16-utils#tuple)) of middleware, ordered: `actionCreatorCheck`, `immutableCheck`, `thunk`, `serializableCheck` — the two invariant-check middlewares are `unshift`ed to the front so they observe the action *before* the thunk middleware potentially transforms it.
+
+**Production behavior:** all three dev-only checks are compiled out entirely outside `NODE_ENV !== 'production'` (the immutable-check import is wrapped in `/* PROD_START_REMOVE_UMD */` comments understood by the build's dead-code elimination) — so a production bundle only ever includes the thunk middleware, regardless of what options you pass.
+
+## Basic usage — extending the defaults
+
+```typescript
+import { configureStore } from '@headlesskit/state-management-toolkit';
+import logger from 'redux-logger';
+
+const store = configureStore({
+  reducer: rootReducer,
+  middleware: (getDefaultMiddleware) => getDefaultMiddleware().concat(logger),
+});
+```
+
+## Advanced: a typed "extra argument" for thunks
+
+```typescript
+const api = new ApiClient();
+
+const store = configureStore({
+  reducer: rootReducer,
+  middleware: (getDefaultMiddleware) =>
+    getDefaultMiddleware({ thunk: { extraArgument: api } }),
+});
+
+// in a thunk:
+const fetchUser = (id: string) => async (dispatch, getState, extra) => {
+  // extra is typed as ApiClient
+  const user = await extra.get(`/users/${id}`);
+  dispatch(userReceived(user));
+};
+```
+
+## Advanced: disabling a dev-mode check you've confirmed is a false positive
+
+```typescript
+const store = configureStore({
+  reducer: rootReducer,
+  middleware: (getDefaultMiddleware) =>
+    getDefaultMiddleware({
+      serializableCheck: { ignoredActions: ['file/upload'] }, // see serializableStateInvariantMiddleware
+      immutableCheck: false, // e.g. state intentionally holds a large Immutable.js structure
+    }),
+});
+```
+
+## Common pitfalls
+
+- **Calling `getDefaultMiddleware()` outside of the `middleware` callback context loses type inference** — it's specifically typed against the `S` (state) generic `configureStore` infers from your `reducer` option; calling a standalone imported `getDefaultMiddleware` (which doesn't exist as a public top-level export — only the curried version passed into your callback does) isn't how this API is meant to be used.
+- **Disabling `immutableCheck`/`serializableCheck` silences real bugs, not just false positives** — only disable per-check, scoped narrowly (e.g. `ignoredActions`/`ignoredPaths`), rather than wholesale, unless you're confident the underlying data really is intentionally non-serializable/non-plain.

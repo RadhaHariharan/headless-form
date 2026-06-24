@@ -1,0 +1,133 @@
+# createEntityAdapter
+
+**File:** `src/entities/create_adapter.ts` (and the rest of the `entities/` folder: `models.ts`, `entity_state.ts`, `state_adapter.ts`, `unsorted_state_adapter.ts`, `sorted_state_adapter.ts`, `state_selectors.ts`, `utils.ts`, `index.ts`)
+
+Generates a standard, normalized "CRUD on a collection" reducer toolkit and selector set for any entity type — instead of hand-writing `addOne`/`updateOne`/`removeOne`/etc. logic (and the `{ ids: [], entities: {} }` normalized shape) yourself for every list-of-things slice in your app.
+
+## Signature
+
+```typescript
+function createEntityAdapter<T extends { id: EntityId }>(
+  options?: { sortComparer?: false | Comparer<T> },
+): EntityAdapter<T, T['id']>
+
+function createEntityAdapter<T, Id extends EntityId>(
+  options: { selectId: (entity: T) => Id; sortComparer?: false | Comparer<T> },
+): EntityAdapter<T, Id>
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|--------------|
+| `selectId` | `(entity: T) => Id` | `(e) => e.id` | How to derive each entity's unique ID. Required if your entity's ID field isn't literally named `id`. |
+| `sortComparer` | `false \| (a: T, b: T) => number` | `false` | If provided, the adapter maintains `state.ids` in sorted order automatically on every insert/update (an "unsorted" adapter just appends new IDs at the end). `false` means insertion order. |
+
+`EntityId = number | string`.
+
+## The normalized state shape
+
+```typescript
+interface EntityState<T, Id extends EntityId> {
+  ids: Id[];
+  entities: Record<Id, T>;
+}
+```
+
+Storing collections this way (rather than a plain array) gives O(1) lookup-by-ID via `entities[id]`, while `ids` preserves ordering — the classic "normalized state" pattern recommended throughout Redux's own documentation, here fully automated.
+
+## Basic usage with createSlice
+
+```typescript
+import { createEntityAdapter, createSlice } from '@headlesskit/state-management-toolkit';
+
+interface Todo {
+  id: string;
+  text: string;
+  done: boolean;
+}
+
+const todosAdapter = createEntityAdapter<Todo>();
+
+const todosSlice = createSlice({
+  name: 'todos',
+  initialState: todosAdapter.getInitialState(),
+  reducers: {
+    todoAdded: todosAdapter.addOne,
+    todoUpdated: todosAdapter.updateOne,
+    todoRemoved: todosAdapter.removeOne,
+  },
+});
+
+export const { todoAdded, todoUpdated, todoRemoved } = todosSlice.actions;
+
+todoAdded({ id: '1', text: 'Buy milk', done: false });
+// dispatching this results in state: { ids: ['1'], entities: { '1': { id: '1', text: 'Buy milk', done: false } } }
+```
+
+Passing an adapter method (e.g. `todosAdapter.addOne`) directly as a `reducers` value works because every `EntityStateAdapter` method has the exact `(state, action) => state` shape `createSlice` expects of a case reducer — `createAction`'s auto-generated action creator wraps whatever you pass it as the payload.
+
+## `EntityStateAdapter<T, Id>` — the mutation methods
+
+Every method below is "Immer-aware" — call it directly inside a `createSlice`/`createReducer` case reducer body (where `state` is an active draft) and it mutates the draft in place; called outside that context, it returns a brand-new state object instead. Each also accepts **either** a raw value **or** a full `PayloadAction` wrapping that value — letting you pass the adapter method itself as a reducer (as shown above) or call it manually with a plain value.
+
+| Method | Signature (raw-value overload) | Behavior |
+|--------|-------------------------------|----------|
+| `addOne(state, entity)` | adds one entity | No-ops if an entity with that ID already exists — use `setOne`/`upsertOne` if you want overwrite semantics. |
+| `addMany(state, entities)` | adds an array or `Record<Id, T>` of entities | Same no-op-on-existing-ID behavior as `addOne`, per entity. |
+| `setOne(state, entity)` | adds **or overwrites** one entity | Unlike `addOne`, always writes — replacing an existing entity at that ID entirely. |
+| `setMany(state, entities)` | bulk `setOne` | |
+| `setAll(state, entities)` | **replaces the entire collection** with just these entities | Removes anything not in the given list — effectively `removeAll` + `setMany`. |
+| `removeOne(state, id)` | removes one entity by ID | No-op if the ID doesn't exist. |
+| `removeMany(state, ids)` | removes several entities by ID | |
+| `removeAll(state)` | empties the collection | `state.ids = []`, `state.entities = {}`. |
+| `updateOne(state, { id, changes })` | shallow-merges `changes` into the existing entity | No-ops if the entity doesn't exist — this is a *partial* update, not a replace. |
+| `updateMany(state, updates)` | bulk `updateOne` | |
+| `upsertOne(state, entity)` | update-if-exists, else insert | The "I don't care whether it's new or existing" convenience method — most commonly used for API responses (e.g. "this entity now looks like X, whether or not we had it before"). |
+| `upsertMany(state, entities)` | bulk `upsertOne` | |
+
+## `getInitialState(additionalState?, entities?)`
+
+```typescript
+const initialState = todosAdapter.getInitialState({ loading: false }, [
+  { id: '1', text: 'seeded', done: false },
+]);
+// { ids: ['1'], entities: { '1': {...} }, loading: false }
+```
+
+Builds the `{ ids, entities }` shape, optionally merged with extra fields your slice also needs to track (loading flags, error state, etc — anything beyond the entity collection itself), and optionally pre-seeded with initial entities.
+
+## `getSelectors(selectState?, options?)`
+
+```typescript
+const { selectAll, selectById, selectIds, selectEntities, selectTotal } =
+  todosAdapter.getSelectors((state: RootState) => state.todos);
+
+selectAll(rootState);             // Todo[] — derived from ids + entities, in `ids` order
+selectById(rootState, '1');       // Todo | undefined
+selectIds(rootState);             // string[]
+selectEntities(rootState);        // Record<string, Todo>
+selectTotal(rootState);           // number — ids.length
+```
+
+Without a `selectState` argument, the returned selectors expect to be called with the entity state directly (not wrapped in root state) — useful when testing the adapter in isolation, or when the entity state genuinely *is* the root state.
+
+`options.createSelector` lets you substitute a different memoizing-selector factory (e.g. [createDraftSafeSelector](./03-create-draft-safe-selector)) if you need `selectAll`/etc. to remain correct when called against an active Immer draft mid-reducer.
+
+## Advanced: sorted collections
+
+```typescript
+const sortedTodosAdapter = createEntityAdapter<Todo>({
+  sortComparer: (a, b) => a.text.localeCompare(b.text),
+});
+
+// after addMany/upsertMany/etc., state.ids is always kept alphabetically sorted by `text`
+// — selectAll() returns entities already in that order, with no extra sort step needed downstream
+```
+
+A sorted adapter does more work per mutation (it needs to find the correct insertion point), but means every consumer of `selectAll` gets pre-sorted data for free, rather than each consumer needing to sort independently (and risk inconsistent sort logic across the app).
+
+## Common pitfalls
+
+- **`addOne`/`addMany` silently no-op on existing IDs** — a very common source of "why didn't my update show up" confusion; if you intend to overwrite, reach for `setOne`/`setMany` or `upsertOne`/`upsertMany` instead.
+- **`updateOne`'s `changes` is a shallow merge**, not a deep merge — updating a nested object field requires spreading the existing nested object yourself within `changes`, the adapter won't deep-merge it for you.
+- **`getSelectors()` with no `selectState` only works if you call the resulting selectors with the *entity* state directly** — passing full root state to a no-argument `getSelectors()` result is a common mistake; always pass `selectState` when the entity state lives inside a larger root state object (the usual case).
+- **The default `selectId: (e) => e.id` assumes every entity literally has an `.id` field** — for entities keyed by something else (a composite key, a `uuid` field, etc.), `selectId` is mandatory, not optional, and TypeScript's overloads enforce this (the second `createEntityAdapter` overload requires `selectId` whenever `T` doesn't already have an `id: EntityId` field).

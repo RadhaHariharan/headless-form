@@ -1,0 +1,63 @@
+# actionCreatorInvariantMiddleware
+
+**File:** `src/actionCreatorInvariantMiddleware.ts` · Included by default via [getDefaultMiddleware](./10-get-default-middleware), development builds only.
+
+Catches one extremely common beginner mistake: dispatching the **action creator function itself** instead of *calling* it.
+
+```typescript
+dispatch(increment);   // ❌ forgot the parentheses — dispatches a function, not an action
+dispatch(increment()); // ✅ correct
+```
+
+## Signature
+
+```typescript
+function createActionCreatorInvariantMiddleware(
+  options?: ActionCreatorInvariantMiddlewareOptions,
+): Middleware
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|--------------|
+| `isActionCreator` | `(value) => boolean` | checks for a function with a static `.type` property and `.match` method (i.e. matches anything built by [createAction](./01-create-action)) | Override to recognize action creators from a different library/convention. |
+
+## What it does
+
+On every dispatched value, it calls `isActionCreator(action)`. If `action` itself is a function carrying the tell-tale `.type`/`.match` shape (rather than a plain `{ type, payload }` object), it logs a `console.warn` — **but still forwards the dispatch to `next(action)` unchanged**. This means the warning surfaces the mistake without changing runtime behavior; the buggy dispatch still "succeeds" in the sense that it doesn't throw, it just does nothing useful (most reducers will ignore an action whose `type` is `undefined`, since functions don't have a `type` field on `action.type` the way the warning's `action.type` access actually reads the action creator's *own* static `.type` property, which is how the warning is able to mention the real, intended type name).
+
+In production, this entire middleware is a no-op pass-through (`() => (next) => (action) => next(action)`) — it's purely a development-time safety net.
+
+## The warning message
+
+```
+Detected an action creator with type "todos/add" being dispatched.
+Make sure you're calling the action creator before dispatching, i.e. `dispatch(add())` instead of `dispatch(add)`. This is necessary even if the action has no payload.
+```
+
+## Basic usage (automatic — you rarely call this directly)
+
+```typescript
+import { configureStore } from '@headlesskit/state-management-toolkit';
+
+const store = configureStore({ reducer: rootReducer }); // already included
+```
+
+## Advanced: disabling it, or recognizing custom action creator shapes
+
+```typescript
+const store = configureStore({
+  reducer: rootReducer,
+  middleware: (getDefaultMiddleware) =>
+    getDefaultMiddleware({
+      actionCreatorCheck: {
+        isActionCreator: (action): action is Function & { type?: unknown } =>
+          typeof action === 'function' && 'actionType' in action, // a custom convention
+      },
+    }),
+});
+```
+
+## Common pitfalls
+
+- **The warning fires but the dispatch isn't blocked** — if you're debugging "why doesn't this action seem to do anything," check the console for this warning specifically; the symptom (no state change, no error) looks identical to a reducer simply not handling the action type.
+- **Disabling this check (`actionCreatorCheck: false`) doesn't fix the underlying bug** — it only silences the warning that would have told you about it.

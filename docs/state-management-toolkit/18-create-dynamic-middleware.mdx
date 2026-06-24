@@ -1,0 +1,57 @@
+# createDynamicMiddleware
+
+**File:** `src/dynamicMiddleware/index.ts`, `types.ts`
+
+Lets you add middleware to the store **after** it's already been created — without calling `store.replaceReducer`/rebuilding the store, and without every other middleware needing to know about the new one in advance. Useful for the same "feature is code-split and loads later" scenarios [combineSlices](./08-combine-slices) solves for reducers, applied to middleware instead.
+
+## Signature
+
+```typescript
+function createDynamicMiddleware<State = any, DispatchType = Dispatch<UnknownAction>>(): {
+  middleware: Middleware;       // install this ONE middleware in configureStore up front
+  addMiddleware: (...mw: Middleware[]) => void;   // call later, any time, to add more
+  withMiddleware: ActionCreator; // dispatchable alternative to addMiddleware
+  instanceId: string;
+}
+```
+
+## How it works
+
+You install **one** "container" middleware (`.middleware`) into the store at setup time — that's the only middleware `configureStore` ever needs to know about up front. Calling `.addMiddleware(...)` later pushes new middleware functions into an internal `Map`; the container middleware, on every dispatch, composes the currently-registered set together (via plain `compose`) and runs the action through that composed chain. Adding a 4th middleware at runtime doesn't require rebuilding anything — the next dispatch simply sees one more middleware in the composed chain.
+
+`.withMiddleware(...)` is a dispatchable action-creator equivalent of calling `.addMiddleware(...)` directly — useful when you only have access to `dispatch` (e.g. inside a thunk or a different module that doesn't have a reference to the `addMiddleware` function itself), tagged internally with this instance's `instanceId` so multiple independent `createDynamicMiddleware()` instances in the same app don't cross-register into each other.
+
+## Basic usage
+
+```typescript
+import { createDynamicMiddleware } from '@headlesskit/state-management-toolkit';
+import { configureStore } from '@headlesskit/state-management-toolkit';
+
+const dynamicMiddleware = createDynamicMiddleware();
+
+const store = configureStore({
+  reducer: rootReducer,
+  middleware: (getDefaultMiddleware) => getDefaultMiddleware().concat(dynamicMiddleware.middleware),
+});
+
+// later — e.g. when a lazy-loaded feature module initializes:
+import { analyticsMiddleware } from './features/analytics/middleware';
+dynamicMiddleware.addMiddleware(analyticsMiddleware);
+```
+
+## Advanced: adding middleware via `dispatch` from inside a feature module
+
+```typescript
+// features/analytics/setup.ts — this module has no direct reference to the store or dynamicMiddleware instance
+import { store } from '../../store';
+import { dynamicMiddleware } from '../../store'; // re-exported instance
+import { analyticsMiddleware } from './middleware';
+
+store.dispatch(dynamicMiddleware.withMiddleware(analyticsMiddleware));
+```
+
+## Common pitfalls
+
+- **Middleware added via `addMiddleware` doesn't retroactively apply to actions already dispatched** — only actions dispatched *after* the call see the new middleware in the chain; there's no way to "replay" earlier actions through newly added middleware.
+- **Each `createDynamicMiddleware()` call creates an independent instance** — if you accidentally call it twice (e.g. once per code-split chunk, instead of sharing one instance via a shared module), you'll have two separate container middlewares, each tracking its own middleware set, and `withMiddleware` actions dispatched against one instance won't register on the other (the `instanceId` check is exactly what prevents that cross-registration, intentionally).
+- **The composed middleware chain is recomputed-by-reference per `api`, not literally on every single dispatch from scratch** — `getOrInsertComputed(entry.applied, api, entry.middleware)` caches each middleware's "applied" (curried with `api`) form per store API instance, so adding many middleware over time doesn't mean re-currying every middleware on every dispatch; only genuinely new middleware/api combinations pay that cost.

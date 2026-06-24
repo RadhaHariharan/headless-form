@@ -476,6 +476,218 @@ body {
   text-align: center;
 }
 
+/* ── Package switcher ───────────────────────────────── */
+.package-switcher {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  margin-bottom: 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.package-switcher:hover { border-color: var(--accent); background: var(--bg-hover); }
+.package-switcher svg { color: var(--text-muted); flex-shrink: 0; transition: transform 0.15s; }
+.package-switcher[aria-expanded="true"] svg { transform: rotate(180deg); }
+.package-switcher-label { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.package-switcher-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent); flex-shrink: 0;
+}
+#package-switcher-name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.package-menu {
+  position: absolute;
+  top: 92px;
+  left: 16px;
+  width: calc(var(--sidebar-w) - 32px);
+  max-height: 70vh;
+  overflow-y: auto;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  z-index: 150;
+  padding: 6px;
+}
+.package-menu-group { margin-bottom: 4px; }
+.package-menu-group-title {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 8px 8px 4px;
+}
+.package-menu-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  gap: 2px;
+  padding: 7px 8px;
+  border: none;
+  background: none;
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  transition: background 0.12s;
+}
+.package-menu-item:hover { background: var(--bg-hover); }
+.package-menu-item-name { font-size: 13px; font-weight: 600; }
+.package-menu-item-desc { font-size: 11.5px; color: var(--text-muted); line-height: 1.4; }
+
+/* ── Accordion sidebar (per-package doc list) ───────── */
+.acc-item { margin-bottom: 1px; }
+.acc-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 4px 5px 2px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  color: var(--text-secondary);
+  transition: background 0.12s, color 0.12s;
+}
+.acc-row:hover { background: var(--bg-hover); color: var(--text-primary); }
+.acc-row.active { background: var(--accent-dim); color: var(--accent); font-weight: 500; }
+.acc-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px; height: 18px;
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: transform 0.15s, color 0.12s;
+}
+.acc-toggle.open { transform: rotate(90deg); }
+.acc-row.active .acc-toggle { color: var(--accent); }
+.acc-num {
+  font-size: 11px;
+  color: var(--text-muted);
+  min-width: 18px;
+  text-align: right;
+  flex-shrink: 0;
+}
+.acc-row.active .acc-num { color: var(--accent); opacity: 0.7; }
+.acc-title { font-size: 13.5px; line-height: 1.4; }
+
+.acc-sub {
+  display: flex;
+  flex-direction: column;
+  padding-left: 28px;
+  border-left: 1px solid var(--border-subtle);
+  margin-left: 13px;
+}
+.acc-sub-link {
+  display: block;
+  padding: 4px 6px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  text-decoration: none;
+  border-radius: var(--radius);
+  line-height: 1.4;
+  transition: color 0.12s, background 0.12s;
+}
+.acc-sub-link:hover { color: var(--text-primary); background: var(--bg-hover); }
+.acc-sub-link.active { color: var(--accent); font-weight: 500; }
+.acc-sub-link.depth-3 { padding-left: 16px; font-size: 12px; }
+
+/* ── Folder groups (mirrors src/ subfolders, e.g. utils/, entities/) ── */
+.folder-group { margin-bottom: 1px; }
+.folder-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 4px 5px 2px;
+  border-radius: var(--radius);
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  transition: background 0.12s, color 0.12s;
+}
+.folder-header:hover { background: var(--bg-hover); color: var(--text-primary); }
+.folder-chevron {
+  flex-shrink: 0;
+  transition: transform 0.15s;
+}
+.folder-header.open .folder-chevron { transform: rotate(90deg); }
+.folder-icon { flex-shrink: 0; opacity: 0.7; }
+.folder-name { text-transform: lowercase; }
+.folder-body {
+  padding-left: 16px;
+  border-left: 1px solid var(--border-subtle);
+  margin-left: 9px;
+}
+
+/* ── Doc footer prev/next nav ───────────────────────── */
+.doc-footer-nav {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 48px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border);
+}
+.footer-nav-link {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  text-decoration: none;
+  transition: border-color 0.15s, background 0.15s;
+  max-width: 50%;
+}
+.footer-nav-link:hover { border-color: var(--accent); background: var(--bg-hover); }
+.footer-nav-next { text-align: right; align-items: flex-end; margin-left: auto; }
+.footer-nav-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.footer-nav-title { font-size: 14px; font-weight: 500; color: var(--text-primary); }
+.footer-nav-spacer { flex: 1; }
+
+/* ── Package landing cards ──────────────────────────── */
+.package-card-npm {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent);
+  margin: 2px 0 6px;
+}
+.package-card-desc {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
 /* ── Responsive ─────────────────────────────────────── */
 @media (max-width: 1200px) {
   #toc-panel { display: none; }

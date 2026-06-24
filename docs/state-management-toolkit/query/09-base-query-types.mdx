@@ -1,0 +1,96 @@
+# BaseQueryFn (writing your own base query)
+
+**File:** `src/query/baseQueryTypes.ts`
+
+Defines the contract any `baseQuery` passed to [createApi](./01-create-api) must satisfy — the interface [fetchBaseQuery](./02-fetch-base-query) implements, and what you'd implement yourself for a non-`fetch` data source (axios, GraphQL, gRPC-web, a typed SDK, etc).
+
+## `BaseQueryFn<Args, Result, Error, DefinitionExtraOptions, Meta>`
+
+```typescript
+type BaseQueryFn<Args = any, Result = unknown, Error = unknown, DefinitionExtraOptions = {}, Meta = {}> =
+  (args: Args, api: BaseQueryApi, extraOptions: DefinitionExtraOptions) => MaybePromise<QueryReturnValue<Result, Error, Meta>>
+```
+
+| Generic | Meaning |
+|---------|---------|
+| `Args` | Whatever an endpoint's `query()` function returns (e.g. `string \| FetchArgs` for `fetchBaseQuery`). |
+| `Result` | The raw successful result shape (before any `transformResponse`). |
+| `Error` | The error shape on failure (e.g. [FetchBaseQueryError](./02-fetch-base-query)). |
+| `DefinitionExtraOptions` | The shape of each endpoint's `extraOptions` field — e.g. [retry](./03-retry)'s `RetryOptions`. |
+| `Meta` | Extra metadata attached to every result, surfaced in `transformResponse(result, meta, arg)` and to `onQueryStarted`/selectors — e.g. `fetchBaseQuery`'s `{ request, response }`. |
+
+## `QueryReturnValue<T, E, M>` — what your function must return
+
+```typescript
+type QueryReturnValue<T, E, M> =
+  | { error: E; data?: undefined; meta?: M }
+  | { error?: undefined; data: T; meta?: M };
+```
+
+**Never throw** to signal failure — return `{ error: ... }` instead. RTK Query treats a thrown exception from a `baseQuery` as a genuinely unexpected internal failure (not a normal request error), so all the usual error-state UI/cache behavior expects the `{ error }` return shape, not a caught exception.
+
+## `BaseQueryApi` — your function's second argument
+
+| Field | Description |
+|-------|--------------|
+| `signal` | `AbortSignal` — wire it into your actual request mechanism so cancellation (component unmount, `dispatch(api.util.abort?)`, etc) actually stops the in-flight work, not just the cache bookkeeping around it. |
+| `abort(reason?)` | Programmatically trigger cancellation from inside your base query. |
+| `dispatch` / `getState` | Full store access — e.g. read an auth token, or dispatch another action as a side effect of this base query running. |
+| `extra` | The `extra` argument the api/store was configured with — same purpose as the thunk middleware's extra argument. |
+| `endpoint` | The endpoint name this call is for — useful for endpoint-specific base-query logic without needing per-endpoint `queryFn` overrides. |
+| `type` | `'query' \| 'mutation'`. |
+| `forced` | (queries only) `true` if this fetch is happening despite an existing cache entry (e.g. `refetchOnMountOrArgChange`, or a manual `refetch()` call) — useful for conditionally adding cache-busting headers. |
+| `queryCacheKey` | (queries only) The cache key this result will be stored under. |
+
+## `BaseQueryEnhancer<AdditionalArgs, AdditionalExtraOptions, Config>`
+
+The type [retry](./03-retry) itself is — a function that wraps an *existing* `BaseQueryFn` and returns a new one, optionally widening the args/extraOptions types it accepts. Write your own enhancer in this shape if you have cross-cutting base-query behavior (logging, auth-refresh-and-retry, response caching) that should compose with any underlying base query, rather than being tied to one specific implementation.
+
+## Basic usage: a minimal custom base query (axios)
+
+```typescript
+import axios, { AxiosError } from 'axios';
+import type { BaseQueryFn } from '@headlesskit/state-management-toolkit/query';
+
+const axiosBaseQuery =
+  (): BaseQueryFn<{ url: string; method?: string; data?: unknown }, unknown, { status?: number; data: unknown }> =>
+  async ({ url, method = 'GET', data }) => {
+    try {
+      const result = await axios({ url, method, data });
+      return { data: result.data };
+    } catch (axiosError) {
+      const err = axiosError as AxiosError;
+      return { error: { status: err.response?.status, data: err.response?.data ?? err.message } };
+    }
+  };
+
+const api = createApi({
+  baseQuery: axiosBaseQuery(),
+  endpoints: (builder) => ({
+    getPost: builder.query<Post, number>({ query: (id) => ({ url: `/post/${id}` }) }),
+  }),
+});
+```
+
+## Advanced: a base query with auth-token refresh-and-retry
+
+```typescript
+const baseQueryWithReauth: BaseQueryFn = async (args, api, extraOptions) => {
+  let result = await fetchBaseQuery({ baseUrl: '/api' })(args, api, extraOptions);
+  if (result.error?.status === 401) {
+    const refreshResult = await fetchBaseQuery({ baseUrl: '/api' })('/refresh-token', api, extraOptions);
+    if (refreshResult.data) {
+      api.dispatch(tokenRefreshed(refreshResult.data));
+      result = await fetchBaseQuery({ baseUrl: '/api' })(args, api, extraOptions); // retry the original request
+    } else {
+      api.dispatch(loggedOut());
+    }
+  }
+  return result;
+};
+```
+
+## Common pitfalls
+
+- **Throwing instead of returning `{ error }` breaks RTK Query's error handling** — a thrown error from a `baseQuery` propagates as an unhandled rejection through the generated thunk rather than becoming a normal query error state; always catch and convert to `{ error: ... }`.
+- **Forgetting to wire `api.signal` into your actual request call** means cancellation (unmounting a component, `RTKQ`'s own internal abort-on-unsubscribe) stops being tracked by RTK Query but doesn't actually stop the underlying network/IO call — wasted work continues even though nothing is listening for the result anymore.

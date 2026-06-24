@@ -1,0 +1,71 @@
+# entities/ internals
+
+**Files:** `src/entities/entity_state.ts`, `state_adapter.ts`, `unsorted_state_adapter.ts`, `sorted_state_adapter.ts`, `state_selectors.ts`, `utils.ts`, `index.ts`, `models.ts`
+
+The implementation behind [createEntityAdapter](../16-create-entity-adapter) — none of these individual files are imported directly in application code (only `createEntityAdapter`, and the types in `models.ts`, are exported from the package root), but understanding them clarifies exactly *why* the adapter behaves the way it does.
+
+## `entity_state.ts` — `getInitialState`
+
+```typescript
+function getInitialEntityState<T, Id>(): EntityState<T, Id> {
+  return { ids: [], entities: {} };
+}
+
+function createInitialStateFactory(stateAdapter): EntityStateFactory {
+  function getInitialState(additionalState = {}, entities?) {
+    const state = Object.assign(getInitialEntityState(), additionalState);
+    return entities ? stateAdapter.setAll(state, entities) : state;
+  }
+  return { getInitialState };
+}
+```
+
+This is the literal implementation of `adapter.getInitialState(additionalState, entities)` documented in [createEntityAdapter](../16-create-entity-adapter) — it's worth knowing that pre-seeding with `entities` is implemented as a call to **the same `setAll`** you'd call manually, not special-cased logic; so seeding initial state and resetting state to a known set of entities later both go through identical code.
+
+## `state_adapter.ts` — the shared "value or PayloadAction" unwrapping
+
+Every `EntityStateAdapter` method (`addOne`, `updateOne`, etc.) accepts either a raw value or a `PayloadAction` wrapping it, as documented in [createEntityAdapter](../16-create-entity-adapter). This file provides the small shared helper both `unsorted_state_adapter.ts` and `sorted_state_adapter.ts` use to implement that:
+
+```typescript
+function isPayloadActionArgument(arg): boolean {
+  return isFSA(arg); // true if arg looks like { type, payload, ...} — see createAction's isFSA
+}
+
+function createSingleArgumentStateOperator(mutator) {
+  return (state, arg) => mutator(isPayloadActionArgument(arg) ? arg.payload : arg, state);
+}
+```
+
+This is exactly why `todosAdapter.addOne` works both as `addOne(state, someTodo)` (called manually) **and** as a `createSlice` `reducers` value directly (`reducers: { todoAdded: todosAdapter.addOne }`, where `createSlice` calls it as `(state, action)` with a full action object) — the same function transparently supports both call shapes by checking whether its second argument structurally looks like an action.
+
+## `unsorted_state_adapter.ts` vs. `sorted_state_adapter.ts`
+
+Both implement the exact same `EntityStateAdapter<T, Id>` interface — `createEntityAdapter` picks one or the other based on whether you passed a `sortComparer`:
+
+| | Unsorted | Sorted |
+|---|---|---|
+| New entity insertion | Pushed to the end of `state.ids` | Inserted at the correct position via the comparer (binary-search-based insertion, not a full re-sort on every call, for reasonable performance even with frequent inserts) |
+| `updateOne`/`upsertOne` when the update changes sort-relevant fields | N/A — order is purely insertion order, never recalculated | Re-positions the entity in `state.ids` if the update changed its relative order |
+| Relative performance | Faster — no comparisons needed | Slower per-operation (must find correct position), but `selectAll` consumers never need their own separate sort |
+
+The sorted adapter's "did the update change this entity's position" check specifically avoids redundant work: it only re-sorts/re-positions when the changed entity's neighbors in `ids` would actually produce a different comparator result — a no-op update (changing a field the comparator doesn't look at) doesn't trigger unnecessary array operations.
+
+## `state_selectors.ts` — `createSelectorsFactory`
+
+The implementation behind `adapter.getSelectors(selectState?, options?)`. Two notable details not covered in the main [createEntityAdapter](../16-create-entity-adapter) doc:
+
+- **Selectors are memoized via [createDraftSafeSelector](../03-create-draft-safe-selector) by default** — `selectAll`/`selectTotal`/`selectById` are real `reselect`-memoized selectors, not plain functions recomputing on every call, and they're specifically the *draft-safe* variant so they remain correct even if called from inside a case reducer against an active Immer draft.
+- **`options.createSelector` lets you swap in a different selector factory** — e.g. a plain (non-draft-safe) `reselect` `createSelector` if you specifically want slightly better performance and know you'll never call these selectors against a live draft, or a custom one with different memoization characteristics (different cache size, etc).
+
+## `utils.ts`
+
+Small shared helpers used by both state adapters — id-comparison and array-splice utilities supporting the sorted adapter's binary-search insertion logic. No behavior here is part of the public API surface; it exists purely to keep `unsorted_state_adapter.ts`/`sorted_state_adapter.ts` from duplicating low-level array bookkeeping code.
+
+## `index.ts`
+
+The barrel file re-exporting everything the `entities/` folder makes public: `createEntityAdapter`, and the types `EntityState`, `EntityAdapter`, `EntityId`, `EntitySelectors`, `EntityStateAdapter`, `Comparer`, `IdSelector`, `Update`.
+
+## Common pitfalls
+
+- **Don't import directly from `entities/unsorted_state_adapter.ts` or any other internal file path** — only `createEntityAdapter` and the `models.ts` types are intended for consumption; internal file paths aren't part of the package's stable API and may be restructured without a major version bump.
+- **A sorted adapter's `sortComparer` must be a pure, stable comparator** — a comparator that returns inconsistent results for the same pair of entities (e.g. one that reads `Date.now()`) can corrupt the binary-search insertion logic's assumptions and produce incorrectly ordered `ids`.

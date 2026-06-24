@@ -1,0 +1,41 @@
+# uncheckedindexed
+
+**File:** `src/uncheckedindexed.ts` · Internal, type-only, not exported from the package root.
+
+A small, self-contained piece of TypeScript-compiler-introspection: detects, **at the type level**, whether the consuming project has TypeScript's [`noUncheckedIndexedAccess`](https://www.typescriptlang.org/tsconfig#noUncheckedIndexedAccess) compiler flag enabled — and exposes that as a type-level boolean other internal types can branch on.
+
+## How it works
+
+```typescript
+const testAccess = ({} as Record<string, 0>)['a']
+
+export type IfUncheckedIndexedAccess<True, False> = IfMaybeUndefined<
+  typeof testAccess,
+  True,
+  False
+>
+```
+
+`testAccess` indexes into a `Record<string, 0>` with an arbitrary string key. Under normal TypeScript settings, indexing a `Record<string, 0>` is typed as `0` (TypeScript trusts that *some* value exists at any string key). With `noUncheckedIndexedAccess` enabled, the *same* expression is typed as `0 | undefined` instead, because the compiler now correctly accounts for the key possibly not existing at runtime.
+
+`IfMaybeUndefined<typeof testAccess, True, False>` then checks which of those two types `testAccess` actually resolved to in *this* project's compiler configuration, and the whole module's exported type effectively becomes a compile-time "is this flag on?" switch — without needing to read the consuming project's `tsconfig.json` (which type definitions have no way to do directly).
+
+## `UncheckedIndexedAccess<T>`
+
+```typescript
+export type UncheckedIndexedAccess<T> = IfUncheckedIndexedAccess<T | undefined, T>
+```
+
+Given a type `T` that's the *value* type of some index signature, resolves to `T | undefined` if the consuming project has `noUncheckedIndexedAccess` on, or plain `T` otherwise — letting this package's own type definitions correctly adapt to either setting, rather than picking one and being subtly wrong (either too strict or too lax) for projects using the other setting.
+
+## Why this matters
+
+Without this adaptation, a package's published `.d.ts` types would be written assuming one specific `noUncheckedIndexedAccess` setting. If a consuming project has the *other* setting, every index-signature-derived type from this package would either be needlessly narrowed (forcing unnecessary `undefined` checks) or unsafely widened (missing `undefined` checks the consumer's own compiler settings would otherwise enforce) relative to how the rest of that project's own code behaves.
+
+## Basic usage (purely internal — nothing to call)
+
+This module has **zero runtime behavior** — `testAccess` is a type-checking artifact, never actually read as a value anywhere; the whole file exists to be type-checked, not executed, and produces no JavaScript output of consequence. Application code never imports from this file directly.
+
+## Common pitfalls
+
+- **This file must remain a real `.ts` file, not a `.d.ts`** (noted directly in the source) — the trick only works because the compiler actually type-checks `testAccess`'s initializer expression against the *current* project's compiler options when this file is included in a build; a `.d.ts` ambient declaration wouldn't re-evaluate the expression under the consuming project's own settings.

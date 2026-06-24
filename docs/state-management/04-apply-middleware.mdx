@@ -1,0 +1,133 @@
+# applyMiddleware
+
+A store enhancer that inserts middleware in front of `store.dispatch`. Middleware is the standard way to add side effects (async calls, logging, crash reporting, routing) to an otherwise pure dispatch→reducer pipeline.
+
+```typescript
+import { applyMiddleware } from '@headlesskit/state-management';
+```
+
+## Signature
+
+```typescript
+applyMiddleware(...middlewares: Middleware[]): StoreEnhancer
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `...middlewares` | `Middleware[]` | Zero or more middleware functions, applied left to right (the first one wraps the dispatch chain outermost — it sees every action first). |
+
+**Returns:** a `StoreEnhancer` — pass it as the second or third argument to [createStore](02-create-store) (it's an enhancer, not a reducer or preloaded state, so `createStore` slots it in correctly no matter which position you pass it in).
+
+```typescript
+const store = createStore(rootReducer, applyMiddleware(thunk, logger));
+```
+
+## The middleware shape
+
+A middleware is a **curried function of three nested arguments**: `store => next => action => result`.
+
+```typescript
+import type { Middleware } from '@headlesskit/state-management';
+
+const exampleMiddleware: Middleware = (store) => (next) => (action) => {
+  // 1. Runs before the action reaches the reducer (or the next middleware)
+  console.log('dispatching', action);
+
+  // 2. Call next(action) to continue the chain — omitting this stops the
+  //    action from ever reaching the reducer
+  const result = next(action);
+
+  // 3. Runs after the reducer has updated state
+  console.log('next state', store.getState());
+
+  // 4. Whatever you return here is what `store.dispatch(...)` resolves to
+  return result;
+};
+```
+
+| Argument | Type | Description |
+|----------|------|-------------|
+| `store` | `{ getState, dispatch }` (a `MiddlewareAPI`) | A restricted view of the store — read state, or re-dispatch (e.g. to dispatch a *different* action than the one received). |
+| `next` | `(action) => result` | Calls the next middleware in the chain, or the real `store.dispatch` if this is the last middleware. **You must call this** (with the action, or a different one) for the action to actually reach the reducer. |
+| `action` | `unknown` | The dispatched value — for the *first* middleware in the chain, this can be anything (a thunk function, a Promise, an object) because nothing has validated it as a plain action yet. For middleware closer to the real `dispatch`, by convention it should already be a plain `{ type }` object. |
+
+## Basic usage: a logger
+
+```typescript
+import { createStore, applyMiddleware } from '@headlesskit/state-management';
+import type { Middleware } from '@headlesskit/state-management';
+
+const logger: Middleware = (store) => (next) => (action) => {
+  console.log('dispatching', action);
+  const result = next(action);
+  console.log('next state', store.getState());
+  return result;
+};
+
+const store = createStore(rootReducer, applyMiddleware(logger));
+store.dispatch({ type: 'increment' });
+// logs: dispatching { type: 'increment' }
+// logs: next state { count: 1 }
+```
+
+## Advanced: writing a thunk middleware from scratch
+
+The single most common middleware lets you dispatch **functions**, not just plain objects — this is how async logic (API calls) typically enters a Redux app. `@headlesskit/state-management-toolkit`'s `configureStore` already wires this up via `redux-thunk` for you, but seeing it written out demystifies what "thunk" actually means:
+
+```typescript
+import type { Middleware } from '@headlesskit/state-management';
+
+const thunkMiddleware: Middleware =
+  (store) => (next) => (action) => {
+    if (typeof action === 'function') {
+      // A "thunk" is just a function — call it with dispatch/getState
+      // instead of passing it down the chain (the real dispatch would
+      // reject it, since actions must be plain objects).
+      return action(store.dispatch, store.getState);
+    }
+    return next(action);
+  };
+
+const store = createStore(rootReducer, applyMiddleware(thunkMiddleware));
+
+// Now you can dispatch a function:
+function fetchUser(id: number) {
+  return async (dispatch, getState) => {
+    dispatch({ type: 'user/loading' });
+    const user = await fetch(`/api/users/${id}`).then((r) => r.json());
+    dispatch({ type: 'user/loaded', payload: user });
+  };
+}
+
+store.dispatch(fetchUser(42));
+```
+
+## Advanced: chaining multiple middleware and ordering
+
+Middleware run **in the order passed**, each wrapping the next. For `applyMiddleware(a, b, c)`, the call order on the way *in* is `a → b → c → realDispatch`, and because each middleware controls when (and whether) it calls `next`, the way *out* (after the reducer runs) unwinds in reverse: `c`'s post-`next` code runs, then `b`'s, then `a`'s.
+
+```typescript
+const order: string[] = [];
+const tag = (name: string): Middleware => () => (next) => (action) => {
+  order.push(`${name}:in`);
+  const result = next(action);
+  order.push(`${name}:out`);
+  return result;
+};
+
+const store = createStore(rootReducer, applyMiddleware(tag('A'), tag('B'), tag('C')));
+store.dispatch({ type: 'x' });
+// order === ['A:in', 'B:in', 'C:in', 'C:out', 'B:out', 'A:out']
+```
+
+This matters in practice: put **crash-reporting/logging middleware first** (outermost, so it sees the raw action even if a later middleware throws or short-circuits), and put **thunk middleware early** too (so functions get intercepted before middleware that expects plain actions runs).
+
+## Dispatching while the store is being constructed
+
+If a middleware calls `store.dispatch` *during* `applyMiddleware`'s own setup (i.e. synchronously while middleware are being initialized, before the store is fully constructed), it throws: `"Dispatching while constructing your middleware is not allowed. Other middleware would not be applied to this dispatch."` This is a setup-order bug almost always caused by calling a thunk eagerly at module scope instead of inside an event handler or effect.
+
+## Common pitfalls
+
+- **Forgetting to call `next(action)`** — the action silently never reaches the reducer (or any later middleware), and nothing visibly errors. If state isn't updating, check that every middleware calls `next`.
+- **Calling `next(action)` more than once** — each call re-runs the rest of the chain, so the reducer (and subscribers) run multiple times per dispatch.
+- **Returning the wrong thing.** `store.dispatch(action)`'s return value is whatever your *outermost* middleware returns — if you want `dispatch(someThunk())` to return a Promise (e.g. to `await` it in a component), your thunk middleware must `return action(dispatch, getState)`, not call it and discard the result.

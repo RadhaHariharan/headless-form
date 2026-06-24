@@ -1,0 +1,96 @@
+# configureStore
+
+**File:** `src/configureStore.ts`
+
+A friendlier wrapper around plain `createStore` that wires up sensible production defaults — a default middleware set (including a thunk middleware), Redux DevTools integration, and dev-mode validation of your own setup — while still letting you fully customize or replace any of it.
+
+## Signature
+
+```typescript
+function configureStore<S, A extends Action, M extends Tuple<Middlewares<S>>, E extends Tuple<Enhancers>, P>(
+  options: ConfigureStoreOptions<S, A, M, E, P>,
+): EnhancedStore<S, A, E>
+```
+
+## `ConfigureStoreOptions`
+
+| Option | Type | Default | Description |
+|--------|------|---------|--------------|
+| `reducer` | `Reducer<S,A,P> \| ReducersMapObject<S,A,P>` | *(required)* | A single root reducer function, **or** a map of slice reducers — if you pass a map, it's automatically run through `combineReducers` for you (no need to call it yourself). |
+| `middleware` | `(getDefaultMiddleware) => M` | `getDefaultMiddleware()` (unmodified) | A callback receiving a `getDefaultMiddleware` function, must return an array/Tuple of middleware. See [getDefaultMiddleware](./09-get-default-middleware). |
+| `devTools` | `boolean \| DevToolsEnhancerOptions` | `true` | Enables the Redux DevTools browser extension enhancer. Pass an options object to customize trace capture, action sanitizers, etc.; pass `false` to disable entirely. |
+| `duplicateMiddlewareCheck` | `boolean` | `true` | Dev-mode-only: throws if the exact same middleware function reference appears more than once in the final middleware list — almost always an accidental double-`.concat()` bug. |
+| `preloadedState` | `P` | `undefined` | Same as plain `createStore`'s `preloadedState` — initial state for hydration/SSR. |
+| `enhancers` | `(getDefaultEnhancers) => E` | `getDefaultEnhancers()` (unmodified) | A callback receiving a `getDefaultEnhancers` function, must return an array/Tuple of enhancers. See [getDefaultEnhancers](./10-get-default-enhancers). |
+
+**Returns:** an `EnhancedStore` — the same `Store` shape from `@headlesskit/state-management`, but with its `dispatch` type widened to include whatever extra capabilities your middleware adds (most notably: dispatching thunk functions, not just plain actions, thanks to the default thunk middleware).
+
+## Basic usage
+
+```typescript
+import { configureStore } from '@headlesskit/state-management-toolkit';
+import counterReducer from './counterSlice';
+import userReducer from './userSlice';
+
+const store = configureStore({
+  reducer: {
+    counter: counterReducer,
+    user: userReducer,
+  },
+});
+
+// dispatch accepts plain actions...
+store.dispatch({ type: 'counter/increment' });
+// ...and thunks, out of the box, with no extra setup:
+store.dispatch((dispatch, getState) => {
+  console.log('current state:', getState());
+  dispatch({ type: 'counter/increment' });
+});
+```
+
+## Advanced: customizing middleware without losing the defaults
+
+The `middleware` callback receives `getDefaultMiddleware`, so you extend (rather than replace) Redux Toolkit's sane defaults — this is the recommended pattern over hand-building the middleware array from scratch:
+
+```typescript
+import { configureStore } from '@headlesskit/state-management-toolkit';
+import logger from 'redux-logger';
+
+const store = configureStore({
+  reducer: rootReducer,
+  middleware: (getDefaultMiddleware) =>
+    getDefaultMiddleware({
+      serializableCheck: { ignoredActions: ['file/upload'] },
+    }).concat(logger),
+});
+```
+
+## Advanced: customizing enhancer order
+
+Enhancers wrap the entire store (not just `dispatch`), so order matters more than for middleware. `getDefaultEnhancers` is itself a function (not an array), letting you insert your own enhancer before or after the defaults:
+
+```typescript
+import { configureStore } from '@headlesskit/state-management-toolkit';
+import { offline } from './my-offline-enhancer';
+
+const store = configureStore({
+  reducer: rootReducer,
+  enhancers: (getDefaultEnhancers) => getDefaultEnhancers().concat(offline),
+});
+```
+
+## Advanced: SSR hydration with `preloadedState`
+
+```typescript
+const store = configureStore({
+  reducer: { user: userReducer, cart: cartReducer },
+  preloadedState: window.__PRELOADED_STATE__, // injected server-side, matches { user, cart } shape
+});
+```
+
+## Common pitfalls
+
+- **`reducer` is required** — `configureStore({})` (or omitting `reducer` entirely) throws `'reducer is a required argument...'` immediately, rather than silently building a store with no state.
+- **`middleware`/`enhancers` must be callbacks, not arrays** — passing a plain array directly (`middleware: [myMiddleware]`, skipping the `getDefaultMiddleware` callback shape) throws in development. This is intentional: it forces you to explicitly opt back into (or out of) the defaults rather than silently losing them.
+- **Duplicate middleware throws by default** — if you see `'Duplicate middleware references found...'`, you likely called `.concat(myMiddleware)` more than once across different `middleware` callback definitions, or composed two config objects that both add the same imported middleware instance.
+- **If you build your own enhancer list and forget to include the middleware enhancer**, `configureStore` logs a console error (not a throw) warning that middleware was configured but never actually wired into the store — easy to miss since it's a warning, not a hard failure.

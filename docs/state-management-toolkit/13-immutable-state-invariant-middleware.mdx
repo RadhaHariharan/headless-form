@@ -1,0 +1,68 @@
+# immutableStateInvariantMiddleware
+
+**File:** `src/immutableStateInvariantMiddleware.ts` · Included by default via [getDefaultMiddleware](./10-get-default-middleware), development builds only.
+
+Detects accidental **direct mutation** of state outside a reducer — the single most common category of subtle Redux bugs (mutating a nested object reference held elsewhere, then wondering why a `useSelector`/subscriber never re-ran).
+
+## Signature
+
+```typescript
+function createImmutableStateInvariantMiddleware(
+  options?: ImmutableStateInvariantMiddlewareOptions,
+): Middleware
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|--------------|
+| `isImmutable` | `(value) => boolean` | `isImmutableDefault`: `typeof value !== 'object' \|\| value == null \|\| Object.isFrozen(value)` | Customize what counts as "doesn't need mutation tracking" — e.g. recognize Immutable.js structures so they're skipped rather than (slowly) deep-walked. |
+| `ignoredPaths` | `(string \| RegExp)[]` | `[]` | Dot-separated state paths to skip — useful for state branches you know are large/expensive to deep-track, or intentionally hold non-plain data. |
+| `warnAfter` | `number` | `32` (ms) | If a single mutation-detection pass takes longer than this, logs a performance warning — large state trees can make every dispatch noticeably slower, since this check deep-clones a snapshot of trackable state before and after every action. |
+
+## How it works
+
+Before each dispatched action reaches your reducers, the middleware walks the **current** state tree and records, for every nested plain object/array, its current reference (`trackProperties`). After the action passes through the reducer (`next(action)` returns), it walks the **resulting** state tree again and compares each tracked reference against the new state at the same path (`detectMutations`).
+
+If the *same path* now has the *same object reference* it had before, but a *child* property reference changed compared to what was tracked under that parent — that's the signature of mutation: a reducer changed a nested field without producing a new parent object reference the way `combineReducers`/immutable-update patterns expect. The middleware throws a descriptive error identifying the exact `keyPath` where it detected this.
+
+`isImmutable(value)` is the recursion's base case — primitives, `null`, and frozen objects are treated as safe leaves and not walked further (this is also why wrapping state in `Object.freeze` during development, a common defensive pattern, makes this check a no-op for that branch — frozen objects are trusted by construction).
+
+## Basic usage (automatic — you rarely call this directly)
+
+```typescript
+import { configureStore } from '@headlesskit/state-management-toolkit';
+
+const store = configureStore({ reducer: rootReducer }); // already included
+```
+
+If you accidentally write:
+
+```typescript
+// BAD — direct mutation outside a reducer body
+function badReducer(state, action) {
+  state.items.push(action.payload); // mutating `state` directly, not via Immer's draft mechanism
+  return state; // same reference returned
+}
+```
+
+...this middleware throws (in development) the moment a *subsequent* action is dispatched and the previous mutation is detected, with a path like `items` pointing at exactly where the unexpected mutation happened.
+
+## Advanced: ignoring a large or intentionally-mutable state branch
+
+```typescript
+const store = configureStore({
+  reducer: rootReducer,
+  middleware: (getDefaultMiddleware) =>
+    getDefaultMiddleware({
+      immutableCheck: {
+        ignoredPaths: ['largeDataset', /^cache\..*\.rawBuffer$/],
+        warnAfter: 64,
+      },
+    }),
+});
+```
+
+## Common pitfalls
+
+- **This check is O(state size) on every dispatch** — for very large state trees, leaving it enabled in development can make the app sluggish; use `ignoredPaths` to exclude known-large, rarely-mutated branches rather than disabling the whole check.
+- **It only runs in development** — a mutation bug that "works" in dev because the warning is informational (it throws, but you might be debugging around it) will not be caught at all in a production build; treat any trigger of this check as a real bug to fix, not noise to suppress.
+- **`createSlice`/`createReducer`'s Immer-powered "mutation" is not real mutation** by the time `next(action)` returns — Immer translates draft mutations into a genuinely new top-level reference, so well-formed slice reducers never trip this check; if they do, it usually means a case reducer captured and mutated some *other* object that escaped Immer's draft tracking (e.g. mutating a value pulled out of `action.payload` and pushed verbatim into state, where the payload object itself wasn't a draft).

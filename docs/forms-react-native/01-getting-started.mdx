@@ -1,0 +1,111 @@
+# Getting Started
+
+`@headlesskit/forms-react-native` adapts `@headlesskit/forms-react`'s hooks to React Native's
+component conventions — `<TextInput>`'s `onChangeText`, `<Switch>`'s `onValueChange`, and a
+`<Button onPress>`-friendly submit handler — without reimplementing any state logic.
+
+> **Why a separate package, if the hooks already work in React Native?** They do — `useForm`
+> and `useField` run unchanged, because `useSyncExternalStore` lives in `react` itself, not
+> `react-dom`. What *doesn't* carry over cleanly is `getInputProps()`'s shape: it's modeled on
+> HTML `<input>` (`onChange` reading `event.target.value`, a `data-path` attribute, `checked`/
+> `defaultChecked`). React Native has no `event.target`, and `<Switch>` has no uncontrolled mode
+> at all. This package is a thin set of adapter functions that bridge that one gap — nothing
+> about the form engine itself changes.
+
+---
+
+## Installation
+
+```bash
+npm install @headlesskit/forms-react-native
+# or
+pnpm add @headlesskit/forms-react-native
+# or
+yarn add @headlesskit/forms-react-native
+```
+
+Only `react` is a peer dependency — **not** `react-native`. The package never imports
+anything from `react-native`; the prop adapters return plain object literals shaped to match
+`TextInputProps`/`SwitchProps`, so there's nothing to install beyond React itself.
+
+---
+
+## What you get
+
+This package re-exports **everything** from `@headlesskit/forms-react` — `useForm`,
+`useField`, `createFormContext`, every validator, every type — so you only need one import
+in a React Native project. On top of that it adds:
+
+| Export | Use it for |
+|--------|-----------|
+| `getTextInputProps(form, path, options?)` | Spreading onto a `<TextInput>` |
+| `getFieldTextInputProps(field)` | Same, but for a `useField()` result |
+| `getSwitchProps(form, path)` | Spreading onto a `<Switch>` |
+| `getFieldSwitchProps(field)` | Same, but for a `useField()` result |
+| `getSubmitHandler(form, onValid, onInvalid?)` | Wiring to `<Button onPress>` / `<Pressable onPress>` |
+
+---
+
+## Basic usage
+
+```tsx
+import { useForm, getTextInputProps, getSubmitHandler } from '@headlesskit/forms-react-native';
+import { isEmail, isNotEmpty } from '@headlesskit/forms-react-native';
+import { View, Text, TextInput, Button } from 'react-native';
+
+function ContactForm() {
+  const form = useForm({
+    mode: 'uncontrolled', // the default — see @headlesskit/forms-react's docs
+    initialValues: { name: '', email: '' },
+    validate: {
+      name: isNotEmpty('Name is required'),
+      email: isEmail('Invalid email'),
+    },
+  });
+
+  const { error: nameError, ...nameProps } = getTextInputProps(form, 'name');
+  const { error: emailError, ...emailProps } = getTextInputProps(form, 'email');
+
+  return (
+    <View>
+      <Text>Name</Text>
+      <TextInput key={form.key('name')} {...nameProps} />
+      {nameError && <Text style={{ color: 'red' }}>{nameError}</Text>}
+
+      <Text>Email</Text>
+      <TextInput key={form.key('email')} {...emailProps} />
+      {emailError && <Text style={{ color: 'red' }}>{emailError}</Text>}
+
+      <Button
+        title="Submit"
+        onPress={getSubmitHandler(form, (values) => console.log(values))}
+      />
+    </View>
+  );
+}
+```
+
+A few things to notice, since they're the entire reason this package exists:
+
+1. **No `event` parameter anywhere.** `getTextInputProps`'s `onChangeText` receives the typed
+   string directly. `getSubmitHandler`'s returned function takes zero arguments — compare this
+   to the web's `form.onSubmit(...)`, which returns a handler expecting a DOM `FormEvent`.
+2. **`key={form.key('name')}`** still matters in React Native, for the exact same reason it
+   does on the web: in **uncontrolled** mode, programmatic changes (`form.setFieldValue`,
+   `form.reset()`) don't update `defaultValue` on an already-mounted element — React only reads
+   `defaultValue` once, on mount. Bumping the `key` forces a remount so the new `defaultValue`
+   takes effect. This is a React mounting rule, not a web-specific one, so it applies identically
+   to `<TextInput>`.
+3. **`error` is destructured out before spreading.** `getTextInputProps` includes `error` for
+   convenience (so you don't need to separately read `form.errors.name`), but `error` is not a
+   real `TextInput` prop — see [Text Input Props](#forms-react-native/text-input-props) for why
+   it's safe to spread anyway, and why destructuring it out is still the clearer pattern.
+
+---
+
+## Next steps
+
+- [Text Input Props](#forms-react-native/text-input-props) — `getTextInputProps` / `getFieldTextInputProps` in depth, every option, every value.
+- [Switch Props](#forms-react-native/switch-props) — `getSwitchProps` / `getFieldSwitchProps`, and why `<Switch>` is always controlled.
+- [Submit Handler](#forms-react-native/submit-handler) — `getSubmitHandler`, and the `preventDefault()` crash it exists to prevent.
+- [Full Example](#forms-react-native/full-example) — a complete registration form, text inputs + switch + submit, start to finish.

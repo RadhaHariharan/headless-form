@@ -1,0 +1,79 @@
+# setupListeners
+
+**File:** `src/query/core/setupListeners.ts`
+
+Wires up the browser event listeners (`focus`, `visibilitychange`, `online`, `offline`) that [createApi](./01-create-api)'s `refetchOnFocus` and `refetchOnReconnect` options depend on. Without calling this once, those two options have no effect — RTK Query has no other way of knowing the window regained focus or the network reconnected.
+
+## Signature
+
+```typescript
+function setupListeners(
+  dispatch: ThunkDispatch<any, any, any>,
+  customHandler?: (dispatch, actions: { onFocus, onFocusLost, onOnline, onOffline }) => () => void,
+): () => void
+```
+
+| Parameter | Type | Description |
+|-----------|------|--------------|
+| `dispatch` | your store's `dispatch` | Used to dispatch the four internal actions (`onFocus`/`onFocusLost`/`onOnline`/`onOffline`) when the corresponding browser event fires. |
+| `customHandler` | function | Replace the default `window.addEventListener` wiring entirely — e.g. for a non-browser environment (React Native, where `window.addEventListener('online', ...)` doesn't exist the same way) or to add custom debouncing. |
+
+**Returns:** an `unsubscribe` function — call it to remove all four event listeners (e.g. on app teardown, or in tests between test cases).
+
+## What it listens for
+
+| Browser event | Dispatches | Effect |
+|----------------|------------|--------|
+| `focus` | `onFocus` | If `refetchOnFocus: true` on the relevant endpoint/api config, triggers a refetch of all currently-subscribed queries. |
+| `visibilitychange` → `document.visibilityState === 'visible'` | `onFocus` | Same as `focus` — covers the tab-switching case browsers handle via Page Visibility rather than a `focus` event. |
+| `visibilitychange` → not visible | `onFocusLost` | Bookkeeping only — no refetch triggered by losing focus. |
+| `online` | `onOnline` | If `refetchOnReconnect: true`, triggers a refetch of all currently-subscribed queries. |
+| `offline` | `onOffline` | Bookkeeping only. |
+
+Only **one** active set of listeners is allowed at a time (`initialized` is a module-level flag) — calling `setupListeners` again before unsubscribing the first call is a no-op for the *default* handler (it returns a no-op-ish unsubscribe rather than double-registering), guarding against accidentally wiring duplicate listeners if `setupListeners` is called more than once (e.g. once per `createApi` instance in a multi-API app — you only need to call it once total, not once per API).
+
+## Basic usage
+
+```typescript
+import { configureStore } from '@headlesskit/state-management-toolkit';
+import { setupListeners } from '@headlesskit/state-management-toolkit/query';
+import { api } from './api';
+
+export const store = configureStore({
+  reducer: { [api.reducerPath]: api.reducer },
+  middleware: (getDefaultMiddleware) => getDefaultMiddleware().concat(api.middleware),
+});
+
+setupListeners(store.dispatch);
+```
+
+This single call enables `refetchOnFocus`/`refetchOnReconnect` for **every** `createApi` instance in the app that opts into those flags — it's a global, app-wide wiring step, not per-API.
+
+## Advanced: a custom handler for React Native
+
+```typescript
+import { AppState } from 'react-native';
+import NetInfo from '@react-native-community/netinfo';
+import { setupListeners } from '@headlesskit/state-management-toolkit/query';
+
+setupListeners(store.dispatch, (dispatch, { onFocus, onFocusLost, onOnline, onOffline }) => {
+  const appStateSub = AppState.addEventListener('change', (state) => {
+    dispatch(state === 'active' ? onFocus() : onFocusLost());
+  });
+  const netInfoUnsub = NetInfo.addEventListener((state) => {
+    dispatch(state.isConnected ? onOnline() : onOffline());
+  });
+
+  return () => {
+    appStateSub.remove();
+    netInfoUnsub();
+  };
+});
+```
+
+This is exactly the kind of scenario `customHandler` exists for — the default implementation assumes `window`/DOM events exist, which React Native doesn't provide.
+
+## Common pitfalls
+
+- **`refetchOnFocus`/`refetchOnReconnect` silently do nothing without this call** — there's no warning or error; the options are simply inert until `setupListeners` has been called once, which is an easy step to forget since the app otherwise works fine.
+- **The default handler does nothing in non-browser environments** (`typeof window === 'undefined'` guards it off) — calling plain `setupListeners(dispatch)` in React Native or during SSR is harmless but also useless; you need the `customHandler` form there.

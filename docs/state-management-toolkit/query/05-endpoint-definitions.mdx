@@ -1,0 +1,86 @@
+# Endpoint definitions
+
+**File:** `src/query/endpointDefinitions.ts` (1717 lines — the largest file in the package)
+
+Defines the shape of the `builder` object passed to [createApi](./01-create-api)'s `endpoints` callback, and the three endpoint kinds it can build: `.query()`, `.mutation()`, `.infiniteQuery()`.
+
+## The three endpoint types
+
+| Method | Use for | Cache behavior |
+|--------|---------|------------------|
+| `builder.query<ResultType, QueryArg>(...)` | Reading data (GET-like) | Cached, deduplicated across subscribers, auto-refetchable, supports tags. |
+| `builder.mutation<ResultType, QueryArg>(...)` | Writing data (POST/PUT/DELETE-like) | Not cached by result — each call is a one-off; used to *invalidate* query caches via tags. |
+| `builder.infiniteQuery<ResultType, QueryArg, PageParam>(...)` | Paginated/infinite-scroll reading | Like `query`, but maintains an ordered list of pages keyed by `pageParam`, with `fetchNextPage`/`fetchPreviousPage`. |
+
+## Fields shared across all three (`CommonEndpointDefinition`)
+
+| Field | Type | Description |
+|-------|------|--------------|
+| `query` | `(arg) => string \| FetchArgs` | The common case — delegates to the api's `baseQuery` (e.g. [fetchBaseQuery](./02-fetch-base-query)) with whatever this function returns. Mutually exclusive with `queryFn`. |
+| `queryFn` | `async (arg, api, extraOptions, baseQuery) => { data } \| { error }` | Full manual control over how the request happens — bypass `baseQuery` entirely, call multiple requests, hit a non-HTTP data source (`localStorage`, IndexedDB, GraphQL client), etc. Mutually exclusive with `query`. |
+| `transformResponse` | `(rawResult, meta, arg) => ResultType` | Reshape the raw base-query response into what your endpoint's `ResultType` should actually be (e.g. unwrap `{ data: [...] }` to just `[...]`). |
+| `transformErrorResponse` | `(rawError, meta, arg) => ErrorType` | Same idea, for the error case. |
+| `extraOptions` | endpoint-specific | Passed through verbatim as the third argument to `baseQuery` — this is where [retry](./03-retry)'s `maxRetries`/`retryCondition` overrides are set per-endpoint. |
+| `onQueryStarted` | `(arg, { dispatch, getState, extra, requestId, queryFulfilled, getCacheEntry, updateCachedData }) => void \| Promise<void>` | Runs as soon as the request *starts* (not when it finishes) — the standard hook for **optimistic updates**: mutate the cache immediately via `updateCachedData`, then `await queryFulfilled` to confirm or roll back if it fails. |
+| `onCacheEntryAdded` | `(arg, { dispatch, getState, extra, cacheEntryRemoved, cacheDataLoaded, getCacheEntry, updateCachedData }) => void \| Promise<void>` | Runs once when a cache entry for this arg first becomes active (first subscriber) until `cacheEntryRemoved` resolves (last subscriber gone) — the standard hook for **streaming updates**: open a WebSocket on `cacheDataLoaded`, push live updates into the cache via `updateCachedData`, close the socket when `cacheEntryRemoved` resolves. |
+| `argSchema` / `responseSchema` / `errorResponseSchema` / `metaSchema` / `rawResponseSchema` / `rawErrorResponseSchema` | [Standard Schema](./09-standard-schema)-compatible validators | Optional runtime validation at each stage of the request/response pipeline. |
+| `structuralSharing` | `boolean` | Whether to preserve old object/array references for parts of a new result that are deeply equal to the previous result — avoids unnecessary re-renders in consumers using reference equality. Defaults to `true`. |
+
+## `builder.query` — query-specific options
+
+| Field | Description |
+|-------|--------------|
+| `providesTags` | `TagDescription[] \| (result, error, arg, meta) => TagDescription[]` — declares which cache tags this query's data is associated with, so a mutation's `invalidatesTags` can trigger a refetch of exactly the right queries. |
+| `serializeQueryArgs` | Per-endpoint override of how `QueryArg` becomes the cache key — see [createApi](./01-create-api)'s top-level option of the same name; useful when only *some* fields of a complex arg object should actually distinguish cache entries. |
+| `forceRefetch({ currentArg, previousArg, ... })` | Return `true` to force a refetch even though an identical-by-cache-key request is already cached — useful combined with a `serializeQueryArgs` that intentionally treats two different args as the same cache key, but where some *other* field still warrants a fresh fetch. |
+
+```typescript
+getPost: builder.query<Post, { id: number }>({
+  query: ({ id }) => `/post/${id}`,
+  providesTags: (result, error, { id }) => [{ type: 'Post', id }],
+}),
+```
+
+## `builder.mutation` — mutation-specific options
+
+| Field | Description |
+|-------|--------------|
+| `invalidatesTags` | `TagDescription[] \| (result, error, arg, meta) => TagDescription[]` — the inverse of `providesTags`: declares which tags become stale once this mutation succeeds, triggering matching queries to refetch (timing controlled by [createApi](./01-create-api)'s `invalidationBehavior`). |
+
+```typescript
+addPost: builder.mutation<Post, Partial<Post>>({
+  query: (body) => ({ url: 'posts', method: 'POST', body }),
+  invalidatesTags: (result) => (result ? [{ type: 'Post', id: result.id }, 'Post'] : ['Post']),
+}),
+```
+
+A `TagDescription` can be a bare string (`'Post'`, invalidating/providing the whole category) or `{ type: 'Post', id }` (a specific entity within that category) — matching `providesTags`/`invalidatesTags` against either the bare type or the specific `{ type, id }` pair.
+
+## `builder.infiniteQuery` — pagination-specific options
+
+| Field | Description |
+|-------|--------------|
+| `infiniteQueryOptions.initialPageParam` | The `pageParam` value used for the very first page fetched. |
+| `infiniteQueryOptions.getNextPageParam(lastPage, allPages, lastPageParam, allPageParams)` | Computes the next page's param from the most recently fetched page — return `undefined`/`null` to signal there's no next page. |
+| `infiniteQueryOptions.getPreviousPageParam` | Same idea, for backward pagination. |
+| `infiniteQueryOptions.maxPages` | Caps how many pages are kept in the cache at once — older pages are dropped as new ones are fetched beyond this limit. |
+| `query` | Receives `{ queryArg, pageParam }` instead of just the raw arg, since the actual request needs to know which page to fetch. |
+
+```typescript
+getPosts: builder.infiniteQuery<Post[], { userId: string }, number>({
+  query: ({ queryArg, pageParam }) => `/users/${queryArg.userId}/posts?page=${pageParam}`,
+  infiniteQueryOptions: {
+    initialPageParam: 1,
+    getNextPageParam: (lastPage, allPages, lastPageParam) =>
+      lastPage.length > 0 ? lastPageParam + 1 : undefined,
+  },
+}),
+```
+
+The generated hook (`useGetPostsInfiniteQuery`) exposes `data.pages`/`data.pageParams`, plus `fetchNextPage()`/`hasNextPage` derived from whether `getNextPageParam` last returned a defined value.
+
+## Common pitfalls
+
+- **`query` and `queryFn` are mutually exclusive** — TypeScript's overloads enforce this (setting one types the other as `never`); reach for `queryFn` only when `query`'s "describe the request, let `baseQuery` execute it" model genuinely doesn't fit (multi-request composition, non-HTTP sources).
+- **`onQueryStarted`'s optimistic update must be rolled back manually on failure** — `updateCachedData` applied before `await queryFulfilled` is *not* automatically undone if the request fails; the standard pattern is to capture the `patchResult` returned by `updateCachedData` and call `patchResult.undo()` in a `catch` around `queryFulfilled`.
+- **`providesTags`/`invalidatesTags` matching is exact on `{ type, id }` pairs, or the bare type** — providing `{ type: 'Post', id: 1 }` does not get invalidated by an `invalidatesTags: ['Post']` mutation... actually it does, since invalidating the bare `'Post'` type invalidates *every* tag of that type regardless of `id`; the common mistake is the reverse — providing only the bare `'Post'` tag (no `id`) and then trying to invalidate a *specific* `{ type: 'Post', id: 5 }`, which won't match a query that never provided that specific `id`.

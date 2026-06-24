@@ -1,0 +1,29 @@
+# formatProdErrorMessage
+
+**File:** `src/formatProdErrorMessage.ts` · Internal, not exported from the package root.
+
+The toolkit's own analog of `state-management`'s [formatProdErrorMessage](../../state-management/utils/05-format-prod-error-message) — same minified-error-in-production pattern, separate numbering/URL namespace since it's a different package's error catalog.
+
+## Signature
+
+```typescript
+function formatProdErrorMessage(code: number): string
+```
+
+**Returns:**
+
+```
+Minified Redux Toolkit error #7; visit https://redux-toolkit.js.org/Errors?code=7 for the full message or use the non-minified dev environment for full errors.
+```
+
+## Why it's separate from state-management's version
+
+Both packages independently throw descriptive errors in development and minify them to a numeric code in production, but each package's code numbers are assigned independently and point at a different documentation URL (`redux-toolkit.js.org/Errors` vs. `redux.js.org/Errors`) — so a single shared `formatProdErrorMessage` couldn't correctly link to the right docs page for both packages at once. Each package therefore vendors its own tiny copy of the same pattern.
+
+## Basic usage (you'll almost never call this directly)
+
+Exists purely as the production-build half of throw-site ternaries inside this package's own source (e.g. inside [createReducer](../02-create-reducer) and [createSlice](../05-create-slice) for "removed object-notation" errors). If you see a `"Minified Redux Toolkit error #N"` message in a production error report, visit the printed URL (or check this package's source/changelog for that code) to find the original descriptive message.
+
+## Common pitfalls
+
+- **Don't confuse this with `state-management`'s `formatProdErrorMessage`** — same name, same pattern, but the numeric codes are not interchangeable between the two packages; a code `7` from `state-management` means something different from code `7` here.

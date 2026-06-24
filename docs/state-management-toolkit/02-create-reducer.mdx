@@ -1,0 +1,120 @@
+# createReducer
+
+**File:** `src/createReducer.ts`
+
+Builds a single reducer from a **builder callback** that registers case handlers per action type — each handler may "mutate" a draft of the state directly (via Immer) instead of manually returning a new immutable object.
+
+## Signature
+
+```typescript
+function createReducer<S>(
+  initialState: S | (() => S),
+  builderCallback: (builder: ActionReducerMapBuilder<S>) => void,
+): ReducerWithInitialState<S>
+```
+
+| Parameter | Type | Description |
+|-----------|------|--------------|
+| `initialState` | `S \| (() => S)` | The state used the first time the reducer runs (when called with `state === undefined`). Pass a function for lazy initialization — e.g. reading from `localStorage` only once, the first time the store needs it, not on every module import. |
+| `builderCallback` | `(builder) => void` | A callback receiving a [builder object](#the-builder-api) — calls `builder.addCase`/`addMatcher`/`addDefaultCase` to register handlers. |
+
+**Returns:** a normal Redux `Reducer<S>`, plus a `.getInitialState()` method returning the resolved initial state (useful for tests, or for seeding `preloadedState` consistently with what the reducer itself would produce).
+
+## The builder API
+
+| Method | Signature | Behavior |
+|--------|-----------|----------|
+| `addCase(actionCreatorOrType, reducer)` | chainable | Registers a handler for one exact action type. `actionCreatorOrType` can be a string or an action creator (from [createAction](./01-create-action) — its `.type` is read automatically). Each type may only be registered once — calling `addCase` twice for the same type throws. |
+| `addMatcher(matcher, reducer)` | chainable | Registers a handler that runs for *any* action where `matcher(action)` returns `true` — evaluated in registration order, **after** all `addCase` handlers, and **all matching matchers run**, not just the first (so multiple matchers can react to the same action). |
+| `addDefaultCase(reducer)` | not chainable, must be last | Registered handler that runs **only if no `addCase` and no `addMatcher` handler matched** the action at all. |
+
+## Basic usage
+
+```typescript
+import { createAction, createReducer } from '@headlesskit/state-management-toolkit';
+
+const increment = createAction<number>('counter/increment');
+const decrement = createAction<number>('counter/decrement');
+
+const counterReducer = createReducer(0, (builder) => {
+  builder
+    .addCase(increment, (state, action) => state + action.payload)
+    .addCase(decrement, (state, action) => state - action.payload);
+});
+
+counterReducer(0, increment(5)); // 5
+counterReducer(5, decrement(2)); // 3
+```
+
+### Mutating-style case reducers (object/array state)
+
+```typescript
+interface TodosState {
+  items: { id: string; text: string; done: boolean }[];
+}
+
+const addTodo = createAction<{ id: string; text: string }>('todos/add');
+const toggleTodo = createAction<string>('todos/toggle');
+
+const todosReducer = createReducer<TodosState>({ items: [] }, (builder) => {
+  builder
+    .addCase(addTodo, (state, action) => {
+      // direct push — Immer translates this into an immutable update
+      state.items.push({ id: action.payload.id, text: action.payload.text, done: false });
+    })
+    .addCase(toggleTodo, (state, action) => {
+      const todo = state.items.find((t) => t.id === action.payload);
+      if (todo) todo.done = !todo.done;
+    });
+});
+```
+
+A case reducer may *either* mutate `state` and return nothing, *or* return a brand-new state value — never both. Returning a new value from a mutating reducer is allowed too (it simply replaces the draft), but mutating `state` **and then also returning a different value** produces undefined/inconsistent behavior and should be avoided.
+
+## Advanced: `addMatcher` for cross-cutting concerns
+
+`addMatcher` is the mechanism behind [matchers](./07-matchers) like `isAnyOf`/`isPending` — useful for handling a *category* of actions (e.g. "any async thunk's pending action") without listing every individual action type:
+
+```typescript
+import { isAnyOf } from '@headlesskit/state-management-toolkit';
+
+const requestSent = createAction('api/requestSent');
+const requestFailed = createAction('api/requestFailed');
+
+interface LoadingState {
+  pending: boolean;
+}
+
+const loadingReducer = createReducer<LoadingState>({ pending: false }, (builder) => {
+  builder
+    .addMatcher(isAnyOf(requestSent), (state) => {
+      state.pending = true;
+    })
+    .addMatcher(isAnyOf(requestFailed), (state) => {
+      state.pending = false;
+    })
+    .addDefaultCase(() => {});
+});
+```
+
+## Advanced: lazy initial state from storage
+
+```typescript
+function loadPersistedCounter(): number {
+  const raw = typeof localStorage !== 'undefined' ? localStorage.getItem('counter') : null;
+  return raw ? Number(raw) : 0;
+}
+
+const counterReducer = createReducer(loadPersistedCounter, (builder) => {
+  builder.addCase(increment, (state, action) => state + action.payload);
+});
+```
+
+`loadPersistedCounter` only runs the first time the reducer is invoked with `undefined` state (typically the store's setup dispatch) — not on every module import, and not on every dispatched action afterward.
+
+## Common pitfalls
+
+- **The old object-map notation (`createReducer(initial, { 'todos/add': reducer })`) was removed** — calling `createReducer` with a plain object as the second argument throws an explicit error in development pointing you to the builder-callback form shown above.
+- **A non-draftable initial state value (e.g. a primitive number, as in the counter examples) must have its case reducers *return* a new value**, not mutate — there is nothing to mutate on a primitive. Returning `undefined` from a case reducer over a non-draftable, non-null state throws `'A case reducer on a non-draftable value must not return undefined'`.
+- **Calling `addCase` twice for the same action type throws** at builder-callback execution time (not at reducer-call time) — this is a build-time, not runtime, mistake to catch early.
+- **`addDefaultCase` must be the last call in the chain** — methods called on the builder after it (there are none in this API, but conceptually) aren't valid; it's meant as the final step of the callback.

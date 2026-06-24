@@ -1,0 +1,121 @@
+# Action types
+
+**File:** `src/types/actions.ts`
+
+```typescript
+import type { Action, UnknownAction, AnyAction, ActionCreator, ActionCreatorsMapObject } from '@headlesskit/state-management';
+```
+
+## `Action<T>`
+
+```typescript
+type Action<T extends string = string> = { type: T };
+```
+
+The minimal shape every dispatched value must satisfy: an object with a `type` field. The generic `T` lets you narrow `type` to a specific string literal (or union of literals) instead of the generic `string`.
+
+```typescript
+type IncrementAction = Action<'INCREMENT'>;
+const a: IncrementAction = { type: 'INCREMENT' }; // ok
+const b: IncrementAction = { type: 'WRONG' };      // ❌ type error
+```
+
+| Generic | Default | Example |
+|---------|---------|---------|
+| `T` | `string` | `Action` = any object with a string `type`. `Action<'INCREMENT'>` = only that exact literal. |
+
+## `UnknownAction`
+
+```typescript
+interface UnknownAction extends Action {
+  [extraProps: string]: unknown;
+}
+```
+
+`Action` plus an index signature allowing arbitrary extra fields, each typed as `unknown` (so you must narrow/check before using them — safer than `any`). This is what reducers receive by default when you don't supply your own specific action union type, and is the modern replacement for `AnyAction`.
+
+```typescript
+function reducer(state: State, action: UnknownAction) {
+  if (action.type === 'todos/add') {
+    // action.payload is `unknown` here — narrow it before using
+    const text = action['payload'];
+    if (typeof text === 'string') { /* ... */ }
+  }
+}
+```
+
+## `AnyAction` *(deprecated)*
+
+```typescript
+/** @deprecated use Action or UnknownAction instead */
+interface AnyAction extends Action {
+  [extraProps: string]: any;
+}
+```
+
+Identical to `UnknownAction` except extra fields are typed `any` instead of `unknown` — meaning TypeScript lets you access and use them with zero checking, which defeats much of the purpose of typing actions at all. Kept only for backward compatibility with code written against older Redux types; prefer `UnknownAction` (or your own specific action union) in new code.
+
+## `ActionCreator<A, P>`
+
+```typescript
+interface ActionCreator<A, P extends any[] = any[]> {
+  (...args: P): A;
+}
+```
+
+The type of a function that builds and returns an action — what you pass to [bindActionCreators](../06-bind-action-creators).
+
+| Generic | Meaning |
+|---------|---------|
+| `A` | The action type it returns. |
+| `P` | A tuple of its parameter types (defaults to `any[]`, i.e. unconstrained). |
+
+```typescript
+const increment: ActionCreator<{ type: 'INCREMENT' }, []> = () => ({ type: 'INCREMENT' });
+const addBy: ActionCreator<{ type: 'ADD'; payload: number }, [number]> =
+  (n) => ({ type: 'ADD', payload: n });
+```
+
+## `ActionCreatorsMapObject<A, P>`
+
+```typescript
+interface ActionCreatorsMapObject<A = any, P extends any[] = any[]> {
+  [key: string]: ActionCreator<A, P>;
+}
+```
+
+A plain object whose every value is an `ActionCreator` — the shape [bindActionCreators](../06-bind-action-creators) accepts when you pass a map instead of a single function.
+
+```typescript
+const actionCreators: ActionCreatorsMapObject = {
+  increment: () => ({ type: 'INCREMENT' }),
+  decrement: () => ({ type: 'DECREMENT' }),
+};
+```
+
+## Advanced: a real discriminated-union action type for a feature
+
+In practice you rarely use the generic `Action`/`UnknownAction` types directly in a reducer signature — you define your own action union and let TypeScript's discriminated-union narrowing do the work in a `switch`:
+
+```typescript
+type TodoAction =
+  | { type: 'todos/add'; text: string }
+  | { type: 'todos/remove'; id: string }
+  | { type: 'todos/toggle'; id: string };
+
+function todosReducer(state: Todo[] = [], action: TodoAction): Todo[] {
+  switch (action.type) {
+    case 'todos/add':
+      // action.text is typed as `string` here — narrowed automatically
+      return [...state, { id: crypto.randomUUID(), text: action.text, done: false }];
+    case 'todos/remove':
+      return state.filter((t) => t.id !== action.id);
+    case 'todos/toggle':
+      return state.map((t) => (t.id === action.id ? { ...t, done: !t.done } : t));
+    default:
+      return state;
+  }
+}
+```
+
+This is exactly the pattern `createSlice` from `@headlesskit/state-management-toolkit` generates for you automatically.

@@ -1,0 +1,75 @@
+# serializableStateInvariantMiddleware
+
+**File:** `src/serializableStateInvariantMiddleware.ts` · Included by default via [getDefaultMiddleware](./10-get-default-middleware), development builds only.
+
+Warns when a dispatched action, or the state after it's processed, contains a value that isn't safely JSON-serializable (functions, `Map`/`Set`, class instances, `Symbol`s, etc). Redux's core design assumption is that state and actions are plain serializable data (important for time-travel debugging, persistence, and `postMessage`-based devtools) — this middleware catches violations early.
+
+## Signature
+
+```typescript
+function createSerializableStateInvariantMiddleware(
+  options?: SerializableStateInvariantMiddlewareOptions,
+): Middleware
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|--------------|
+| `isSerializable` | `(value) => boolean` | `isPlain`: `null`/`undefined`/string/boolean/number/array/plain-object | Override to allow additional types you consider acceptable (e.g. treat `Date` as serializable for your app's purposes). |
+| `getEntries` | `(value) => [string, any][]` | `Object.entries` | Customize how nested entries are extracted — needed if you use `isSerializable` to "allow" a custom container type but still want its *contents* checked. |
+| `ignoredActions` | `string[]` | `[]` | Action types to skip entirely (e.g. an action that intentionally carries a `File` object). |
+| `ignoredActionPaths` | `(string \| RegExp)[]` | `['meta.arg', 'meta.baseQueryMeta']` | Dot-paths *within an action* to skip — the defaults specifically exempt thunk metadata fields that commonly carry non-serializable values (like an `AbortController` reference) without those being a real problem. |
+| `ignoredPaths` | `(string \| RegExp)[]` | `[]` | Dot-paths within **state** to skip. |
+| `warnAfter` | `number` | `32` (ms) | Performance warning threshold, same purpose as in [immutableStateInvariantMiddleware](./13-immutable-state-invariant-middleware). |
+
+## `isPlain(value)` and `findNonSerializableValue(...)`
+
+Both also exported individually, useful if you want to run the same serializability check manually (e.g. in a test asserting your action payloads stay serializable):
+
+```typescript
+import { isPlain, findNonSerializableValue } from '@headlesskit/state-management-toolkit';
+
+isPlain(new Map());        // false
+isPlain({ a: [1, 2, 3] }); // true
+
+findNonSerializableValue({ a: { b: new Map() } });
+// { keyPath: 'a.b', value: Map(0) {} }
+
+findNonSerializableValue({ a: 1, b: 2 }); // false — nothing found
+```
+
+`findNonSerializableValue` walks recursively and stops at the **first** offending value it finds, returning its exact dot-path (`keyPath`) — this is the same path string surfaced in the middleware's console warning, so you know precisely where in a deeply nested action/state to look.
+
+## How the middleware uses it
+
+On every dispatched action: checks the action itself for non-serializable values (skipping `ignoredActions`/`ignoredActionPaths`), then — after the reducer runs — checks the resulting state too (skipping `ignoredPaths`). Each check that finds a problem logs a separate `console.error` describing exactly what was found and where.
+
+## Basic usage (automatic — you rarely call this directly)
+
+```typescript
+import { configureStore } from '@headlesskit/state-management-toolkit';
+
+const store = configureStore({ reducer: rootReducer }); // already included
+```
+
+## Advanced: a legitimate non-serializable payload (file upload)
+
+```typescript
+const store = configureStore({
+  reducer: rootReducer,
+  middleware: (getDefaultMiddleware) =>
+    getDefaultMiddleware({
+      serializableCheck: {
+        ignoredActions: ['file/upload'],
+        ignoredPaths: ['files.pendingUploads'], // state branch that legitimately holds File objects
+      },
+    }),
+});
+
+dispatch({ type: 'file/upload', payload: fileInput.files[0] }); // no warning, explicitly exempted
+```
+
+## Common pitfalls
+
+- **A `Date` object fails this check by default** — a very common real-world trigger, since `Date` isn't covered by `isPlain`'s checks. Either convert to an ISO string before dispatching/storing, or widen `isSerializable` to explicitly allow `instanceof Date`.
+- **RTK Query's internals intentionally carry some non-plain metadata** (like `AbortController`s) inside `meta.arg`/`meta.baseQueryMeta` — this is exactly why those two paths are excluded by default; don't be alarmed that the defaults aren't `[]`, and don't widen `ignoredActionPaths` further without understanding what you're newly exempting.
+- **This middleware is O(action/state size) per dispatch**, same caveat as the immutable-state check — use `ignoredPaths`/`ignoredActionPaths` surgically for known-large or known-non-plain branches rather than disabling the whole check.

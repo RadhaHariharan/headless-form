@@ -1,0 +1,91 @@
+# State Management
+
+`@headlesskit/state-management` is a predictable state container for JavaScript apps, API-compatible with Redux v5. It is a zero-dependency, pure TypeScript package, included in this monorepo so that `@headlesskit/state-management-toolkit` can resolve it internally without an external peer dependency.
+
+| Package | Description |
+|---------|-------------|
+| `@headlesskit/state-management` | Redux v5-compatible — zero dependencies, full TypeScript |
+| `@headlesskit/state-management-toolkit` | Redux Toolkit v2-compatible — builds on top of this package |
+
+---
+
+## Installation
+
+```bash
+pnpm add @headlesskit/state-management
+# or
+npm install @headlesskit/state-management
+```
+
+---
+
+## Core Concepts
+
+The store model rests on three rules:
+
+1. **Single source of truth** — the whole app's state lives in one store object, returned by `createStore`.
+2. **State is read-only** — the only way to change it is to `dispatch` a plain object describing what happened (an *action*). You never mutate state directly.
+3. **Pure reducer functions** — a *reducer* is `(state, action) => newState`. Given the same `state` and `action`, it must always return the same result, with no side effects, no randomness, no mutation of its inputs.
+
+```
+dispatch(action) → reducer(state, action) → new state → every subscriber is called
+```
+
+This page covers concepts and how the pieces fit together. Each function/type below has its own dedicated page in the sidebar with full parameter tables, every thrown-error condition, and basic + advanced examples:
+
+- [createStore](02-create-store) — builds the store
+- [combineReducers](03-combine-reducers) — merges multiple reducers into one
+- [applyMiddleware](04-apply-middleware) — the store enhancer for middleware
+- [compose](05-compose) — right-to-left function composition, used to chain enhancers
+- [bindActionCreators](06-bind-action-creators) — wraps action creators in `dispatch`
+- **utils/** — `isAction`, `isPlainObject`, `kindOf`, `actionTypes`, `formatProdErrorMessage`, `warning`, `symbol-observable`
+- **types/** — every exported TypeScript type, field by field
+
+---
+
+## A complete mental model, end to end
+
+```typescript
+import { createStore, combineReducers, applyMiddleware } from '@headlesskit/state-management';
+
+// 1. Reducers — pure functions, one per state slice
+function counterReducer(state = { value: 0 }, action) {
+  switch (action.type) {
+    case 'counter/increment': return { value: state.value + 1 };
+    case 'counter/decrement': return { value: state.value - 1 };
+    default: return state;
+  }
+}
+
+// 2. Combine slices into one root reducer
+const rootReducer = combineReducers({ counter: counterReducer });
+
+// 3. Optional: middleware (e.g. logging) via applyMiddleware
+const logger = (store) => (next) => (action) => {
+  console.log('dispatching', action);
+  return next(action);
+};
+
+// 4. Build the store
+const store = createStore(rootReducer, applyMiddleware(logger));
+
+// 5. Subscribe to changes
+store.subscribe(() => console.log('state is now', store.getState()));
+
+// 6. Dispatch actions — the only way to change state
+store.dispatch({ type: 'counter/increment' });
+// logs: "dispatching { type: 'counter/increment' }"
+// logs: "state is now { counter: { value: 1 } }"
+```
+
+---
+
+## When to reach for `state-management-toolkit` instead
+
+`createStore`/`combineReducers` are the low-level primitives. In real applications you almost always want `@headlesskit/state-management-toolkit`'s `configureStore` instead — it wires up the thunk middleware, dev-mode invariant checks, and DevTools automatically, and adds `createSlice` so you don't hand-write switch statements or action-type strings. This package exists so the toolkit (and any code you write directly against the primitives) has something to build on; reach for it directly when you want the raw store with no opinions, or when learning how Redux's core actually works underneath the toolkit's sugar.
+
+---
+
+## License
+
+MIT — identical to Redux v5 upstream.

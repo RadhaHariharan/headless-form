@@ -1,0 +1,210 @@
+# createStore
+
+Creates a store that holds the complete state tree of your app. There should normally be only one store per app.
+
+```typescript
+import { createStore } from '@headlesskit/state-management';
+```
+
+## Signature
+
+`createStore` has three call shapes, depending on which optional arguments you pass:
+
+```typescript
+createStore(reducer)
+createStore(reducer, preloadedState)
+createStore(reducer, enhancer)
+createStore(reducer, preloadedState, enhancer)
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `reducer` | `(state, action) => state` | Yes | The root reducer function. See [combineReducers](03-combine-reducers) if you have more than one reducer. |
+| `preloadedState` | Same shape as your state | No | The initial state. Use this to hydrate state created server-side, or restored from `localStorage`. |
+| `enhancer` | `StoreEnhancer` | No | Composes extra capabilities onto the store, e.g. middleware via [applyMiddleware](04-apply-middleware). |
+
+**Returns:** a `Store<S, A>` object — see [Store API](#store-api) below.
+
+Because `preloadedState` and `enhancer` are both optional and both come after `reducer`, `createStore` detects which one you meant: if the **second** argument is a function and you didn't pass a third argument, it's treated as the `enhancer` and there is no preloaded state.
+
+```typescript
+createStore(reducer, applyMiddleware(thunk));
+// equivalent to:
+createStore(reducer, undefined, applyMiddleware(thunk));
+```
+
+## Basic usage
+
+```typescript
+import { createStore } from '@headlesskit/state-management';
+
+type CounterState = { count: number };
+type CounterAction = { type: 'INCREMENT' } | { type: 'DECREMENT' } | { type: 'RESET' };
+
+function counterReducer(
+  state: CounterState = { count: 0 },
+  action: CounterAction,
+): CounterState {
+  switch (action.type) {
+    case 'INCREMENT': return { count: state.count + 1 };
+    case 'DECREMENT': return { count: state.count - 1 };
+    case 'RESET': return { count: 0 };
+    default: return state;
+  }
+}
+
+const store = createStore(counterReducer);
+
+store.dispatch({ type: 'INCREMENT' });
+store.dispatch({ type: 'INCREMENT' });
+console.log(store.getState()); // { count: 2 }
+```
+
+## Advanced: preloaded state for SSR hydration
+
+A very common real-world pattern: render on the server, serialize the resulting state into the HTML, and hand it to the client store so there's no flash of "empty" UI on first paint.
+
+```typescript
+// server.ts — render and serialize
+const serverStore = createStore(rootReducer);
+serverStore.dispatch(loadInitialData());
+const html = renderToString(<App store={serverStore} />);
+const preloadedState = serverStore.getState();
+
+// Send `preloadedState` to the client embedded in the HTML, e.g.:
+// <script>window.__PRELOADED_STATE__ = ${JSON.stringify(preloadedState).replace(/</g, '\\u003c')}</script>
+
+// client.ts — hydrate from it
+const preloadedState = window.__PRELOADED_STATE__;
+delete window.__PRELOADED_STATE__;
+const clientStore = createStore(rootReducer, preloadedState);
+```
+
+> Escape `<` in the serialized JSON (as above) if you're embedding it in a `<script>` tag — otherwise a state value containing `</script>` could break out of the tag.
+
+## Advanced: enhancers and multiple enhancers
+
+An enhancer wraps the store creator itself, so it can intercept *every* method on the store, not just actions. `applyMiddleware` is the most common enhancer; you compose several together with [compose](05-compose):
+
+```typescript
+import { createStore, applyMiddleware, compose } from '@headlesskit/state-management';
+
+declare global {
+  interface Window { __REDUX_DEVTOOLS_EXTENSION_COMPOSE__?: typeof compose }
+}
+
+const composeEnhancers = window.__REDUX_DEVTOOLS_EXTENSION_COMPOSE__ ?? compose;
+
+const store = createStore(
+  rootReducer,
+  composeEnhancers(applyMiddleware(thunk, logger)),
+);
+```
+
+## Store API
+
+The object returned by `createStore`.
+
+### getState
+
+```typescript
+store.getState(): S
+```
+
+Returns the current state tree — always the most recently computed value, synchronously.
+
+```typescript
+const { count } = store.getState();
+```
+
+**Throws** if called from inside a reducer while a dispatch is in progress (`"You may not call store.getState() while the reducer is executing."`) — pass state down as the reducer's `state` argument instead of reaching for the closed-over store.
+
+### dispatch
+
+```typescript
+store.dispatch(action: Action): Action
+```
+
+The only way to trigger a state change. Runs the root reducer with the current state and the action, stores the result, then calls every subscriber. Returns the same action object you passed in (useful for chaining/awaiting in middleware).
+
+**Validation, in order:**
+1. The action **must be a plain object** (`{}`, not a class instance, array, `Map`, etc.) — throws `"Actions must be plain objects. Instead, received: '<type>'. You may need to add middleware ... such as 'redux-thunk' to handle dispatching functions."` This is why dispatching a plain function (e.g. a thunk) without `applyMiddleware(thunk)` throws — the raw store only accepts plain objects.
+2. `action.type` **must not be `undefined`** — throws `"Actions may not have an undefined 'type' property."` (a very common typo bug: a misspelled imported constant evaluates to `undefined`).
+3. `action.type` **must be a `string`** — throws `"Action 'type' property must be a string."`
+4. You **cannot dispatch from inside a reducer** — throws `"Reducers may not dispatch actions."` (reducers must be pure; side effects belong in middleware).
+
+```typescript
+store.dispatch({ type: 'INCREMENT' });
+store.dispatch({ type: 'todos/add', payload: 'Buy milk' });
+
+// ❌ throws — not a plain object
+store.dispatch(() => {});
+
+// ❌ throws — no `type`
+store.dispatch({ payload: 1 });
+```
+
+### subscribe
+
+```typescript
+store.subscribe(listener: () => void): Unsubscribe
+```
+
+Registers `listener`, called with no arguments after every `dispatch` completes. Returns an `unsubscribe` function — call it to stop listening. Safe to call `unsubscribe()` more than once (subsequent calls are no-ops).
+
+```typescript
+const unsubscribe = store.subscribe(() => {
+  console.log('changed:', store.getState());
+});
+
+store.dispatch({ type: 'INCREMENT' }); // listener fires
+unsubscribe();
+store.dispatch({ type: 'INCREMENT' }); // listener does not fire
+```
+
+**Advanced — listeners added during a dispatch don't fire for that same dispatch.** The store snapshots the listener list at the start of the dispatch's notification phase; a listener that subscribes a new listener while running will have that new listener wait until the *next* dispatch. This avoids infinite or surprising recursive notification chains.
+
+**Throws** if `listener` isn't a function, or if you try to `subscribe`/`unsubscribe` while a reducer is currently executing (same "while the reducer is executing" family of guards as `getState`).
+
+### replaceReducer
+
+```typescript
+store.replaceReducer(nextReducer: Reducer<S, A>): void
+```
+
+Swaps the root reducer at runtime without recreating the store (and therefore without losing existing state or subscribers). Internally dispatches a private `@@redux/REPLACE` action so reducers can detect the swap if they need to.
+
+**Real-world use:** code-splitting (load a feature's reducer lazily and `replaceReducer` with a `combineReducers` call that now includes it) and hot module reloading in development.
+
+```typescript
+if (import.meta.hot) {
+  import.meta.hot.accept('./rootReducer', (next) => {
+    store.replaceReducer(next.rootReducer);
+  });
+}
+```
+
+### `Symbol.observable` (the `observable` method)
+
+The store also implements the [TC39 Observable proposal](https://github.com/tc39/proposal-observable), so any Observable-aware library can subscribe to it without a Redux-specific adapter:
+
+```typescript
+import { from } from 'rxjs';
+
+const state$ = from(store as any);
+state$.subscribe((state) => console.log(state));
+```
+
+## `legacy_createStore`
+
+```typescript
+import { legacy_createStore } from '@headlesskit/state-management';
+```
+
+Identical in every behavioral respect to `createStore` — same signature, same validation, same returned `Store` shape. The only difference is cosmetic: Redux DevTools shows a deprecation notice when it detects `createStore` being called directly (nudging you toward `configureStore`), and `legacy_createStore` is the same function under a name DevTools doesn't flag. Use it only if you specifically want to silence that notice while still using the raw store creator; for new code, prefer `configureStore` from `@headlesskit/state-management-toolkit`.
+
+## Common pitfalls
+
+- **Returning `undefined` from a reducer.** Every reducer must return a real value for every action, including ones it doesn't recognize (`default: return state`). Returning `undefined` will surface as a confusing error the next time state is read.
+- **Mutating `state` in place.** `state.count++` and returning `state` looks like it "works" because the reference happens to still update, but it breaks reference-equality checks (used by `combineReducers`'s change detection and by UI libraries like React to decide whether to re-render). Always return a new object: `{ ...state, count: state.count + 1 }`.
+- **Dispatching inside a reducer or a `subscribe` callback synchronously while a dispatch is mid-flight.** Defer to a microtask, or use middleware ([applyMiddleware](04-apply-middleware)) designed for async/side-effecting code.

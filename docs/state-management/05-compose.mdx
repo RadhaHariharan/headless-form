@@ -1,0 +1,102 @@
+# compose
+
+Composes single-argument functions from right to left. The rightmost function is called first, with whatever arguments you call the composed function with; its result is passed to the next function to the left, and so on.
+
+```typescript
+import { compose } from '@headlesskit/state-management';
+```
+
+## Signature
+
+```typescript
+compose(): <T>(arg: T) => T
+compose(f: F): F
+compose(...funcs: Function[]): (...args) => result
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `...funcs` | `Function[]` | Zero or more single-argument functions to chain. |
+
+**Returns:** a function equivalent to `(...args) => f1(f2(f3(...args)))` for `compose(f1, f2, f3)`.
+
+| Input | Behavior |
+|-------|----------|
+| No arguments | Returns the identity function: `(arg) => arg`. |
+| One function | Returns that exact function, unwrapped (no extra call overhead). |
+| Two or more | Returns their right-to-left composition. |
+
+## Basic usage
+
+```typescript
+import { compose } from '@headlesskit/state-management';
+
+const double = (x: number) => x * 2;
+const increment = (x: number) => x + 1;
+
+const doubleThenIncrement = compose(increment, double);
+doubleThenIncrement(5); // double(5) = 10, then increment(10) = 11
+```
+
+Mathematically, `compose(f, g, h)` is `f(g(h(...)))` — read it right to left, the same direction as nested function calls.
+
+## Why it exists in this package: composing store enhancers
+
+`compose`'s main real-world job in Redux is combining multiple [store enhancers](04-apply-middleware) into one, since `createStore` only accepts a single `enhancer` argument:
+
+```typescript
+import { createStore, applyMiddleware, compose } from '@headlesskit/state-management';
+
+const store = createStore(
+  rootReducer,
+  compose(
+    applyMiddleware(thunk, logger),
+    someOtherEnhancer,
+  ),
+);
+```
+
+## Advanced: integrating the Redux DevTools enhancer
+
+A very common real-world snippet — DevTools expects to be the *outermost* enhancer (so it can observe everything, including actions handled entirely within other enhancers), which is why it goes first (leftmost) in the `compose` call:
+
+```typescript
+import { createStore, applyMiddleware, compose } from '@headlesskit/state-management';
+
+declare global {
+  interface Window {
+    __REDUX_DEVTOOLS_EXTENSION_COMPOSE__?: typeof compose;
+  }
+}
+
+const composeEnhancers =
+  (typeof window !== 'undefined' && window.__REDUX_DEVTOOLS_EXTENSION_COMPOSE__) || compose;
+
+const store = createStore(
+  rootReducer,
+  composeEnhancers(applyMiddleware(thunk, logger)),
+);
+```
+
+> In new code, prefer `configureStore` from `@headlesskit/state-management-toolkit` — it does exactly this DevTools-composition dance for you automatically, along with sensible default middleware.
+
+## Advanced: composing reusable data-transform pipelines
+
+`compose` is generic — nothing about it is Redux-specific. It's useful any time you have a pipeline of single-argument transforms you want to name and reuse:
+
+```typescript
+import { compose } from '@headlesskit/state-management';
+
+const trim = (s: string) => s.trim();
+const lower = (s: string) => s.toLowerCase();
+const collapseSpaces = (s: string) => s.replace(/\s+/g, ' ');
+
+const normalizeSearchQuery = compose(collapseSpaces, lower, trim);
+
+normalizeSearchQuery('  Hello   World  '); // 'hello world'
+```
+
+## Common pitfalls
+
+- **Order confusion.** `compose(f, g)` runs `g` first, not `f`. If results look "backwards," check the order — it's right-to-left, matching mathematical function composition notation, not a left-to-right pipeline.
+- **Multi-argument functions don't compose cleanly** beyond the rightmost one — every function *except* the last one in the chain receives exactly one argument (the previous function's single return value). If you need to thread multiple values through a pipeline, have the rightmost function bundle them into one object/array first.

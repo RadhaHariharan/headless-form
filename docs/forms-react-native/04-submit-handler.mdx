@@ -1,0 +1,166 @@
+# Submit Handler
+
+`getSubmitHandler` is the React Native equivalent of `form.onSubmit(...)` — but it returns a
+**zero-argument** function suitable for `<Button onPress>` / `<Pressable onPress>`, instead of
+a DOM `FormEventHandler` that expects a `FormEvent`.
+
+---
+
+## The problem this solves
+
+On the web, `form.onSubmit(onValid, onInvalid)` returns a handler wired to `<form onSubmit>`,
+which always receives a real DOM event:
+
+```tsx
+<form onSubmit={form.onSubmit((values) => save(values))}>
+```
+
+React Native has no `<form>` element and no submit event — you trigger submission from a
+`<Button>`'s `onPress`, which takes no argument at all. If you try to call the web-style
+handler directly with no event:
+
+```tsx
+// ❌ Throws at runtime
+<Button title="Submit" onPress={form.onSubmit((values) => save(values))} />
+```
+
+it crashes. Here's exactly why: the underlying handler unconditionally calls
+`event.preventDefault()` whenever `onSubmitPreventDefault` is `'always'` — which is the
+**default** value of that option. `onPress` calls the handler with no arguments, so `event` is
+`undefined`, and `undefined.preventDefault()` throws `TypeError: Cannot read properties of
+undefined (reading 'preventDefault')`. This isn't a bug in `onSubmit` — `preventDefault()` is
+the right thing to call for a real DOM submit event; React Native just never produces one.
+
+`getSubmitHandler` fixes this by always passing a stub object with a no-op `preventDefault`,
+so the call never throws — regardless of what `onSubmitPreventDefault` your form is configured
+with. You never need to set `onSubmitPreventDefault: 'never'` or pass `undefined` yourself.
+
+---
+
+## getSubmitHandler
+
+```typescript
+function getSubmitHandler<Values, TransformedValues, TError>(
+  form: FormStoreApi<Values, TransformedValues, TError>,
+  onValid: (values: TransformedValues) => void | Promise<void>,
+  onInvalid?: (errors: FormErrors<TError>, values: Values) => void,
+): () => void;
+```
+
+### Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|--------------|
+| `form` | `FormStoreApi` | Yes | From `useForm()` or `createFormStore()`. |
+| `onValid` | `(values: TransformedValues) => void \| Promise<void>` | Yes | Called with the transformed values when validation passes. |
+| `onInvalid` | `(errors, values) => void` | No | Called with the errors and raw values when validation fails. If omitted, a failed validation simply does nothing visible — `form.errors` is still updated, so you'd typically read that in your JSX instead. |
+
+### Return value
+
+A zero-argument `() => void` — drop it straight onto `onPress`.
+
+---
+
+## Simple example
+
+```tsx
+import { useForm, getTextInputProps, getSubmitHandler } from '@headlesskit/forms-react-native';
+import { isNotEmpty } from '@headlesskit/forms-react-native';
+import { View, TextInput, Button, Text } from 'react-native';
+
+function QuickNoteForm() {
+  const form = useForm({
+    initialValues: { note: '' },
+    validate: { note: isNotEmpty('Note cannot be empty') },
+  });
+
+  const { error, ...inputProps } = getTextInputProps(form, 'note');
+
+  return (
+    <View>
+      <TextInput key={form.key('note')} {...inputProps} placeholder="Write a note..." />
+      {error && <Text style={{ color: 'red' }}>{error}</Text>}
+
+      <Button
+        title="Save"
+        onPress={getSubmitHandler(form, (values) => {
+          console.log('Saved:', values.note);
+        })}
+      />
+    </View>
+  );
+}
+```
+
+---
+
+## Advanced: handling invalid submissions, and async `onValid`
+
+`onValid` may be async — `form.submitting` becomes `true` for the duration, exactly like the
+web's `onSubmit`:
+
+```tsx
+import { useForm, getTextInputProps, getSubmitHandler } from '@headlesskit/forms-react-native';
+import { isEmail } from '@headlesskit/forms-react-native';
+import { View, TextInput, Button, Text, ActivityIndicator } from 'react-native';
+
+function NewsletterSignup() {
+  const form = useForm({
+    initialValues: { email: '' },
+    validate: { email: isEmail('Invalid email') },
+  });
+
+  const { error, ...inputProps } = getTextInputProps(form, 'email');
+
+  const handleSubmit = getSubmitHandler(
+    form,
+    // onValid — may be async; form.submitting tracks it
+    async (values) => {
+      await fetch('/api/subscribe', {
+        method: 'POST',
+        body: JSON.stringify(values),
+      });
+    },
+    // onInvalid — runs synchronously when validation fails; no await needed
+    (errors) => {
+      console.warn('Signup form invalid:', errors);
+    },
+  );
+
+  return (
+    <View>
+      <TextInput key={form.key('email')} {...inputProps} placeholder="Email" />
+      {error && <Text style={{ color: 'red' }}>{error}</Text>}
+
+      {form.submitting ? (
+        <ActivityIndicator />
+      ) : (
+        <Button title="Subscribe" onPress={handleSubmit} disabled={form.submitting} />
+      )}
+    </View>
+  );
+}
+```
+
+### What happens on each press, step by step
+
+1. `handleSubmit()` runs (no arguments).
+2. The form validates every field (synchronously here, since `isEmail` is sync).
+3. If invalid: `form.errors` is populated, `onInvalid(errors, values)` runs (here: a console
+   warning), and `onValid` is **not** called.
+4. If valid: `onValid(values)` runs. Because it returns a `Promise`, `form.submitting` flips to
+   `true` until it resolves, then back to `false` — driving the `ActivityIndicator` above with
+   no extra state of your own.
+
+---
+
+## What if I don't pass `onInvalid`?
+
+It's optional. Without it, a failed validation still updates `form.errors` — you just don't get
+a separate callback for it. This is usually fine, since you're already reading `form.errors`
+in your JSX to show field-level messages:
+
+```tsx
+// No onInvalid — form.errors.email is still set, the <Text> below still shows it
+<Button title="Subscribe" onPress={getSubmitHandler(form, (values) => save(values))} />
+```

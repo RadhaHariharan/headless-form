@@ -1,0 +1,90 @@
+# createDraftSafeSelector
+
+**File:** `src/createDraftSafeSelector.ts`
+
+A drop-in, "draft-aware" replacement for `reselect`'s `createSelector` — safe to call with an Immer draft (e.g. inside a [createSlice](./04-create-slice) case reducer, or any code path that might be running mid-mutation) without risking a selector returning stale memoized output.
+
+## Signature
+
+```typescript
+function createDraftSafeSelector<...Selectors, Result>(
+  ...selectors: Selectors,
+  combiner: (...results: SelectorResults<Selectors>) => Result,
+): (state: DraftOrState, ...args) => Result
+```
+
+Same call signature as `reselect`'s `createSelector` — any number of "input selector" functions followed by a final "result function" combining their outputs. The difference is entirely in what happens to the **first argument** passed to the resulting selector at call time.
+
+## Why this exists
+
+`reselect`'s normal memoized selectors cache their result keyed by reference-equality of their inputs. If you call a memoized selector with an Immer **draft** object whose proxied fields have been mutated since the last call, the draft's *reference* may not have changed (Immer drafts are stable proxy objects during a single `produce()` call) even though logically the data did change — so a normal memoized selector could incorrectly return its old cached result.
+
+`createDraftSafeSelector` fixes this by checking, on every call, whether the first argument is currently an Immer draft (`isDraft(value)`); if so, it unwraps it to its *current* plain-object snapshot via `current(value)` before handing it to the underlying memoized selector — guaranteeing the selector always sees fresh data when it matters, without you needing to remember to call `current()` yourself everywhere.
+
+## Basic usage
+
+```typescript
+import { createDraftSafeSelector } from '@headlesskit/state-management-toolkit';
+
+interface TodosState {
+  items: { id: string; done: boolean }[];
+}
+
+const selectDoneCount = createDraftSafeSelector(
+  (state: TodosState) => state.items,
+  (items) => items.filter((t) => t.done).length,
+);
+
+selectDoneCount({ items: [{ id: '1', done: true }] }); // 1
+```
+
+## Advanced: calling a selector from inside a `createSlice` case reducer
+
+This is the primary real-world reason this type exists — calling a memoized selector against `state` *while you're still inside* a mutating case reducer, where `state` is an active Immer draft:
+
+```typescript
+import { createSlice } from '@headlesskit/state-management-toolkit';
+import { createDraftSafeSelector } from '@headlesskit/state-management-toolkit';
+
+interface CartState {
+  items: { price: number; qty: number }[];
+}
+
+const selectTotal = createDraftSafeSelector(
+  (state: CartState) => state.items,
+  (items) => items.reduce((sum, i) => sum + i.price * i.qty, 0),
+);
+
+const cartSlice = createSlice({
+  name: 'cart',
+  initialState: { items: [] } as CartState,
+  reducers: {
+    addItem(state, action: { payload: { price: number; qty: number } }) {
+      state.items.push(action.payload);
+      // safe even though `state` here is an active Immer draft:
+      const total = selectTotal(state);
+      console.log('cart total after add:', total);
+    },
+  },
+});
+```
+
+Calling a plain `reselect` `createSelector` the same way risks `total` reflecting the cart's contents *before* `state.items.push(...)`, because the draft reference hadn't changed from the memoized selector's point of view — `createDraftSafeSelector` avoids that specifically by re-snapshotting via `current()` on every call when a draft is detected.
+
+## `.withTypes<...>()`
+
+Like `reselect`'s own selector creators, the result has a `.withTypes<RootState>()` helper for pinning the expected root-state generic once, instead of annotating every individual selector:
+
+```typescript
+const createAppDraftSafeSelector = createDraftSafeSelector.withTypes<RootState>();
+
+const selectUserName = createAppDraftSafeSelector(
+  (state) => state.user, // state is typed as RootState, no annotation needed
+  (user) => user.name,
+);
+```
+
+## Common pitfalls
+
+- **Only the *first* argument is draft-checked** — if you pass multiple plain-state-like arguments to a multi-input selector and only one of them is a draft, only that first-position argument benefits from the unwrap; this matches the typical "first arg is `state`" calling convention used throughout the library, but is worth knowing if you compose selectors unusually.
+- **Don't reach for this outside reducer/slice code** — for selectors only ever called from React components or plain `store.getState()` results (never against a live Immer draft), a normal `reselect` `createSelector` is equally correct and saves the (small) per-call `isDraft` check.

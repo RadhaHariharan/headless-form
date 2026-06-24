@@ -1,0 +1,78 @@
+# api.util (manual cache manipulation)
+
+**File:** `src/query/core/module.ts`, implemented via `buildInitiate.ts`/`buildSlice.ts`
+
+Every [createApi](./01-create-api) result has a `.util` namespace of dispatchable actions/thunks for manually controlling the cache — used for optimistic updates, prefetching, and cross-cutting cache resets that don't map cleanly to a single endpoint's normal lifecycle.
+
+## `api.util.updateQueryData(endpointName, arg, updateRecipe)`
+
+```typescript
+dispatch(
+  api.util.updateQueryData('getPosts', undefined, (draftPosts) => {
+    draftPosts.push({ id: 'temp-id', title: 'New post' }); // Immer-powered draft mutation
+  }),
+);
+```
+
+Immediately, synchronously patches a specific query's cached data — the standard tool for **optimistic updates**: call this right before/as part of dispatching a mutation, so the UI updates instantly rather than waiting for the round-trip. The dispatched action's return value has an `.undo()` method that reverts exactly this patch, and an `.inversePatches` array (Immer patches) for more advanced manual rollback.
+
+```typescript
+const patchResult = dispatch(api.util.updateQueryData('getPosts', undefined, (draft) => {
+  draft.push(optimisticPost);
+}));
+
+try {
+  await someMutationPromise;
+} catch {
+  patchResult.undo(); // roll back the optimistic change on failure
+}
+```
+
+This is exactly the mechanism [endpoint definitions](./05-endpoint-definitions)' `onQueryStarted` hook is designed around.
+
+## `api.util.upsertQueryData(endpointName, arg, value)`
+
+```typescript
+dispatch(api.util.upsertQueryData('getPost', { id: 1 }, { id: 1, text: 'Hello!' }));
+```
+
+Like `updateQueryData`, but replaces the cache entry wholesale with a given value (creating the entry if it doesn't exist yet) rather than patching an existing one — useful for seeding the cache from data you already have (e.g. after creating an entity via a mutation, immediately populate the `getPost` cache entry for it without a redundant fetch).
+
+## `api.util.patchQueryData(endpointName, arg, patches)`
+
+The lower-level counterpart to `updateQueryData`'s `.undo()` — apply a raw array of Immer patches (typically the `inversePatches` captured from an earlier `updateQueryData` call) directly, for more advanced manual rollback scenarios.
+
+## `api.util.invalidateTags(tags)`
+
+```typescript
+dispatch(api.util.invalidateTags(['Post']));
+dispatch(api.util.invalidateTags([{ type: 'Post', id: 1 }]));
+```
+
+Manually triggers the same tag-invalidation machinery a mutation's `invalidatesTags` would — useful for invalidating cache state in response to something that *isn't* one of this API's own mutations (e.g. a WebSocket push notification, or a mutation from a *different* `createApi` instance).
+
+## `api.util.prefetch(endpointName, arg, options)`
+
+```typescript
+dispatch(api.util.prefetch('getPosts', undefined, { force: true }));
+```
+
+Triggers a query fetch without subscribing a component to it — used to warm the cache ahead of time (e.g. on hover, before navigation). The React module's `usePrefetch` hook dispatches this internally; most apps reach for the hook rather than this thunk directly.
+
+## `api.util.resetApiState()`
+
+```typescript
+dispatch(api.util.resetApiState());
+```
+
+Wipes **all** cached data, subscriptions, and in-flight request tracking for this API back to its initial state — the standard tool for "log the user out, forget everything," since stale per-user cached data persisting across a user switch is a real and easy-to-miss bug otherwise.
+
+## `api.util.getRunningQueriesThunk()` / `getRunningMutationsThunk()` / `getRunningQueryThunk(name, arg)` / `getRunningMutationThunk(name, key)`
+
+Dispatchable thunks that return the actual in-flight `Promise`s for currently-running requests — primarily used by SSR frameworks' RTK Query integrations to `await` all queries a server-rendered page kicked off before sending the response.
+
+## Common pitfalls
+
+- **`updateQueryData`/`upsertQueryData` only affect the in-memory cache — they don't talk to your server.** They're a UI-responsiveness tool (show the change immediately) paired with a real mutation request happening in parallel, not a substitute for actually persisting the change.
+- **An optimistic update without a corresponding rollback on failure leaves the cache permanently wrong** if the real mutation fails — always pair `updateQueryData` with `.undo()` (or equivalent) in your mutation's failure path; this is easy to forget since the happy path "just works" without it.
+- **`resetApiState()` cancels everything, including requests genuinely still in flight for the *new* user/session** if called at the wrong time relative to re-authentication — sequence it carefully relative to your auth flow (typically: reset immediately on logout, before any new requests for the next session are dispatched).

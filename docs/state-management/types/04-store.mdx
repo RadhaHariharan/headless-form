@@ -1,0 +1,176 @@
+# Store types
+
+**File:** `src/types/store.ts`
+
+```typescript
+import type {
+  Dispatch,
+  Unsubscribe,
+  ListenerCallback,
+  Observable,
+  Observer,
+  Store,
+  UnknownIfNonSpecific,
+  StoreCreator,
+  StoreEnhancer,
+  StoreEnhancerStoreCreator,
+} from '@headlesskit/state-management';
+```
+
+## `Dispatch<A>`
+
+```typescript
+interface Dispatch<A extends Action = UnknownAction> {
+  <T extends A>(action: T): T;
+}
+```
+
+The type of `store.dispatch`: takes an action, returns the *same* action back (not `void`) — this is what lets you write `const result = dispatch(someAction)` and immediately chain off the result, a pattern thunk-style middleware in [state-management-toolkit](../../state-management-toolkit/01-overview) relies on heavily (a thunk function dispatches and returns a promise that resolves to whatever the inner async logic returns).
+
+```typescript
+const dispatch: Dispatch<CounterAction> = store.dispatch;
+const action = dispatch({ type: 'increment' }); // action === { type: 'increment' }
+```
+
+## `Unsubscribe`
+
+```typescript
+interface Unsubscribe {
+  (): void;
+}
+```
+
+The function `store.subscribe(listener)` returns — call it with no arguments to stop listening. See the [createStore](../02-create-store) Store API section for full subscribe/unsubscribe semantics.
+
+## `ListenerCallback`
+
+```typescript
+type ListenerCallback = () => void;
+```
+
+The shape `store.subscribe` expects as its argument — a zero-argument, no-return-value function. Notably, the listener does **not** receive the new state as a parameter; it must call `store.getState()` itself to read the current value, which is why subscriber functions are almost always written as closures capturing the `store` reference.
+
+```typescript
+const listener: ListenerCallback = () => {
+  console.log('state is now', store.getState());
+};
+```
+
+## `Observable<T>` / `Observer<T>`
+
+```typescript
+interface Observer<T> {
+  next?(value: T): void;
+}
+
+interface Observable<T> {
+  subscribe(observer: Observer<T>): { unsubscribe: Unsubscribe };
+}
+```
+
+The [TC39 Observable proposal](https://github.com/tc39/proposal-observable) shapes implemented by `store[Symbol.observable]()` — see the [$$observable](../utils/06-symbol-observable) doc for the full mechanism and an RxJS interop example. `Observer<T>.next` is optional because the spec technically allows observers with no `next` handler (e.g. one only interested in completion/error, which Redux's store never emits anyway since it never "completes").
+
+## `Store<S, A, StateExt>`
+
+```typescript
+interface Store<S = any, A extends Action = UnknownAction, StateExt = unknown> {
+  dispatch: Dispatch<A>;
+  getState(): S & StateExt;
+  subscribe(listener: ListenerCallback): Unsubscribe;
+  replaceReducer(nextReducer: Reducer<S, A>): void;
+  [Symbol.observable](): Observable<S & StateExt>;
+}
+```
+
+The full store object returned by `createStore`. See [createStore](../02-create-store)'s "Store API" section for behavioral docs on each of these four methods plus the observable symbol.
+
+| Generic | Default | Meaning |
+|---------|---------|---------|
+| `S` | `any` | Base state shape from your root reducer. |
+| `A` | `UnknownAction` | Action union the store accepts via `dispatch`. |
+| `StateExt` | `unknown` | Extra fields merged into the state shape *by an enhancer* (not by the reducer) — e.g. a persistence enhancer that adds a `_persist` metadata field. Kept separate from `S` so enhancer-added fields don't have to round-trip through every reducer's type signature. |
+
+## `UnknownIfNonSpecific<T>`
+
+```typescript
+type UnknownIfNonSpecific<T> = T extends object ? T : unknown;
+```
+
+A small inference-safety helper used inside `StoreEnhancer`'s type definition: if an enhancer doesn't pin down a concrete `StateExt`/`Ext` shape (leaving it as the generic default), this collapses it to `unknown` rather than letting it default to the much more permissive (and easy to misuse) `{}` or `any` — forcing you to actually check/narrow the enhancer-added fields before relying on them, consistent with how [`UnknownAction`](./01-actions) is preferred over `AnyAction` for the same "narrow before you trust it" reason.
+
+## `StoreCreator`
+
+```typescript
+interface StoreCreator {
+  <S, A extends Action, Ext = {}, StateExt = never>(
+    reducer: Reducer<S, A>,
+    preloadedState?: PreloadedState<S>,
+  ): Store<S, A, StateExt> & Ext;
+  <S, A extends Action, Ext = {}, StateExt = never>(
+    reducer: Reducer<S, A>,
+    enhancer?: StoreEnhancer<Ext, StateExt>,
+  ): Store<S, A, StateExt> & Ext;
+  <S, A extends Action, Ext = {}, StateExt = never>(
+    reducer: Reducer<S, A>,
+    preloadedState?: PreloadedState<S>,
+    enhancer?: StoreEnhancer<Ext>,
+  ): Store<S, A, StateExt> & Ext;
+}
+```
+
+The type of `createStore` itself — three overloads matching its three call shapes (no third argument, `enhancer` in the second-argument position, or `preloadedState` then `enhancer`). See [createStore](../02-create-store)'s Signature section for the corresponding runtime parameter-disambiguation logic.
+
+## `StoreEnhancer<Ext, StateExt>`
+
+```typescript
+interface StoreEnhancer<Ext = {}, StateExt = {}> {
+  (next: StoreEnhancerStoreCreator): StoreEnhancerStoreCreator<Ext, StateExt>;
+}
+```
+
+The type of an enhancer — a function that wraps `createStore` itself (as opposed to middleware, which wraps `dispatch`). `applyMiddleware(...)`'s return value is one concrete `StoreEnhancer`.
+
+| Generic | Meaning |
+|---------|---------|
+| `Ext` | Extra *methods* the enhancer adds to the store object (e.g. a hypothetical `store.persist()` method from a persistence enhancer). |
+| `StateExt` | Extra *state fields* the enhancer merges in — flows into `Store<S, A, StateExt>`'s third generic. |
+
+## `StoreEnhancerStoreCreator<Ext, StateExt>`
+
+```typescript
+interface StoreEnhancerStoreCreator<Ext = {}, StateExt = {}> {
+  <S, A extends Action>(
+    reducer: Reducer<S, A>,
+    preloadedState?: PreloadedState<S>,
+  ): Store<S, A, StateExt> & Ext;
+}
+```
+
+The narrower store-creating function an enhancer's `next` parameter receives, and the shape it must itself return — effectively `StoreCreator` minus the `enhancer` argument (an enhancer wraps `createStore`, so by the time your enhancer function runs, the "which enhancer to apply" decision has already been made one layer up; you only ever see the `reducer`/`preloadedState` two-argument shape).
+
+## Advanced: typing a minimal custom enhancer
+
+```typescript
+import type { StoreEnhancer } from '@headlesskit/state-management';
+
+const withLogging: StoreEnhancer<{ getActionLog(): string[] }> = (createStore) => (reducer, preloadedState) => {
+  const log: string[] = [];
+  const store = createStore((state, action) => {
+    log.push(action.type);
+    return reducer(state, action);
+  }, preloadedState);
+
+  return {
+    ...store,
+    getActionLog: () => log,
+  };
+};
+
+const store = createStore(rootReducer, withLogging);
+store.getActionLog(); // typed correctly thanks to the `Ext` generic
+```
+
+## Common pitfalls
+
+- **Confusing `Ext` and `StateExt`** — methods go in `Ext`, state fields go in `StateExt`. Putting a new method's name in `StateExt` won't type-error immediately but will make `store.getState()`'s return type wrong.
+- **Forgetting to spread the inner `store`'s existing methods** when writing a custom enhancer (as shown above) — an enhancer that returns a brand-new object instead of extending the one `createStore` (via `next`) gave it will silently drop `dispatch`/`subscribe`/etc. unless you spread them back in.

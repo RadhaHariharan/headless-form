@@ -1,0 +1,93 @@
+# combineSlices
+
+**File:** `src/combineSlices.ts` (487 lines)
+
+A `combineReducers`-like function built specifically around [Slice](./05-create-slice) objects, with one major addition: **lazy injection** — slices/reducers can be registered with the combined reducer *after* the store already exists, which is the key building block for code-splitting feature reducers (load a feature's slice only when that feature's route/component actually mounts).
+
+## Signature
+
+```typescript
+function combineSlices(
+  ...slices: Array<Slice | { reducerPath: string; reducer: Reducer }>
+): CombinedSliceReducer<InitialState>
+```
+
+Accepts any mix of:
+- `Slice` objects (from [createSlice](./05-create-slice)) — uses `slice.reducerPath` and `slice.reducer` automatically.
+- Plain `{ reducerPath, reducer }` "slice-like" objects — lets you combine hand-written reducers (or RTK Query API instances, which have this exact shape) alongside real slices.
+
+**Returns:** a normal reducer function (drop straight into `configureStore({ reducer: combinedReducer })`), **plus** extra methods: `.inject(slice, config?)`, `.withLazyLoadedSlices<T>()`, `.selector(selectorFn, selectState?)`.
+
+## Basic usage — combining slices eagerly
+
+```typescript
+import { combineSlices } from '@headlesskit/state-management-toolkit';
+import { counterSlice } from './counterSlice';
+import { userSlice } from './userSlice';
+
+const rootReducer = combineSlices(counterSlice, userSlice);
+
+export type RootState = ReturnType<typeof rootReducer>;
+// { counter: CounterState; user: UserState } — inferred from each slice's reducerPath + state
+```
+
+## `.inject(slice, config?)` — lazy registration after store creation
+
+```typescript
+const rootReducer = combineSlices(counterSlice).withLazyLoadedSlices<{
+  user?: UserState;
+}>();
+
+const store = configureStore({ reducer: rootReducer });
+
+// Later — e.g. when a "profile" route lazily loads:
+import { userSlice } from './features/user/userSlice';
+store.replaceReducer(rootReducer.inject(userSlice));
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|--------------|
+| `overrideExisting` | `boolean` | `false` | If a reducer is already injected at that `reducerPath`, injecting a *different* reducer reference normally throws — pass `true` to explicitly allow swapping it (e.g. for hot-reloading a slice during development). |
+
+## `.withLazyLoadedSlices<Lazy>()` — declaring the shape of slices not yet injected
+
+This is a type-only operation at runtime (returns the same reducer instance) — it exists purely so TypeScript knows about slices that *will* be injected later, before they actually are, typically via interface merging:
+
+```typescript
+export interface LazyLoadedSlices {}
+
+export const rootReducer = combineSlices(counterSlice).withLazyLoadedSlices<LazyLoadedSlices>();
+
+// in the feature module, once userSlice is defined:
+declare module './store' {
+  interface LazyLoadedSlices extends WithSlice<typeof userSlice> {}
+}
+```
+
+This pattern lets `RootState` correctly include `user?: UserState` everywhere in your app, even in code that runs before the user feature is ever loaded.
+
+## `.selector(selectorFn, selectState?)` — injection-safe selectors
+
+```typescript
+const selectCounterValue = rootReducer.inject(counterSlice).selector((state) => {
+  return state.counter.value; // typed as `number`, not `number | undefined`,
+                                // even though `counter` is technically optional pre-injection
+});
+```
+
+Internally, the first argument passed to `selectorFn` is wrapped in a `Proxy` that falls back to each injected slice's `getInitialState()` for any key that hasn't actually appeared in state yet (e.g. because no action has been dispatched since injection, or — in defensive/lazy-loading edge cases — injection hasn't run at all). Use `selector.original(proxiedState)` inside the selector body to get the real, un-proxied state object back for cases where you need exact reference equality (e.g. passing it into a memoized `reselect` selector that does its own caching).
+
+If your combined reducer is nested inside a larger root reducer (not the literal root state), pass a second `selectState` callback so `.selector()` knows how to find this reducer's slice of root state:
+
+```typescript
+const selectBoolean = innerReducer.inject(booleanSlice).selector(
+  (state) => state.boolean,
+  (rootState: RootState) => rootState.inner,
+);
+```
+
+## Common pitfalls
+
+- **Injecting a *different* reducer reference at an already-used `reducerPath` throws by default** — this is a safety check against accidentally double-injecting two different versions of what should be the same feature slice; pass `overrideExisting: true` only when you specifically intend to replace it (e.g. HMR).
+- **`.selector()`'s Proxy fallback only covers keys that haven't been written to state yet** — once any action causes a key to actually appear in state (even via a *different*, unrelated slice's reducer accidentally producing a same-named key), the proxy no longer intercepts it; don't rely on the proxy as a general "default value" mechanism outside the lazy-injection use case.
+- **You must call `store.replaceReducer(rootReducer.inject(slice))`** — `.inject()` returns a *new* combined reducer; it does not mutate the original reducer in place, and forgetting `replaceReducer` means the store keeps running the old reducer that doesn't know about the new slice.

@@ -1,0 +1,65 @@
+# $$observable (symbol-observable)
+
+**File:** `src/utils/symbol-observable.ts` · Internal helper, not exported from the package root.
+
+Resolves the well-known `Symbol.observable` used by the [TC39 Observable proposal](https://github.com/tc39/proposal-observable), with a string fallback for environments where `Symbol.observable` doesn't exist.
+
+## What it actually is
+
+```typescript
+const $$observable: symbol | '@@observable' =
+  (typeof Symbol === 'function' && Symbol.observable) || '@@observable';
+```
+
+| Environment | Resulting value |
+|--------------|------------------|
+| `Symbol.observable` is already defined (e.g. another Observable-spec library, like RxJS, registered it first) | That exact same symbol — so different libraries' Observable implementations interoperate. |
+| `Symbol.observable` doesn't exist | The string `'@@observable'`, used as a normal (if unusual-looking) object key. |
+
+This is also declared as a global ambient type augmentation (`SymbolConstructor.observable: symbol`) so TypeScript knows `Symbol.observable` is a valid expression in the first place.
+
+## Why this exists: the store's `[Symbol.observable]` method
+
+[createStore](../02-create-store)'s returned store object has a method at this computed key:
+
+```typescript
+const store = createStore(reducer);
+
+// the same key as accessed two different ways:
+store[Symbol.observable]
+store['@@observable'] // only on environments without a real Symbol.observable
+```
+
+Calling it returns a minimal Observable-spec object with a `.subscribe(observer)` method, which is what makes `from(store)` work in RxJS and similar libraries without Redux needing to depend on RxJS at all:
+
+```typescript
+import { from } from 'rxjs';
+
+const state$ = from(store as any); // recognizes [Symbol.observable]
+state$.subscribe((state) => console.log(state));
+```
+
+## Basic usage (you won't import this directly)
+
+There's no reason to import `$$observable` yourself in application code — interact with `store[Symbol.observable]()` indirectly through an Observable library's adapter (like RxJS's `from`), which knows to look for this well-known symbol on any object.
+
+## Advanced: writing your own minimal Observable consumer without RxJS
+
+If you don't want an RxJS dependency just to consume this, the protocol is simple enough to use directly:
+
+```typescript
+const observable = (store as any)[Symbol.observable]();
+
+const subscription = observable.subscribe({
+  next(state) {
+    console.log('state changed:', state);
+  },
+});
+
+// later
+subscription.unsubscribe();
+```
+
+## Common pitfalls
+
+- **Don't compare the symbol to the string fallback yourself** — always read the *same* `$$observable` value (or `Symbol.observable`) you'd use to access the key, rather than hardcoding `'@@observable'`, since on environments with native symbol support the real key is a `symbol`, not that string, and `obj['@@observable']` would simply be `undefined`.

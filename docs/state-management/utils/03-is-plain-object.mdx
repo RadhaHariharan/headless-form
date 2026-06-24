@@ -1,0 +1,73 @@
+# isPlainObject
+
+**File:** `src/utils/isPlainObject.ts`
+
+Returns `true` only for objects created by the `Object` constructor or with `Object.create(null)` — i.e. genuinely "plain" data objects, not arrays, class instances, built-ins like `Map`/`Date`, or `null`.
+
+```typescript
+import { isPlainObject } from '@headlesskit/state-management';
+```
+
+## Signature
+
+```typescript
+isPlainObject(obj: any): obj is object
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `obj` | `any` | Any value to check. |
+
+**Returns:** `boolean`.
+
+## How it works
+
+It's not a `typeof obj === 'object'` check (which would also be `true` for arrays and `null`-having edge cases) — it walks the prototype chain. A value is "plain" if its own prototype is either `null` (created via `Object.create(null)`) or is itself the *topmost* prototype in the chain (i.e. there's exactly one level of prototype — `Object.prototype` — between the value and `null`). Anything with a deeper or different chain (an array, a class instance, a built-in like `Map`) fails the check.
+
+## Basic usage
+
+```typescript
+import { isPlainObject } from '@headlesskit/state-management';
+
+isPlainObject({});                   // true
+isPlainObject({ a: 1 });             // true
+isPlainObject(Object.create(null));  // true — no prototype at all, still "plain"
+isPlainObject([]);                   // false — Array.prototype in the chain
+isPlainObject(new Map());            // false
+isPlainObject(new Date());           // false
+isPlainObject(null);                 // false
+isPlainObject(undefined);            // false
+isPlainObject('a string');           // false
+isPlainObject(42);                   // false
+
+class Point { constructor(public x: number, public y: number) {} }
+isPlainObject(new Point(1, 2));      // false — Point.prototype, not the top-level Object.prototype
+```
+
+## Why this matters for Redux actions and state
+
+This is the check behind [isAction](02-is-action) and `store.dispatch`'s own validation. **Actions and state must be plain objects** — this is what lets Redux DevTools serialize/deserialize them for time-travel debugging, and what lets `combineReducers` safely spread/merge them. Class instances, `Map`s, and arrays-as-actions are deliberately rejected so that nobody accidentally relies on instance methods or prototype behavior that wouldn't survive a `JSON.stringify` round-trip.
+
+```typescript
+// ❌ Rejected by store.dispatch — a Map is not a plain object
+store.dispatch(new Map([['type', 'INCREMENT']]) as any);
+
+// ✅ Use a plain object instead
+store.dispatch({ type: 'INCREMENT' });
+```
+
+## Advanced: validating state shape in tests
+
+```typescript
+import { isPlainObject } from '@headlesskit/state-management';
+
+test('reducer never returns a class instance', () => {
+  const state = todosReducer(undefined, { type: '@@init' });
+  expect(isPlainObject(state)).toBe(true);
+});
+```
+
+## Common pitfalls
+
+- **`Object.create(null)` objects pass this check** even though they have no prototype methods at all (no `.toString()`, no `.hasOwnProperty()`) — if your code calls `obj.hasOwnProperty(key)` directly on a value that passed `isPlainObject`, that can throw for a null-prototype object. Use `Object.prototype.hasOwnProperty.call(obj, key)` or the `in` operator instead, which is exactly what this package's own internals do (see [isAction](02-is-action)).
+- **Objects from other JS realms** (e.g. an `<iframe>`'s `window`, or values crossing a worker boundary) can sometimes fail this check even though they look like plain objects, because their prototype chain belongs to a different global's `Object.prototype`. This is rare in practice but worth knowing if a value behaves unexpectedly only when it crossed a frame/worker boundary.

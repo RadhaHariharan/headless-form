@@ -1,0 +1,129 @@
+# Full Example
+
+A complete registration screen using every adapter this package provides: `getTextInputProps`
+for the text fields, `getSwitchProps` for a boolean, and `getSubmitHandler` for the button.
+
+```tsx
+import { useForm, getTextInputProps, getSwitchProps, getSubmitHandler } from '@headlesskit/forms-react-native';
+import { isEmail, isNotEmpty, hasLength } from '@headlesskit/forms-react-native';
+import { View, Text, TextInput, Switch, Button, ActivityIndicator } from 'react-native';
+
+interface RegistrationValues {
+  name: string;
+  email: string;
+  password: string;
+  acceptedTerms: boolean;
+}
+
+function RegistrationScreen() {
+  const form = useForm<RegistrationValues>({
+    mode: 'uncontrolled', // the default — typing causes zero re-renders
+    initialValues: {
+      name: '',
+      email: '',
+      password: '',
+      acceptedTerms: false,
+    },
+    validate: {
+      name: isNotEmpty('Name is required'),
+      email: isEmail('Invalid email'),
+      password: hasLength({ min: 8 }, 'Password must be at least 8 characters'),
+      acceptedTerms: (v) => (v ? null : 'You must accept the terms'),
+    },
+  });
+
+  const name = getTextInputProps(form, 'name');
+  const email = getTextInputProps(form, 'email');
+  const password = getTextInputProps(form, 'password');
+
+  const handleSubmit = getSubmitHandler(
+    form,
+    async (values) => {
+      // values is RegistrationValues — fully typed, transformed if transformValues was set
+      await fetch('/api/register', { method: 'POST', body: JSON.stringify(values) });
+    },
+    (errors) => {
+      console.warn('Registration form invalid:', errors);
+    },
+  );
+
+  return (
+    <View style={{ padding: 16, gap: 12 }}>
+      <View>
+        <Text>Name</Text>
+        <TextInput
+          key={form.key('name')}
+          value={name.value}
+          defaultValue={name.defaultValue}
+          onChangeText={name.onChangeText}
+          onFocus={name.onFocus}
+          onBlur={name.onBlur}
+          placeholder="Jane Doe"
+        />
+        {name.error && <Text style={{ color: 'red' }}>{name.error}</Text>}
+      </View>
+
+      <View>
+        <Text>Email</Text>
+        <TextInput
+          key={form.key('email')}
+          value={email.value}
+          defaultValue={email.defaultValue}
+          onChangeText={email.onChangeText}
+          onFocus={email.onFocus}
+          onBlur={email.onBlur}
+          keyboardType="email-address"
+          autoCapitalize="none"
+          placeholder="jane@example.com"
+        />
+        {email.error && <Text style={{ color: 'red' }}>{email.error}</Text>}
+      </View>
+
+      <View>
+        <Text>Password</Text>
+        <TextInput
+          key={form.key('password')}
+          value={password.value}
+          defaultValue={password.defaultValue}
+          onChangeText={password.onChangeText}
+          onFocus={password.onFocus}
+          onBlur={password.onBlur}
+          secureTextEntry
+        />
+        {password.error && <Text style={{ color: 'red' }}>{password.error}</Text>}
+      </View>
+
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <Switch {...getSwitchProps(form, 'acceptedTerms')} />
+        <Text>I accept the terms and conditions</Text>
+      </View>
+      {form.errors.acceptedTerms && (
+        <Text style={{ color: 'red' }}>{form.errors.acceptedTerms}</Text>
+      )}
+
+      {form.submitting ? (
+        <ActivityIndicator />
+      ) : (
+        <Button title="Create account" onPress={handleSubmit} disabled={form.submitting} />
+      )}
+    </View>
+  );
+}
+```
+
+### Why this example spreads fields individually instead of `{...inputProps}`
+
+Earlier docs in this package destructure `error` out and spread the rest:
+`const { error, ...inputProps } = getTextInputProps(form, 'name')`. Either style works — this
+example spells out every field explicitly instead, purely so it reads as a checklist of exactly
+what `getTextInputProps` hands you (`value`, `defaultValue`, `onChangeText`, `onFocus`,
+`onBlur`, `error`) when you're seeing it for the first time. In your own code, prefer the
+shorter destructuring form shown in every other page of this package's docs.
+
+### What you'd change for `mode: 'controlled'`
+
+Nothing in the JSX — `getTextInputProps` already returns `value` instead of `defaultValue` in
+controlled mode, and `value`/`defaultValue` are mutually exclusive (only one is ever present),
+so the same spread works either way. The only difference is that controlled mode re-renders the
+whole component on every keystroke, which is why `useForm` defaults to `'uncontrolled'` instead.
+See [forms' Uncontrolled Mode doc](#forms/uncontrolled-mode) for the full trade-off.

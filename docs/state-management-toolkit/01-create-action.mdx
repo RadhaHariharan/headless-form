@@ -1,0 +1,120 @@
+# createAction
+
+**File:** `src/createAction.ts`
+
+Builds an action creator function for a given action `type` string, so you don't have to hand-write `{ type: 'todos/add', payload }` object literals everywhere.
+
+## Signature
+
+```typescript
+function createAction<P = void, T extends string = string>(
+  type: T,
+): PayloadActionCreator<P, T>
+
+function createAction<PA extends PrepareAction<any>, T extends string = string>(
+  type: T,
+  prepareAction: PA,
+): PayloadActionCreator<ReturnType<PA>['payload'], T, PA>
+```
+
+| Parameter | Type | Description |
+|-----------|------|--------------|
+| `type` | `T extends string` | The action's `type` string. Also becomes a static `.type` property on the returned function. |
+| `prepareAction` | `PrepareAction<P>` *(optional)* | A function that receives whatever arguments you call the action creator with, and must return `{ payload }` (optionally plus `meta`/`error`) — letting you transform/validate constructor arguments before they become the payload. |
+
+**Returns:** a callable function (the action creator) that also carries:
+- `.type` — the original type string.
+- `.toString()` — overridden to return the type string, so the action creator itself can be used directly as a key in a `switch` or in `createReducer`'s `builder.addCase(actionCreator, ...)`.
+- `.match(action)` — a type-guard function: `(action: unknown) => action is PayloadAction<P, T>`, true if `action.type` equals this creator's `type`.
+
+## Basic usage
+
+```typescript
+import { createAction } from '@headlesskit/state-management-toolkit';
+
+const increment = createAction<number>('counter/increment');
+
+increment(5); // { type: 'counter/increment', payload: 5 }
+increment.type; // 'counter/increment'
+String(increment); // 'counter/increment'
+
+increment.match({ type: 'counter/increment', payload: 5 }); // true
+increment.match({ type: 'counter/decrement', payload: 5 }); // false
+```
+
+No payload at all:
+
+```typescript
+const reset = createAction('counter/reset'); // P defaults to void
+reset(); // { type: 'counter/reset', payload: undefined }
+```
+
+## Advanced: `prepareAction` for derived/validated payloads
+
+Use the `prepareAction` form when constructing the payload needs logic beyond "take the first argument as-is" — e.g. generating an ID, attaching a timestamp, or accepting multiple constructor arguments:
+
+```typescript
+import { createAction, nanoid } from '@headlesskit/state-management-toolkit';
+
+const addTodo = createAction('todos/add', (text: string) => {
+  return {
+    payload: {
+      id: nanoid(),
+      text,
+      done: false,
+    },
+    meta: { addedAt: Date.now() },
+  };
+});
+
+const action = addTodo('Buy milk');
+// {
+//   type: 'todos/add',
+//   payload: { id: '...', text: 'Buy milk', done: false },
+//   meta: { addedAt: 1700000000000 }
+// }
+```
+
+`prepareAction` may also include an `error` field — both `meta` and `error` are only added to the final action object if present on the object `prepareAction` returns (`'meta' in prepared`/`'error' in prepared` checks, not just truthy checks), so e.g. `meta: undefined` still results in a `meta` key being present.
+
+## Advanced: using action creators directly as `createReducer`/`createSlice.extraReducers` keys
+
+Because the action creator overrides `toString()`, you rarely need its `.type` string explicitly — pass the creator itself:
+
+```typescript
+import { createAction, createReducer } from '@headlesskit/state-management-toolkit';
+
+const increment = createAction<number>('increment');
+const decrement = createAction<number>('decrement');
+
+const counterReducer = createReducer(0, (builder) => {
+  builder
+    .addCase(increment, (state, action) => state + action.payload)
+    .addCase(decrement, (state, action) => state - action.payload);
+});
+```
+
+Inside `addCase`, `action` is automatically narrowed to `PayloadAction<number>` — no manual type annotation needed, since `addCase` infers the action shape from the action creator's own generic.
+
+## `isActionCreator` / `isFSA`
+
+Two small runtime predicates, also exported:
+
+```typescript
+function isActionCreator(action: unknown): boolean; // has a static `.type` string + `.match` function
+function isFSA(action: unknown): boolean; // is a Flux Standard Action: only type/payload/error/meta keys
+```
+
+```typescript
+isActionCreator(increment); // true — has .type and .match
+isActionCreator(() => {});  // false
+
+isFSA({ type: 'x', payload: 1 });          // true
+isFSA({ type: 'x', payload: 1, extra: 2 }); // false — 'extra' isn't an FSA key
+```
+
+## Common pitfalls
+
+- **`createAction<P>('type')()` with no `prepareAction` always uses `args[0]` as the payload**, even if you call the action creator with multiple arguments — additional arguments are silently dropped. If you need more than one constructor argument, use the `prepareAction` form.
+- **`prepareAction` must return an object**, not `undefined`/falsy — `createAction` throws `'prepareAction did not return an object'` immediately if it does, which is a useful fail-fast safeguard against a `prepareAction` function with an early-return bug.
+- **`.match()` only checks `type`**, not payload shape — it's a type-narrowing convenience for TypeScript, not runtime payload validation.

@@ -14,12 +14,10 @@
     "name": "@headlesskit/forms-react (full)",
     "path": "packages/forms-react/dist/index.mjs",
     "limit": "5 KB",
-    "ignore": ["react", "react-dom", "@headlesskit/forms"]
-  },
-  {
-    "name": "@headlesskit/angular (full)",
-    "path": "packages/angular/dist/fesm2022/headlesskit-angular.mjs",
-    "limit": "10 KB",
-    "ignore": ["@angular/core", "@angular/common", "@headlesskit/forms"]
+    "ignore": [
+      "react",
+      "react-dom",
+      "@headlesskit/forms"
+    ]
   }
 ]

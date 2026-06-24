@@ -1,0 +1,33 @@
+# immerImports
+
+**File:** `src/immerImports.ts` · Internal, not exported from the package root.
+
+```typescript
+export {
+  current,
+  isDraft,
+  produce as createNextState,
+  isDraftable,
+  setUseStrictIteration,
+} from 'immer'
+```
+
+A re-export barrel isolating the toolkit's dependency on [Immer](https://immerjs.github.io/immer/), the library powering "mutate a draft, get back an immutable update" behavior in [createReducer](../02-create-reducer), [createSlice](../05-create-slice), and [createDraftSafeSelector](../03-create-draft-safe-selector).
+
+## What each re-export is used for elsewhere in the package
+
+| Re-export | Renamed to | Used by |
+|-----------|------------|---------|
+| `produce` | `createNextState` | The core mechanism: wraps a case reducer's body, turning draft mutations into a new immutable state value. |
+| `current` | (unchanged) | [createDraftSafeSelector](../03-create-draft-safe-selector) — gets a plain snapshot out of an active draft. |
+| `isDraft` | (unchanged) | Used throughout to detect "is this value currently an active Immer draft" — e.g. `createReducer`'s reducer body branches on whether `state` is already a draft (nested inside another `produce` call) before deciding whether to wrap it again. |
+| `isDraftable` | (unchanged) | Used to skip Immer's wrapping machinery entirely for primitives/non-plain values that can't be drafted (Immer can only draft plain objects, arrays, `Map`s, and `Set`s). |
+| `setUseStrictIteration` | (unchanged) | An Immer internal performance/strictness toggle — not actively called anywhere in this package's own source at the time of writing, re-exported for completeness/forward-compatibility. |
+
+## Basic usage (you won't import this directly)
+
+Application code never needs to import from this file — it exists purely to centralize the `immer` dependency the same way [reduxImports](./02-redux-imports) centralizes the `state-management` dependency. If you need Immer's `produce`/`current`/`isDraft` directly in your own code, install and import from `immer` itself.
+
+## Common pitfalls
+
+- **None specific to application code** — purely an internal re-export with no behavior of its own.

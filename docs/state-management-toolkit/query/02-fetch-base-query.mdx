@@ -1,0 +1,97 @@
+# fetchBaseQuery
+
+**File:** `src/query/fetchBaseQuery.ts`
+
+The standard `baseQuery` implementation for [createApi](./01-create-api) — a thin, typed wrapper around the native `fetch` API covering the overwhelming majority of REST API needs (JSON bodies, query params, headers, timeouts) without requiring a separate HTTP client dependency.
+
+## Signature
+
+```typescript
+function fetchBaseQuery(args?: FetchBaseQueryArgs): BaseQueryFn<string | FetchArgs, unknown, FetchBaseQueryError, {}, FetchBaseQueryMeta>
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|--------------|
+| `baseUrl` | `string` | `''` | Prepended to every endpoint's `url` (via [joinUrls](./05-utils#join-urls), which correctly handles trailing/leading slashes). |
+| `prepareHeaders` | `(headers, api) => Headers \| void` | identity | Mutate/return the `Headers` object before the request fires — the standard place to inject an `Authorization` header read from store state. `api` here is a subset of `BaseQueryApi` (`getState`, `extra`, `endpoint`, `type`, `forced`) plus the original `arg`/`extraOptions` — notably **no `dispatch`**, since headers must be computed synchronously-ish before the request, not as a side-effecting action. |
+| `fetchFn` | `typeof fetch` | global `fetch` | Substitute a different fetch implementation — needed in SSR environments without a native global `fetch`, or to inject a fetch-compatible mock in tests. |
+| `paramsSerializer` | `(params) => string` | a default that builds a `URLSearchParams`-style query string | Customize how the `params` object on a query arg becomes a query string (e.g. for APIs expecting array params as `a=1&a=2` vs `a[]=1&a[]=2`). |
+| `isJsonContentType` | `(headers) => boolean` | matches `application/json` or `application/vnd.api+json` | Recognize additional content-types as JSON for automatic response parsing. |
+| `jsonContentType` | `string` | `'application/json'` | The `Content-Type` header value set automatically when your request `body` is JSON-serializable and you didn't set one yourself. |
+| `jsonReplacer` | `JSON.stringify`'s replacer parameter | none | Custom serialization logic (e.g. redacting fields, handling `BigInt`). |
+| `timeout` | `number` (ms) | none (no timeout) | Aborts the request and resolves to a `'TIMEOUT_ERROR'` if it takes longer than this. |
+
+## `FetchArgs` — the per-endpoint `query()` return shape
+
+When an endpoint's `query` function returns an object (rather than a plain URL string), these fields are available, in addition to everything a normal `fetch` `RequestInit` accepts (`method`, `body`, `credentials`, etc):
+
+| Field | Type | Description |
+|-------|------|--------------|
+| `url` | `string` | Required. Joined with `baseUrl`. |
+| `params` | `Record<string, any>` | Serialized into the URL's query string via `paramsSerializer`. |
+| `body` | `any` | Automatically `JSON.stringify`'d (and the content-type header set) if it's a plain object/array/has `.toJSON()` — left untouched for `FormData`, `Blob`, `ArrayBuffer`, etc. |
+| `responseHandler` | `'json' \| 'text' \| 'content-type' \| (response) => Promise<any>` | How to parse the response body — `'content-type'` (the default) picks JSON vs. text automatically based on the response's `Content-Type` header. |
+| `validateStatus` | `(response, body) => boolean` | Override the default "200-299 is success" check — e.g. to also accept a `304 Not Modified` as success for your use case. |
+| `timeout` | `number` | Per-request override of the base `timeout` option. |
+
+## `FetchBaseQueryError` — the five error shapes
+
+| `status` | When | Other fields |
+|----------|------|---------------|
+| `number` | A real HTTP response came back outside the "successful" status range (per `validateStatus`) | `data` — the parsed response body |
+| `'FETCH_ERROR'` | `fetch` itself threw (network failure, CORS, DNS, etc) — no HTTP response was ever received | `error` — the underlying error's message |
+| `'PARSING_ERROR'` | A response came back successfully (correct status) but the body couldn't be parsed as expected (e.g. non-JSON body with the default JSON response handler) | `originalStatus`, `data` (the raw unparsed text), `error` |
+| `'TIMEOUT_ERROR'` | The configured `timeout` elapsed before a response arrived | `error` |
+| `'CUSTOM_ERROR'` | Returned manually from your own `queryFn`/`transformErrorResponse`, for cases that don't fit the above | `data`, `error` |
+
+## Basic usage
+
+```typescript
+import { fetchBaseQuery } from '@headlesskit/state-management-toolkit/query';
+
+const baseQuery = fetchBaseQuery({
+  baseUrl: 'https://api.example.com/v1/',
+  prepareHeaders: (headers, { getState }) => {
+    const token = (getState() as RootState).auth.token;
+    if (token) headers.set('authorization', `Bearer ${token}`);
+    return headers;
+  },
+});
+```
+
+## Advanced: per-request timeout and a custom params serializer
+
+```typescript
+const baseQuery = fetchBaseQuery({
+  baseUrl: '/api',
+  timeout: 10_000,
+  paramsSerializer: (params) =>
+    new URLSearchParams(
+      Object.entries(params).flatMap(([key, value]) =>
+        Array.isArray(value) ? value.map((v) => [`${key}[]`, String(v)]) : [[key, String(value)]],
+      ),
+    ).toString(),
+});
+
+// in an endpoint:
+getPosts: builder.query<Post[], { tags: string[] }>({
+  query: ({ tags }) => ({ url: 'posts', params: { tags } }), // → ?tags[]=a&tags[]=b
+}),
+```
+
+## Advanced: SSR with a custom fetch implementation
+
+```typescript
+import crossFetch from 'cross-fetch';
+
+const baseQuery = fetchBaseQuery({
+  baseUrl: '/api',
+  fetchFn: crossFetch, // works identically server-side and client-side
+});
+```
+
+## Common pitfalls
+
+- **A non-2xx response is *not* a thrown error** — `fetchBaseQuery` resolves successfully (in the `BaseQueryFn` sense) with `{ error: { status: 404, data: ... } }`; your endpoint's `transformErrorResponse`, or the calling component checking `isError`/`error`, is where you handle it — wrapping a query dispatch in try/catch expecting a real JS exception won't see HTTP error responses this way.
+- **`prepareHeaders` cannot `dispatch`** — if you need to refresh an expired token before attaching it, that has to happen via a more advanced pattern (a custom `baseQuery` wrapper that retries after re-authenticating), not inside `prepareHeaders` itself, since it intentionally has no access to `dispatch`.
+- **A JSON-looking response without the expected `Content-Type` header parses as text, not JSON**, under the default `'content-type'` response handler — if your API serves JSON without setting `Content-Type: application/json` correctly, either fix the server response or set `responseHandler: 'json'` explicitly on the affected endpoint(s).

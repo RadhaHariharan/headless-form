@@ -1,0 +1,55 @@
+# mapBuilders
+
+**File:** `src/mapBuilders.ts` · Internal implementation detail — the `ActionReducerMapBuilder` *type* is exported (for typing your own builder-callback functions), but `executeReducerBuilderCallback` itself is not exported from the package root.
+
+Implements the actual `builder` object passed into [createReducer](../02-create-reducer)'s and [createSlice](../05-create-slice)'s `extraReducers` callback — `addCase`, `addAsyncThunk`, `addMatcher`, `addDefaultCase` — including the **call-ordering enforcement** between them.
+
+## `builder.addAsyncThunk(asyncThunk, reducers)`
+
+This method isn't covered in the [createReducer](../02-create-reducer) doc — it's a convenience shortcut for registering all three (or four) of an async thunk's lifecycle actions in one call, instead of three separate `addCase` calls:
+
+```typescript
+import { createReducer } from '@headlesskit/state-management-toolkit';
+import { fetchUserById } from './thunks';
+
+const reducer = createReducer(initialState, (builder) => {
+  builder.addAsyncThunk(fetchUserById, {
+    pending: (state) => { state.loading = 'pending'; },
+    fulfilled: (state, action) => { state.data = action.payload; },
+    rejected: (state, action) => { state.error = action.error; },
+    settled: (state, action) => { state.loading = action.meta.requestStatus; },
+  });
+});
+```
+
+`pending`/`fulfilled`/`rejected` are registered as exact-type `addCase` handlers internally; `settled` is registered as an `addMatcher` (matching `asyncThunk.settled`, which is true for either fulfilled or rejected) since it doesn't correspond to one single action type.
+
+## The enforced call order
+
+This is the most important behavioral detail of the builder, and it's actively enforced (throws in development if violated), not just a style suggestion:
+
+```
+addCase / addAsyncThunk  →  addMatcher  →  addDefaultCase
+```
+
+| Violation | Error |
+|-----------|-------|
+| Calling `addCase` after any `addMatcher` | `` `builder.addCase` should only be called before calling `builder.addMatcher` `` |
+| Calling `addCase` after `addDefaultCase` | `` `builder.addCase` should only be called before calling `builder.addDefaultCase` `` |
+| Calling `addAsyncThunk` after `addDefaultCase` | `` `builder.addAsyncThunk` should only be called before calling `builder.addDefaultCase` `` |
+| Calling `addMatcher` after `addDefaultCase` | `` `builder.addMatcher` should only be called before calling `builder.addDefaultCase` `` |
+| Calling `addDefaultCase` twice | `` `builder.addDefaultCase` can only be called once `` |
+| Two `addCase`/`addAsyncThunk` calls registering the same action type | `` `builder.addCase` cannot be called with two reducers for the same action type '...' `` |
+
+This ordering exists because it matches the actual *runtime precedence* — exact-type case reducers always take priority over matcher-based ones, and the default case only ever runs if nothing else matched — so the builder forces your code's visual order to match its real behavior, preventing a reducer definition that's misleading to read.
+
+The TypeScript types reinforce this too: each builder method's return type **omits** the methods that should no longer be called (`addCase` returns a builder without `addAsyncThunk`... no — actually `addAsyncThunk`'s return omits `addCase`; `addMatcher`'s return omits both `addCase` and `addAsyncThunk`; `addDefaultCase` returns `{}`, omitting everything) — so misordering is often a compile-time error in TypeScript, in addition to the runtime check that also guards plain-JavaScript callers.
+
+## `executeReducerBuilderCallback(builderCallback)`
+
+The internal driver: constructs the `builder` object described above, invokes your callback with it (collecting everything you registered into closures), then returns `[actionsMap, actionMatchers, defaultCaseReducer]` — the three pieces [createReducer](../02-create-reducer) needs to build its actual dispatch logic.
+
+## Common pitfalls
+
+- **`addCase`'s action-type uniqueness check is per `createReducer`/`createSlice` call, not global** — two different slices can both register a case reducer for the same action type without conflict (that's the entire point of `extraReducers`), but the *same* builder callback registering one type twice always throws.
+- **`addMatcher`/`settled` ordering relative to other matchers still matters for execution, even though the builder doesn't enforce relative order *among* matchers** — multiple matchers registered via separate `addMatcher` calls all run, in registration order, for any action that satisfies more than one of them; see [createReducer](../02-create-reducer)'s pitfalls section.

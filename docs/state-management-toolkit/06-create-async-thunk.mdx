@@ -1,0 +1,163 @@
+# createAsyncThunk
+
+**File:** `src/createAsyncThunk.ts` (791 lines)
+
+Wraps an async function (typically an API call) into a single action creator that automatically dispatches three lifecycle actions — `pending`, then either `fulfilled` or `rejected` — around the async work, so reducers can track loading/success/error state without you hand-writing those three actions yourself every time.
+
+## Signature
+
+```typescript
+function createAsyncThunk<Returned, ThunkArg = void, ThunkApiConfig extends AsyncThunkConfig = {}>(
+  typePrefix: string,
+  payloadCreator: AsyncThunkPayloadCreator<Returned, ThunkArg, ThunkApiConfig>,
+  options?: AsyncThunkOptions<ThunkArg, ThunkApiConfig>,
+): AsyncThunk<Returned, ThunkArg, ThunkApiConfig>
+```
+
+| Parameter | Type | Description |
+|-----------|------|--------------|
+| `typePrefix` | `string` | Base for the three generated action types: `` `${typePrefix}/pending` ``, `` `${typePrefix}/fulfilled` ``, `` `${typePrefix}/rejected` ``. |
+| `payloadCreator` | `(arg, thunkAPI) => Returned \| Promise<Returned>` | Your actual async logic. Whatever it resolves to becomes the `fulfilled` action's payload. |
+| `options.condition` | `(arg, { getState, extra }) => boolean \| Promise<boolean>` | Return `false` to **skip** running the thunk entirely (e.g. skip a fetch if data is already cached) — no `pending`/`fulfilled`/`rejected` action dispatched by default. |
+| `options.dispatchConditionRejection` | `boolean` (default `false`) | If `true`, dispatches a `rejected` action (with `meta.condition === false`) even when skipped by `condition`, instead of dispatching nothing. |
+| `options.idGenerator` | `(arg) => string` (default: `nanoid`) | Customize how `requestId` is generated — useful for deterministic IDs in tests. |
+| `options.getPendingMeta` | `(base, api) => meta` | Add custom fields to the `pending` action's `meta`. |
+| `options.serializeError` | `(error) => SerializedError` | Override how a thrown (non-`rejectWithValue`) error is serialized onto the `rejected` action's `error` field. |
+
+## The `thunkAPI` object (`payloadCreator`'s second argument)
+
+| Field | Type | Description |
+|-------|------|--------------|
+| `dispatch` | `Dispatch` | The store's dispatch function — for dispatching other actions/thunks from within this one. |
+| `getState` | `() => State` | Reads current store state. |
+| `extra` | your "extra argument" | Whatever was configured as the thunk middleware's extra argument (e.g. an API client instance) — see [getDefaultMiddleware](./09-get-default-middleware). |
+| `requestId` | `string` | Unique ID for this specific dispatch — generated fresh on every call, shared by all three lifecycle actions for that call (so you can correlate them). |
+| `signal` | `AbortSignal` | Wired to the thunk's `.abort()` method — check `signal.aborted` (or pass `signal` straight into `fetch`) to support cancellation. |
+| `abort(reason?)` | `(reason?: string) => void` | Programmatically aborts from inside the payload creator itself. |
+| `rejectWithValue(value, meta?)` | function | Returns a *typed* rejection with a specific payload value, instead of throwing — see below. |
+| `fulfillWithValue(value, meta?)` | function | Resolves successfully but attaches extra `meta` to the `fulfilled` action — rarely needed, but useful for e.g. attaching response headers alongside the payload. |
+
+## Basic usage
+
+```typescript
+import { createAsyncThunk } from '@headlesskit/state-management-toolkit';
+
+interface User { id: string; name: string }
+
+export const fetchUser = createAsyncThunk(
+  'users/fetchById',
+  async (userId: string) => {
+    const response = await fetch(`/api/users/${userId}`);
+    return (await response.json()) as User;
+  },
+);
+
+// dispatching it returns a Promise resolving to the fulfilled/rejected ACTION:
+const resultAction = await store.dispatch(fetchUser('user-1'));
+if (fetchUser.fulfilled.match(resultAction)) {
+  console.log(resultAction.payload); // typed as User
+}
+```
+
+Reacting to its lifecycle in a slice via `extraReducers` (see [createSlice](./05-create-slice)):
+
+```typescript
+const usersSlice = createSlice({
+  name: 'users',
+  initialState: { entity: null as User | null, status: 'idle', error: null as string | null },
+  reducers: {},
+  extraReducers: (builder) => {
+    builder
+      .addCase(fetchUser.pending, (state) => {
+        state.status = 'loading';
+      })
+      .addCase(fetchUser.fulfilled, (state, action) => {
+        state.status = 'succeeded';
+        state.entity = action.payload;
+      })
+      .addCase(fetchUser.rejected, (state, action) => {
+        state.status = 'failed';
+        state.error = action.error.message ?? 'Unknown error';
+      });
+  },
+});
+```
+
+## Advanced: typed error handling with `rejectWithValue`
+
+By default, a thrown error becomes a generically-typed `SerializedError` on `action.error` — fine for unexpected failures, but too loose for handling specific, expected error shapes (like API validation errors). Use `rejectWithValue` to attach a precisely-typed payload instead:
+
+```typescript
+interface ApiError { code: string; message: string }
+
+export const login = createAsyncThunk<
+  { token: string },
+  { email: string; password: string },
+  { rejectValue: ApiError }
+>('auth/login', async (credentials, { rejectWithValue }) => {
+  const res = await fetch('/api/login', { method: 'POST', body: JSON.stringify(credentials) });
+  if (!res.ok) {
+    const error: ApiError = await res.json();
+    return rejectWithValue(error); // becomes action.payload, NOT action.error
+  }
+  return res.json();
+});
+
+// in a component/reducer:
+const result = await dispatch(login({ email, password }));
+if (login.rejected.match(result)) {
+  if (result.payload) {
+    // result.payload is typed as ApiError — a real validation failure
+    console.log(result.payload.code);
+  } else {
+    // result.error — an unexpected failure (network error, etc), no rejectWithValue used
+    console.log(result.error.message);
+  }
+}
+```
+
+`isRejectedWithValue` from [matchers](./07-matchers) distinguishes the two cases at the matcher level too, useful inside `addMatcher`.
+
+## Advanced: cancellation with `condition` and `AbortSignal`
+
+```typescript
+export const fetchTodosIfNeeded = createAsyncThunk(
+  'todos/fetchIfNeeded',
+  async (_arg, { signal }) => {
+    const res = await fetch('/api/todos', { signal }); // aborts the fetch itself if .abort() is called
+    return res.json();
+  },
+  {
+    condition: (_arg, { getState }) => {
+      const { todos } = getState() as RootState;
+      if (todos.status === 'loading') return false; // already in flight — skip
+      return true;
+    },
+  },
+);
+
+const promise = dispatch(fetchTodosIfNeeded());
+// later, e.g. on component unmount:
+promise.abort('component unmounted');
+```
+
+## `.unwrap()` — promise-based error handling without matchers
+
+The dispatched thunk's returned promise also has an `.unwrap()` method, for call sites that prefer try/catch over checking `.fulfilled.match()`:
+
+```typescript
+try {
+  const user = await dispatch(fetchUser('user-1')).unwrap();
+  console.log(user.name); // user is the resolved User directly, not wrapped in an action
+} catch (err) {
+  // err is either the rejectWithValue payload or the serialized error
+  console.error(err);
+}
+```
+
+## Common pitfalls
+
+- **Returning a value from `payloadCreator` without `await`ing an async call inside a `try`/`catch` lets unexpected errors propagate as the generic `rejected` action** — if you want a *typed* rejection payload, you must explicitly call and `return rejectWithValue(...)`; simply throwing a custom error object does not give you the same typed `action.payload` on the rejected branch, only `action.error` (always `SerializedError`-shaped, loosely typed).
+- **`condition` returning `false` silently dispatches nothing by default** — if you need observability into skipped requests (e.g. for debugging or analytics), set `dispatchConditionRejection: true` and check `action.meta.condition === false` in your reducer/middleware.
+- **`abort()` doesn't automatically cancel the underlying `fetch`/promise** unless you actually wire `signal` into it yourself (as shown above) — calling `.abort()` only flips `thunkAPI.signal.aborted` and causes the dispatched promise to resolve to a `rejected` action with `meta.aborted: true`; it does not reach into arbitrary async code and stop it.
+- **`requestId` is regenerated on every dispatch call**, even with the same `arg` — don't assume calling the same thunk twice in a row produces the same `requestId`; use it only to correlate the `pending`/`fulfilled`/`rejected` triplet from one specific call.

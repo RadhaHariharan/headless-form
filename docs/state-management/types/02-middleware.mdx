@@ -1,0 +1,98 @@
+# Middleware types
+
+**File:** `src/types/middleware.ts`
+
+```typescript
+import type { MiddlewareAPI, Middleware } from '@headlesskit/state-management';
+```
+
+See [applyMiddleware](../04-apply-middleware) for the runtime behavior these types describe.
+
+## `MiddlewareAPI<D, S>`
+
+```typescript
+interface MiddlewareAPI<D extends Dispatch = Dispatch, S = any> {
+  dispatch: D;
+  getState(): S;
+}
+```
+
+The object every middleware function receives as its first argument — a cut-down view of the store exposing only `dispatch` and `getState` (not `subscribe` or `replaceReducer`, since middleware has no legitimate reason to add/remove listeners or swap reducers).
+
+| Generic | Default | Meaning |
+|---------|---------|---------|
+| `D` | `Dispatch` | The exact dispatch signature available inside this middleware — lets middleware that itself adds dispatch capabilities (like thunks) advertise that to middleware below it in the chain. |
+| `S` | `any` | The state shape returned by `getState()`. |
+
+```typescript
+const myMiddleware: Middleware = (api: MiddlewareAPI) => (next) => (action) => {
+  const stateBefore = api.getState();
+  const result = next(action);
+  const stateAfter = api.getState();
+  console.log({ stateBefore, stateAfter });
+  return result;
+};
+```
+
+## `Middleware<_DispatchExt, S, D>`
+
+```typescript
+interface Middleware<
+  _DispatchExt = {},
+  S = any,
+  D extends Dispatch = Dispatch,
+> {
+  (api: MiddlewareAPI<D, S>): (
+    next: D,
+  ) => (action: D extends Dispatch<infer A> ? A : never) => any;
+}
+```
+
+The full triple-arrow shape (`store => next => action => result`) typed generically.
+
+| Generic | Default | Meaning |
+|---------|---------|---------|
+| `_DispatchExt` | `{}` | **Not used to constrain the middleware's own behavior** — it exists purely as a declaration surface. When middleware (like a thunk middleware) needs to tell TypeScript "after I'm applied, `store.dispatch` also accepts thunk functions, not just plain actions," it expresses that extension here. `applyMiddleware`'s own type signature unions every middleware's `_DispatchExt` together to compute the *enhanced* store's final `dispatch` type. |
+| `S` | `any` | State shape this middleware expects to read via `getState()`. |
+| `D` | `Dispatch` | Dispatch shape this middleware expects to call via `next`/`dispatch`. |
+
+```typescript
+// A middleware that documents (via _DispatchExt) that it lets you dispatch plain numbers too,
+// in addition to normal actions:
+type ExtraDispatchable = (n: number) => number;
+
+const numberMiddleware: Middleware<ExtraDispatchable> =
+  (api) => (next) => (action) => {
+    if (typeof action === 'number') {
+      console.log('got a raw number action:', action);
+      return action;
+    }
+    return next(action);
+  };
+```
+
+## Advanced: typing a logger middleware end-to-end
+
+```typescript
+import type { Middleware } from '@headlesskit/state-management';
+
+interface AppState {
+  count: number;
+}
+
+const logger: Middleware<{}, AppState> = (store) => (next) => (action) => {
+  console.group(action.type ?? 'unknown action');
+  console.log('prev state', store.getState());
+  console.log('action', action);
+  const result = next(action);
+  console.log('next state', store.getState());
+  console.groupEnd();
+  return result;
+};
+```
+
+Because `S` is pinned to `AppState`, `store.getState()` inside this middleware is fully typed — no casts needed.
+
+## Common pitfalls
+
+- **Don't widen `D` to `Dispatch<any>` just to silence an error** — if TypeScript is complaining about the action shape `next`/`dispatch` accepts, it's almost always telling you the middleware genuinely doesn't know what action shape the rest of the chain expects yet; fix that by either constraining the middleware's own action handling or accepting the default unconstrained `Dispatch`.

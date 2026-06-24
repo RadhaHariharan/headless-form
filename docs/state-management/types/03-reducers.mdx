@@ -1,0 +1,131 @@
+# Reducer types
+
+**File:** `src/types/reducers.ts`
+
+```typescript
+import type {
+  Reducer,
+  ReducersMapObject,
+  StateFromReducersMapObject,
+  ReducerFromReducersMapObject,
+  ActionFromReducer,
+  ActionFromReducersMapObject,
+  PreloadedStateShapeFromReducersMapObject,
+} from '@headlesskit/state-management';
+```
+
+## `Reducer<S, A, PreloadedState>`
+
+```typescript
+type Reducer<S = any, A extends Action = UnknownAction, PreloadedState = S> = (
+  state: S | PreloadedState | undefined,
+  action: A,
+) => S;
+```
+
+The function signature every reducer must satisfy — what you pass to [createStore](../02-create-store) directly, or as one value in the map passed to [combineReducers](../03-combine-reducers).
+
+| Generic | Default | Meaning |
+|---------|---------|---------|
+| `S` | `any` | The state shape this reducer returns. |
+| `A` | `UnknownAction` | The action type(s) this reducer accepts. Narrow it to your own action union for full type safety in `switch` statements. |
+| `PreloadedState` | `S` | Lets `state` legitimately be a *different but compatible* shape on the very first call (when seeded from `createStore`'s `preloadedState` argument) than what the reducer returns afterward — useful for SSR hydration where the server's serialized state might omit fields the reducer will compute and fill in on the client. |
+
+```typescript
+interface CounterState {
+  value: number;
+}
+
+type CounterAction = { type: 'increment' } | { type: 'decrement' };
+
+const counterReducer: Reducer<CounterState, CounterAction> = (
+  state = { value: 0 },
+  action,
+) => {
+  switch (action.type) {
+    case 'increment':
+      return { value: state.value + 1 };
+    case 'decrement':
+      return { value: state.value - 1 };
+    default:
+      return state;
+  }
+};
+```
+
+## `ReducersMapObject<S, A, PreloadedState>`
+
+```typescript
+type ReducersMapObject<S = any, A extends Action = UnknownAction, PreloadedState = S> = {
+  [K in keyof S]: Reducer<S[K], A, PreloadedState extends { [K2 in keyof S]: any } ? PreloadedState[K] : never>;
+};
+```
+
+The shape `combineReducers` accepts: an object whose every value is a `Reducer` for the correspondingly-named state slice. This is what lets `combineReducers({ users, todos })` infer the combined state shape `{ users: UsersState; todos: TodosState }` automatically, just from the object you pass.
+
+```typescript
+const rootReducersMap: ReducersMapObject<{ counter: CounterState; user: UserState }> = {
+  counter: counterReducer,
+  user: userReducer,
+};
+```
+
+## The four inference helpers
+
+These four types are the machinery `combineReducers`'s overloaded signature uses internally to compute its return type from whatever map object you actually pass in — you will rarely write them out yourself, but they're useful to understand if you're writing your own generic helper functions around `combineReducers`.
+
+### `StateFromReducersMapObject<M>`
+
+```typescript
+type StateFromReducersMapObject<M> = M extends { [K: string]: infer R }
+  ? R extends Reducer<any, any, any>
+    ? StateFromReducersMapObject<...>
+    : never
+  : never;
+```
+
+Given a reducers map object type `M`, computes the combined state shape — i.e. the same inference `combineReducers(map)`'s return type relies on. Conceptually: `{ [K in keyof M]: ReturnType<M[K]> }`.
+
+### `ReducerFromReducersMapObject<M>`
+
+Given a reducers map object type, extracts the *union of all its values'* `Reducer` types — used internally to compute a single combined action type that satisfies every slice reducer at once.
+
+### `ActionFromReducer<R>`
+
+Given a single `Reducer` type, extracts the action type it accepts (the `A` generic parameter).
+
+### `ActionFromReducersMapObject<M>`
+
+Composes the previous two: given a reducers map object, extracts the union of every slice reducer's accepted action type — this is what makes the *combined* reducer returned by `combineReducers` correctly type its `action` parameter as the union of all slices' action types, not just `UnknownAction`.
+
+```typescript
+// if counterReducer accepts CounterAction and userReducer accepts UserAction,
+// ActionFromReducersMapObject<{ counter: typeof counterReducer; user: typeof userReducer }>
+// resolves to: CounterAction | UserAction
+```
+
+### `PreloadedStateShapeFromReducersMapObject<M>`
+
+Given a reducers map object, computes the shape `createStore`'s `preloadedState` argument should accept for the *combined* root reducer — using each slice reducer's own `PreloadedState` generic (not just its regular `S`), so partially-shaped SSR hydration data type-checks correctly per-slice.
+
+## Advanced: a generic helper that's fully typed off a reducers map
+
+```typescript
+import type { ReducersMapObject, StateFromReducersMapObject, ActionFromReducersMapObject } from '@headlesskit/state-management';
+import { combineReducers, createStore } from '@headlesskit/state-management';
+
+function createAppStore<M extends ReducersMapObject>(reducersMap: M) {
+  const rootReducer = combineReducers(reducersMap);
+  // store's state and dispatched-action types are both inferred correctly,
+  // purely from the shape of `reducersMap` — no manual annotation needed.
+  return createStore(rootReducer);
+}
+
+const store = createAppStore({ counter: counterReducer, user: userReducer });
+store.getState(); // { counter: CounterState; user: UserState }
+```
+
+## Common pitfalls
+
+- **A reducer returning `undefined` for any action breaks `combineReducers`'s state inference** at the type level too, not just at runtime — see the [warning](../utils/07-warning) and [combineReducers](../03-combine-reducers) docs for the runtime checks this triggers.
+- **Don't manually annotate `Reducer<any>`** when you have a concrete state type — losing the `S` generic loses all type-checking inside the reducer body, including catching typos in returned field names.

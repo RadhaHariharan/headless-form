@@ -1,0 +1,52 @@
+# fakeBaseQuery
+
+**File:** `src/query/fakeBaseQuery.ts`
+
+A `baseQuery` placeholder for APIs where **every** endpoint uses `queryFn` (full manual control — see [endpoint definitions](./05-endpoint-definitions)) and none of them delegate to an actual shared `baseQuery`. [createApi](./01-create-api) requires a `baseQuery` option even in this case (it's used as the fallback/type-source for endpoints that *don't* override with `queryFn`); `fakeBaseQuery` exists to satisfy that requirement without actually being callable.
+
+## Signature
+
+```typescript
+function fakeBaseQuery<ErrorType>(): BaseQueryFn<void, never, ErrorType, {}>
+```
+
+**Returns:** a `baseQuery` function that, if it's ever actually invoked (meaning some endpoint forgot to specify its own `queryFn` and fell through to this fallback), throws immediately:
+
+```
+When using `fakeBaseQuery`, all queries & mutations must use the `queryFn` definition syntax.
+```
+
+The generic `ErrorType` lets you pin one shared error type across every `queryFn` endpoint in the API, instead of each one independently typing its own errors.
+
+## Basic usage
+
+```typescript
+import { createApi, fakeBaseQuery } from '@headlesskit/state-management-toolkit/query';
+
+interface MyError {
+  code: string;
+  message: string;
+}
+
+const api = createApi({
+  baseQuery: fakeBaseQuery<MyError>(),
+  endpoints: (builder) => ({
+    getLocalSetting: builder.query<string, string>({
+      async queryFn(key) {
+        const value = localStorage.getItem(key);
+        if (value === null) {
+          return { error: { code: 'NOT_FOUND', message: `No setting for "${key}"` } };
+        }
+        return { data: value };
+      },
+    }),
+  }),
+});
+```
+
+Every endpoint here reads from `localStorage`, not HTTP — there's no real "base query" to share, but `createApi` still needs *something* in that slot, and that something needs to agree on `MyError` as the shared error shape.
+
+## Common pitfalls
+
+- **If you actually need `fakeBaseQuery`'s throw to fire, it means a `queryFn` is missing on some endpoint** — this is a genuine configuration bug (an endpoint that should have specified `queryFn` but accidentally inherited the api-level `query`-based fallback instead), not expected runtime behavior; treat it as a bug report, not a normal error path to handle gracefully.
+- **`fakeBaseQuery`'s result type is `never`** for the success case (`BaseQueryFn<void, never, ErrorType, {}>`) — reinforcing that it's never meant to actually resolve successfully; every endpoint built against it must supply its own `queryFn` with its own real `ResultType`.

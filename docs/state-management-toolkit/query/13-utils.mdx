@@ -1,0 +1,64 @@
+# query/utils/ — small internal helpers
+
+**Files:** `src/query/utils/joinUrls.ts`, `isAbsoluteUrl.ts`, `isValidUrl.ts`, `isOnline.ts`, `isDocumentVisible.ts`, `signals.ts`, `copyWithStructuralSharing.ts`, `filterMap.ts`, `getOrInsert.ts`, `countObjectKeys.ts`, `isNotNullish.ts`, `capitalize.ts`, `getCurrent.ts`, `immerImports.ts`, `index.ts` — all internal, none exported from the package root.
+
+A collection of single-purpose helpers backing [fetchBaseQuery](./02-fetch-base-query), [setupListeners](./04-setup-listeners), and the [core internals](./12-core-internals).
+
+## `joinUrls(base, url)`
+
+Joins a `baseUrl` and a per-request `url`, correctly handling trailing/leading slashes (never producing `//` or a missing `/`), and **returning `url` unchanged if it's already absolute** (so an endpoint can override `baseUrl` entirely by returning a full `https://...` URL when needed). Used by [fetchBaseQuery](./02-fetch-base-query).
+
+```typescript
+joinUrls('https://api.com/', '/posts');   // 'https://api.com/posts'
+joinUrls('https://api.com', 'posts');     // 'https://api.com/posts'
+joinUrls('https://api.com', 'https://other.com/x'); // 'https://other.com/x' — absolute url wins
+```
+
+## `isAbsoluteUrl(url)` / `isValidUrl(url)`
+
+`isAbsoluteUrl` checks for a `scheme://` or protocol-relative `//` prefix via regex — the check `joinUrls` uses to decide whether to bypass `baseUrl` entirely. `isValidUrl` is a stricter check (attempts `new URL(url)` and catches the exception) used in a narrower internal context where a genuinely parseable URL is required, not just "looks absolute."
+
+## `isOnline()` / `isDocumentVisible()`
+
+```typescript
+function isOnline(): boolean  // navigator.onLine, defaulting to true if unavailable (SSR/non-browser)
+function isDocumentVisible(): boolean // document.visibilityState === 'visible', defaulting to true if unavailable
+```
+
+Used by the [core internals](./12-core-internals)' middleware to decide the *current* connectivity/focus state at the moment a query is dispatched (e.g. should `refetchOnReconnect` actually fire right now) — distinct from [setupListeners](./04-setup-listeners), which reacts to *changes* in these values over time; these two functions answer "what's the state right now," a one-time synchronous check.
+
+## `signals.ts` — `timeoutSignal(ms)` / `anySignal(...signals)`
+
+Polyfill-style implementations of `AbortSignal.timeout()` and `AbortSignal.any()` (both relatively recent web platform APIs) — written by hand rather than depended on directly, for compatibility with runtimes (older Node, React Native) that may not yet implement them natively. `anySignal` combines multiple abort signals into one that fires when **any** of its inputs fire — used internally to combine, e.g., a request's own timeout signal with the user-facing cancellation signal into a single signal `fetch` can be given.
+
+## `copyWithStructuralSharing(oldValue, newValue)`
+
+Implements [createApi](./01-create-api)'s `structuralSharing` option (on by default) — recursively compares `oldValue` and `newValue`; for every nested plain-object/array branch that's deeply equal between the two, **returns the old reference** instead of the new one. Only genuinely-changed branches get new object identities.
+
+```typescript
+copyWithStructuralSharing({ a: 1, b: { c: 2 } }, { a: 1, b: { c: 2 } });
+// returns the OLD object's reference entirely — deeply equal, nothing changed
+
+copyWithStructuralSharing({ a: 1, b: { c: 2 } }, { a: 1, b: { c: 3 } });
+// returns a NEW top-level object, but if there were other unchanged sibling branches, those keep their old references
+```
+
+This is why a `useSelector`/component relying on reference equality for an unrelated, unchanged slice of a query result doesn't unnecessarily re-render just because a *different* field in the same response changed.
+
+## `filterMap(map, predicate)` / `getOrInsert(map, key, factory)`
+
+Small `Map`-oriented helpers — `filterMap` builds a new `Map` containing only entries matching a predicate (used by `getRunningQueries`/`getRunningMutations` in [api.util](./11-api-util) to drop already-settled/nullish entries); `getOrInsert` is the same get-or-compute-and-insert pattern as [the toolkit-root `getOrInsertComputed`](../utils/06-utils), reimplemented locally for `query/`'s own internal `Map` usages so this subsystem doesn't need a cross-folder import for such a small helper.
+
+## `countObjectKeys(obj)` / `isNotNullish(value)` / `capitalize(str)` / `getCurrent(value)`
+
+| Function | Purpose |
+|----------|---------|
+| `countObjectKeys(obj)` | Faster than `Object.keys(obj).length` in hot paths (avoids allocating the intermediate array) — used in cache-bookkeeping code checking "are there any subscribers left." |
+| `isNotNullish(value)` | `value !== null && value !== undefined` — a one-line readability helper used in array `.filter()` calls throughout the codebase. |
+| `capitalize(str)` | Used to build hook names from endpoint names in the React module (`getPosts` → `GetPosts` → `useGetPostsQuery`). |
+| `getCurrent(value)` | A re-export of Immer's `current()` — same purpose as [immerImports](../utils/03-immer-imports) elsewhere in the toolkit, scoped locally to `query/`'s own internal Immer usage in `buildSlice.ts`/cache-patch logic. |
+
+## Common pitfalls
+
+- **None of these are importable from `@headlesskit/state-management-toolkit/query`** — they're internal implementation details with no stability guarantee across versions; the patterns shown above (timeout-signal composition, structural sharing, URL joining) are simple enough to reimplement directly in application code if you need the same behavior outside RTK Query's own internals.
+- **`structuralSharing`'s reference-preservation only helps consumers that actually rely on reference equality** (e.g. `React.memo`, `useMemo` deps, naive `===` checks) — if your component re-renders on every state change regardless (e.g. it's not memoized at all), `copyWithStructuralSharing` doing its job correctly won't be visible as a performance difference.

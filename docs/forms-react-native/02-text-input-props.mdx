@@ -1,0 +1,190 @@
+# Text Input Props
+
+`getTextInputProps` is the React Native equivalent of `form.getInputProps()` — it returns
+props shaped for `<TextInput>` instead of a DOM `<input>`. `getFieldTextInputProps` is the
+same idea for a `useField()` result instead of a full form + path.
+
+---
+
+## getTextInputProps
+
+```typescript
+function getTextInputProps<Values, TransformedValues, TError, K extends DeepKeys<Values>>(
+  form: FormStoreApi<Values, TransformedValues, TError>,
+  path: K,
+  options?: { withError?: boolean; withFocus?: boolean },
+): GetTextInputPropsResult<TError>;
+```
+
+### Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|--------------|
+| `form` | `FormStoreApi` | Yes | The object returned by `useForm()` (or `createFormStore()` directly). |
+| `path` | a key of `form`'s values, dot-notation for nested paths | Yes | Which field to read/write — e.g. `'email'`, `'user.address.city'`. Mistyped paths are a **compile error**, not a silent runtime no-op. |
+| `options.withError` | `boolean` | No, default `true` | Whether to include the `error` field in the result. |
+| `options.withFocus` | `boolean` | No, default `true` | Whether to include `onFocus`/`onBlur` in the result. |
+
+### Return value
+
+| Field | Type | When present |
+|-------|------|---------------|
+| `value` | `string \| undefined` | When the form is in **controlled** mode. |
+| `defaultValue` | `string \| undefined` | When the form is in **uncontrolled** mode (the default for `useForm`). |
+| `onChangeText` | `(text: string) => void` | Always. |
+| `onFocus` | `() => void \| undefined` | When `withFocus` is `true` (default). |
+| `onBlur` | `() => void \| undefined` | When `withFocus` is `true` (default). |
+| `error` | `TError \| undefined` | When `withError` is `true` (default) **and** the field currently has an error. |
+
+---
+
+## Simple example
+
+The form's `mode` decides which of `value`/`defaultValue` comes back — you never branch on
+this yourself, you just spread whichever one is present:
+
+```tsx
+import { useForm, getTextInputProps } from '@headlesskit/forms-react-native';
+import { TextInput } from 'react-native';
+
+const form = useForm({ initialValues: { email: '' } }); // mode: 'uncontrolled' by default
+
+function EmailField() {
+  const { error, ...inputProps } = getTextInputProps(form, 'email');
+  // inputProps = { defaultValue: '', onChangeText, onFocus, onBlur }
+  // (no "value" key at all — uncontrolled mode only ever returns one or the other)
+
+  return <TextInput key={form.key('email')} {...inputProps} placeholder="Email" />;
+}
+```
+
+---
+
+## Every value of `options`, explained
+
+### Default — `getTextInputProps(form, 'email')`
+
+Equivalent to `{ withError: true, withFocus: true }`. Returns `value`/`defaultValue`,
+`onChangeText`, `onFocus`, `onBlur`, and `error` (if one exists). This is what you want for a
+normal field with its own visible error text.
+
+```tsx
+const { error, ...props } = getTextInputProps(form, 'email');
+<TextInput {...props} />
+{error && <Text>{error}</Text>}
+```
+
+### `{ withError: false }`
+
+Drops the `error` field entirely — useful when you're showing errors a different way (e.g. a
+form-wide error summary at the top, fed from `form.errors` directly, rather than per-field):
+
+```tsx
+const props = getTextInputProps(form, 'email', { withError: false });
+<TextInput {...props} /> {/* no "error" key to even think about destructuring */}
+```
+
+### `{ withFocus: false }`
+
+Drops `onFocus`/`onBlur`. Use this when `touchTrigger: 'change'` (the default — touched is
+set on typing, not on focus) and you have no `validateInputOnBlur` rule, so those two handlers
+would be dead weight:
+
+```tsx
+const form = useForm({
+  initialValues: { email: '' },
+  touchTrigger: 'change',       // default — focus tracking would be unused
+  // no validateInputOnBlur     // blur tracking would be unused
+});
+
+const props = getTextInputProps(form, 'email', { withFocus: false });
+// props = { defaultValue, onChangeText } — nothing else
+```
+
+### `{ withError: false, withFocus: false }`
+
+Both at once — the absolute minimum shape, just `value`/`defaultValue` + `onChangeText`. Handy
+for a search box or filter input that has no validation and no touch-tracking need at all.
+
+---
+
+## Why `error` is safe to spread, but you shouldn't
+
+Unlike a DOM `<input>`, React Native's native components don't warn about unrecognized props —
+they're explicitly destructured by the component's own source, and anything else is silently
+ignored. So `<TextInput {...getTextInputProps(form, 'email')} />` (including `error`, with no
+destructuring) won't crash or warn. It's just dead weight, and it hides the fact that you have
+an error value available to show the user. The destructuring pattern costs one line and makes
+the error visible in your own JSX, which is why every example in this package uses it:
+
+```tsx
+const { error, ...inputProps } = getTextInputProps(form, 'email');
+```
+
+---
+
+## Advanced: nested paths and dynamic lists
+
+`path` is fully type-checked through nested objects and arrays, exactly like
+`form.getInputProps` on the web — see [forms' Nested Fields doc](#forms/nested-fields)
+for the full type mechanics. The React Native usage is identical, just with `<TextInput>`:
+
+```tsx
+interface Values {
+  user: { address: { city: string } };
+  todos: { text: string }[];
+}
+
+const form = useForm<Values>({
+  initialValues: { user: { address: { city: '' } }, todos: [{ text: '' }] },
+});
+
+// Nested object — fully typed, autocompletes
+<TextInput {...getTextInputProps(form, 'user.address.city')} />
+
+// Array index — also fully typed
+<TextInput {...getTextInputProps(form, 'todos.0.text')} />
+
+// form.getInputProps('user.bogus') would be a compile error here too —
+// getTextInputProps shares the exact same DeepKeys<Values> constraint.
+```
+
+---
+
+## getFieldTextInputProps
+
+The same adapter, but for `useField()` — which is already scoped to one field, so there's no
+`path` parameter:
+
+```typescript
+function getFieldTextInputProps<Value, TError>(
+  field: UseFieldReturnType<Value, TError>,
+): GetTextInputPropsResult<TError>;
+```
+
+```tsx
+import { useField, getFieldTextInputProps } from '@headlesskit/forms-react-native';
+import { View, Text, TextInput } from 'react-native';
+
+function StandaloneEmailInput() {
+  const field = useField({
+    initialValue: '',
+    validate: (v) => (/^\S+@\S+\.\S+$/.test(v) ? null : 'Invalid email'),
+    validateOnChange: true,
+  });
+
+  const { error, ...inputProps } = getFieldTextInputProps(field);
+
+  return (
+    <View>
+      <TextInput key={field.key} {...inputProps} placeholder="Email" />
+      {error && <Text style={{ color: 'red' }}>{error}</Text>}
+    </View>
+  );
+}
+```
+
+There's no `options` parameter here — `useField` itself takes `validateOnChange`/
+`validateOnBlur` at the hook level (which already determines whether `onFocus`/`onBlur` do
+anything useful), and `error` always reflects `field.error`. If you need to suppress fields
+of the result, destructure them out yourself the same way.

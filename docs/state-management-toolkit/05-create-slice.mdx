@@ -1,0 +1,176 @@
+# createSlice
+
+**File:** `src/createSlice.ts` (1079 lines — the largest single file in the package)
+
+The centerpiece API of the toolkit: in one call, generates a reducer, matching action creators, and (optionally) selectors for one "slice" of your state — combining what would otherwise be separate calls to [createAction](./01-create-action) (once per action type) and [createReducer](./02-create-reducer).
+
+## Signature
+
+```typescript
+function createSlice<State, CaseReducers, Name extends string, Selectors, ReducerPath extends string = Name>(
+  options: CreateSliceOptions<State, CaseReducers, Name, ReducerPath, Selectors>,
+): Slice<State, CaseReducers, Name, ReducerPath, Selectors>
+```
+
+## `CreateSliceOptions`
+
+| Option | Type | Required | Description |
+|--------|------|----------|--------------|
+| `name` | `string` | yes | Namespaces every generated action's `type` as `` `${name}/${reducerKey}` ``. Throws if omitted/falsy. |
+| `reducerPath` | `string` | no, defaults to `name` | The key this slice's state is expected to live at in the root state, used by `selectSlice`/`selectors` and by [combineSlices](./06-combine-slices)'s lazy injection. Only needs to differ from `name` in advanced multi-instance scenarios. |
+| `initialState` | `State \| (() => State)` | yes | Same lazy-initializer behavior as [createReducer](./02-create-reducer). Logs a dev-mode console error (not a throw) if `undefined` — almost always a typo. |
+| `reducers` | object **or** `(creators) => object` | yes | See [the two reducers forms](#the-reducers-option) below. |
+| `extraReducers` | `(builder) => void` | no | A [createReducer](./02-create-reducer)-style builder callback for handling actions defined *outside* this slice (e.g. another slice's actions, or a thunk's lifecycle actions) — see [Advanced: extraReducers](#advanced-extrareducers-for-cross-slice-actions). |
+| `selectors` | `{ [key]: (state, ...args) => result }` | no | Selectors scoped to this slice's own state shape — exposed later via `slice.selectors` / `slice.getSelectors()`. |
+
+## The `reducers` option
+
+### Object form (simple case reducers)
+
+```typescript
+import { createSlice } from '@headlesskit/state-management-toolkit';
+
+const counterSlice = createSlice({
+  name: 'counter',
+  initialState: { value: 0 },
+  reducers: {
+    increment(state) {
+      state.value += 1; // Immer-powered mutation, just like createReducer
+    },
+    incrementByAmount(state, action: { payload: number }) {
+      state.value += action.payload;
+    },
+  },
+});
+
+counterSlice.actions.increment();          // { type: 'counter/increment', payload: undefined }
+counterSlice.actions.incrementByAmount(5); // { type: 'counter/incrementByAmount', payload: 5 }
+```
+
+Each key in `reducers` becomes both: (1) a case reducer registered under `` `${name}/${key}` ``, and (2) an auto-generated action creator of the same name exposed at `slice.actions[key]`.
+
+### Callback form, with `reducer`/`preparedReducer`/`asyncThunk` creators
+
+For more control — a custom `prepare` callback per action, or defining an async thunk inline as part of the slice — pass a function instead of a plain object. It receives a `creators` object:
+
+```typescript
+const todosSlice = createSlice({
+  name: 'todos',
+  initialState: { items: [] as { id: string; text: string }[] },
+  reducers: (create) => ({
+    // create.reducer — same as the plain object form, explicit about it
+    clear: create.reducer((state) => {
+      state.items = [];
+    }),
+
+    // create.preparedReducer — pairs a `prepare` callback with its reducer
+    add: create.preparedReducer(
+      (text: string) => ({ payload: { id: crypto.randomUUID(), text } }),
+      (state, action) => {
+        state.items.push(action.payload);
+      },
+    ),
+
+    // create.asyncThunk — defines a full async thunk as a slice reducer
+    fetchTodos: create.asyncThunk(
+      async (userId: string) => {
+        const res = await fetch(`/api/users/${userId}/todos`);
+        return (await res.json()) as { id: string; text: string }[];
+      },
+      {
+        pending: (state) => { /* set loading flag, etc */ },
+        fulfilled: (state, action) => {
+          state.items = action.payload;
+        },
+        rejected: (state, action) => { /* set error */ },
+      },
+    ),
+  }),
+});
+
+todosSlice.actions.add('Buy milk'); // uses the prepare callback
+todosSlice.actions.fetchTodos('user-1'); // dispatchable thunk, same as createAsyncThunk's result
+```
+
+`create.asyncThunk`'s second argument accepts `pending`/`fulfilled`/`rejected`/`settled` case-reducer hooks directly inline — equivalent to manually creating the thunk with [createAsyncThunk](./05-create-async-thunk) and then registering its three lifecycle actions via `extraReducers`, but co-located with the rest of the slice's reducers.
+
+> **Note:** `create.asyncThunk` requires the `asyncThunkCreator` injection to be enabled — pass it to a custom `buildCreateSlice({ creators: { asyncThunk: asyncThunkCreator } })` if you're using the lower-level slice builder; the package's default exported `createSlice` already has this wired up.
+
+## Advanced: `extraReducers` for cross-slice actions
+
+Use `extraReducers` when a slice needs to react to an action it doesn't itself define — most commonly another slice's action, or a thunk's pending/fulfilled/rejected action:
+
+```typescript
+import { logout } from './authSlice';
+
+const cartSlice = createSlice({
+  name: 'cart',
+  initialState: { items: [] },
+  reducers: { /* ... */ },
+  extraReducers: (builder) => {
+    builder.addCase(logout, (state) => {
+      state.items = []; // clear the cart whenever anyone logs out, anywhere in the app
+    });
+  },
+});
+```
+
+`extraReducers` actions are merged with the slice's own `reducers` and run through the same single underlying `createReducer` call — the slice's own case reducers and `extraReducers`' case reducers can both register `addMatcher`/`addDefaultCase` handlers, and all of it executes together.
+
+## `slice.actions` / `slice.caseReducers` / `slice.getInitialState()`
+
+| Property | Description |
+|----------|--------------|
+| `slice.actions` | Object of generated action creators, one per `reducers` key (excluding `extraReducers`-only handlers, since those react to *external* actions you already have a creator for). |
+| `slice.caseReducers` | The raw case-reducer functions you defined, keyed the same way — useful for unit-testing a single case reducer in isolation, or composing it manually elsewhere, without needing to dispatch a full action through the store. |
+| `slice.getInitialState()` | Resolves and returns the initial state (calling the lazy initializer if one was given) — same as `createReducer`'s `.getInitialState()`. |
+| `slice.reducer` | The final combined reducer function — pass this to `combineReducers`/`configureStore`. |
+
+```typescript
+counterSlice.caseReducers.increment({ value: 10 }, { type: 'counter/increment', payload: undefined });
+// → { value: 11 } — calling a case reducer directly, bypassing dispatch entirely (handy in unit tests)
+```
+
+## Selectors: `slice.selectors`, `slice.getSelectors()`, `slice.selectSlice()`
+
+```typescript
+const counterSlice = createSlice({
+  name: 'counter',
+  initialState: { value: 0 },
+  reducers: { /* ... */ },
+  selectors: {
+    selectValue: (state) => state.value,
+    selectIsPositive: (state) => state.value > 0,
+  },
+});
+
+interface RootState {
+  counter: ReturnType<typeof counterSlice.getInitialState>;
+}
+
+// .selectors assumes state lives at rootState[reducerPath] (== rootState.counter here)
+counterSlice.selectors.selectValue({ counter: { value: 5 } }); // 5
+
+// .getSelectors(selectState) lets you point at a different location in root state
+const globalSelectors = counterSlice.getSelectors((root: RootState) => root.counter);
+globalSelectors.selectValue({ counter: { value: 5 } }); // 5
+
+// .getSelectors() with no argument expects to be called with JUST the slice state directly
+const localSelectors = counterSlice.getSelectors();
+localSelectors.selectValue({ value: 5 }); // 5
+
+// .selectSlice() pulls just this slice's state out of root state
+counterSlice.selectSlice({ counter: { value: 5 } }); // { value: 5 }
+```
+
+## `slice.injectInto()` — lazy-loaded slices
+
+Hands this slice off to a [combineSlices](./06-combine-slices)-produced combined reducer for runtime/lazy registration (code-splitting feature slices). See [combineSlices](./06-combine-slices) for the full pattern; `injectInto` returns an `InjectedSlice` whose selectors gracefully fall back to the slice's own initial state if the slice hasn't actually been injected yet (rather than throwing on `undefined`).
+
+## Common pitfalls
+
+- **`name` is required and falsy values throw** — `createSlice({ name: '', ... })` throws `'name is a required option for createSlice'` immediately at call time, not at first dispatch.
+- **`initialState: undefined` only warns, it doesn't throw** — in development you'll see `'You must provide an initialState value that is not undefined...'` in the console, but the slice is still constructed; this is a frequent typo source (`initalState`, `intialState`) that's easy to miss since nothing crashes.
+- **The old object-map `extraReducers` notation was removed**, exactly like `createReducer` — passing a plain object instead of a builder callback throws in development pointing you to the new syntax.
+- **`getSelectors()` with no argument vs. `.selectors`/`getSelectors(selectState)` expect different input shapes** — calling `slice.selectors.selectValue(sliceStateDirectly)` (skipping the root-state wrapper) is a very common mistake; use `slice.getSelectors()` (no arguments) specifically when you already have just the slice's own state in hand.
+- **Two reducer keys producing the same action `type` is impossible by construction** (each is namespaced `` `${name}/${key}` ``), but mixing `reducers` and `extraReducers` registering `addCase` for the *same* type (e.g. accidentally handling your own slice's action again via `extraReducers`) throws the same `'cannot be called with two reducers for the same action type'` error `createReducer` raises.

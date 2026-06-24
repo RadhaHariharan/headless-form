@@ -1,0 +1,319 @@
+# Form Status
+
+`headlesskit` tracks several status flags: touched, dirty, validating, and submitting.
+These help you conditionally render UIs, disable buttons, and guide users through the form.
+
+---
+
+## Touched and Dirty
+
+- A field is **touched** when the user has interacted with it (focused or changed its value),
+  depending on the `touchTrigger` setting.
+- A field is **dirty** when its current value is different from the value in `initialValues`
+  (compared deeply using fast-deep-equal).
+
+```tsx
+import { useForm } from '@headlesskit/forms-react';
+
+function Demo() {
+  const form = useForm({
+    mode: 'uncontrolled',
+    initialValues: { name: '', email: '' },
+  });
+
+  return (
+    <form onSubmit={form.onSubmit(console.log)}>
+      <input key={form.key('name')} {...form.getInputProps('name')} placeholder="Name" />
+      <input key={form.key('email')} {...form.getInputProps('email')} placeholder="Email" />
+
+      <p>Name touched: {String(form.isTouched('name'))}</p>
+      <p>Name dirty: {String(form.isDirty('name'))}</p>
+      <p>Any field touched: {String(form.isTouched())}</p>
+      <p>Any field dirty: {String(form.isDirty())}</p>
+
+      <button type="submit" disabled={!form.isDirty()}>
+        Save Changes
+      </button>
+    </form>
+  );
+}
+```
+
+---
+
+## isTouched and isDirty Functions
+
+Both functions optionally accept a path argument:
+
+```typescript
+import { useForm } from '@headlesskit/forms-react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: { a: 1, nested: { field: '' } },
+});
+
+// Single field
+form.isTouched('a');            // was field 'a' focused or changed?
+form.isDirty('a');              // was field 'a' modified?
+form.isDirty('nested.field');   // nested fields are supported
+
+// Entire form
+form.isTouched();  // was any field in the form touched?
+form.isDirty();    // was any field in the form modified?
+```
+
+---
+
+## touchTrigger Option
+
+The `touchTrigger` option controls which interaction marks a field as touched:
+
+- `'change'` (default) — the field is touched when its value changes or it has been focused
+- `'focus'` — the field is touched only when it has been focused (regardless of changes)
+
+```tsx
+import { useForm } from '@headlesskit/forms-react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: { a: 1 },
+  touchTrigger: 'focus',
+});
+
+form.isTouched('a'); // -> false
+
+// Programmatic change does NOT mark as touched when touchTrigger === 'focus'
+form.setFieldValue('a', 2);
+form.isTouched('a'); // -> false
+
+// onFocus (called automatically when user focuses the field via getInputProps)
+form.getInputProps('a').onFocus!({} as any);
+form.isTouched('a'); // -> true
+```
+
+---
+
+## Initial Touched and Dirty
+
+Set initial touched and dirty flags when the form mounts:
+
+```tsx
+import { useForm } from '@headlesskit/forms-react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: { a: 1, nested: { field: '' } },
+  initialTouched: {
+    a: true,
+    'nested.field': true,
+  },
+  initialDirty: {
+    a: true,
+  },
+});
+
+form.isTouched('a');          // -> true
+form.isTouched('nested.field'); // -> true
+form.isDirty('a');             // -> true
+```
+
+---
+
+## resetTouched and resetDirty
+
+Clear all touched/dirty state. `form.reset()` also resets both:
+
+```tsx
+import { useForm } from '@headlesskit/forms-react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: { a: 1 },
+  initialTouched: { a: true },
+  initialDirty: { a: true },
+});
+
+form.isDirty('a');  // -> true
+form.isTouched('a'); // -> true
+
+form.resetTouched();
+form.isTouched('a'); // -> false
+
+form.resetDirty();
+form.isDirty('a');   // -> false
+```
+
+### Reset Dirty with New Baseline
+
+Pass new values to `resetDirty` to update the baseline used for dirty comparisons:
+
+```tsx
+import { useForm } from '@headlesskit/forms-react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: { a: 1 },
+});
+
+// User changes the value
+form.setValues({ a: 2 });
+form.isDirty(); // -> true
+
+// After saving, update the baseline so form is no longer dirty
+form.resetDirty({ a: 2 });
+form.isDirty(); // -> false
+
+// If user changes it again, it becomes dirty relative to the new baseline
+form.setValues({ a: 3 });
+form.isDirty(); // -> true
+```
+
+---
+
+## getTouched and getDirty
+
+Read the full touched/dirty records:
+
+```tsx
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: { name: '', email: '' },
+});
+
+form.getTouched();
+// -> { name: true, email: false }
+
+form.getDirty();
+// -> { name: true }
+```
+
+---
+
+## setTouched and setDirty
+
+Replace the touched/dirty records programmatically:
+
+```tsx
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: { name: '', email: '' },
+});
+
+// Mark all fields as touched (useful for showing all errors on submit)
+form.setTouched({ name: true, email: true });
+
+// Mark a field as dirty
+form.setDirty({ name: true });
+```
+
+---
+
+## Submitting State
+
+`form.submitting` is `true` while the function passed to `form.onSubmit` is resolving a Promise.
+After the Promise resolves or rejects, `form.submitting` is set back to `false` automatically:
+
+```tsx
+import { useForm } from '@headlesskit/forms-react';
+
+function Demo() {
+  const form = useForm({
+    mode: 'uncontrolled',
+    initialValues: { name: '', email: '' },
+  });
+
+  return (
+    <form
+      onSubmit={form.onSubmit(async (values) => {
+        // form.submitting is true while this Promise is pending
+        await fetch('/api/submit', {
+          method: 'POST',
+          body: JSON.stringify(values),
+        });
+        // form.submitting becomes false after this
+      })}
+    >
+      <input key={form.key('name')} {...form.getInputProps('name')} />
+      <input key={form.key('email')} {...form.getInputProps('email')} />
+      <button type="submit" disabled={form.submitting}>
+        {form.submitting ? 'Saving...' : 'Save'}
+      </button>
+    </form>
+  );
+}
+```
+
+### Manual Submitting Control
+
+You can also control `form.submitting` manually:
+
+```tsx
+const form = useForm({ mode: 'uncontrolled' });
+
+form.setSubmitting(true);
+// ... async work ...
+form.setSubmitting(false);
+```
+
+---
+
+## Validating State
+
+`form.validating` is `true` while any async validation is in progress.
+`form.isValidating(path)` returns `true` if a specific field is currently validating:
+
+```tsx
+import { useForm } from '@headlesskit/forms-react';
+
+function Demo() {
+  const form = useForm({
+    mode: 'uncontrolled',
+    initialValues: { username: '', email: '' },
+    validateInputOnChange: true,
+    validateDebounce: 300,
+    validate: {
+      username: async (value) => {
+        await new Promise((r) => setTimeout(r, 500));
+        return value === 'admin' ? 'Username is taken' : null;
+      },
+      email: async (value) => {
+        await new Promise((r) => setTimeout(r, 500));
+        return !/^\S+@\S+/.test(value) ? 'Invalid email' : null;
+      },
+    },
+  });
+
+  return (
+    <form onSubmit={form.onSubmit(console.log)}>
+      <div>
+        <input
+          key={form.key('username')}
+          {...form.getInputProps('username')}
+          placeholder="Username"
+        />
+        {form.isValidating('username') && <span>Checking username…</span>}
+        {form.errors.username && <p>{form.errors.username}</p>}
+      </div>
+
+      <div>
+        <input
+          key={form.key('email')}
+          {...form.getInputProps('email')}
+          placeholder="Email"
+        />
+        {form.isValidating('email') && <span>Checking email…</span>}
+        {form.errors.email && <p>{form.errors.email}</p>}
+      </div>
+
+      {/* True when any field is validating */}
+      {form.validating && <p>Validating form…</p>}
+
+      <button type="submit" disabled={form.submitting || form.validating}>
+        Submit
+      </button>
+    </form>
+  );
+}
+```
+

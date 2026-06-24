@@ -1,0 +1,63 @@
+# kindOf / miniKindOf
+
+**File:** `src/utils/kindOf.ts` · **Not exported from the package root** — internal helper used throughout `createStore`, `combineReducers`, and `bindActionCreators` to build readable error messages.
+
+Produces a human-readable type name for *any* JavaScript value — better than `typeof`, which only distinguishes 8 categories and calls every object (arrays, `Map`s, `Date`s, custom classes) just `"object"`.
+
+## Signature
+
+```typescript
+function kindOf(val: any): string
+function miniKindOf(val: any): string // the full, always-on implementation
+```
+
+| Function | When it runs | Behavior |
+|----------|---------------|----------|
+| `miniKindOf` | Always available | The full implementation described below. |
+| `kindOf` | Dev builds: delegates to `miniKindOf`. Production builds: falls back to plain `typeof val` | Trades precision for bundle size — production error messages say `"object"` instead of e.g. `"Map"`, since the friendlier names only matter for development-time debugging. |
+
+## What `miniKindOf` returns, value by value
+
+| Input | Result |
+|-------|--------|
+| `undefined` | `'undefined'` |
+| `null` | `'null'` |
+| `true`, `'x'`, `42`, `Symbol()`, a function | `'boolean'`, `'string'`, `'number'`, `'symbol'`, `'function'` (i.e. `typeof`, unchanged, for primitives) |
+| `[]` | `'array'` |
+| `new Date()` | `'date'` |
+| `new Error()` (or anything with a `.message` string + a `.constructor.stackTraceLimit` number, duck-typed) | `'error'` |
+| `Symbol('x')` *(boxed via constructor name)*, `Promise.resolve()`, `new WeakMap()`, `new WeakSet()`, `new Map()`, `new Set()` | their constructor name, lowercase-insensitive as written: `'Symbol'`, `'Promise'`, `'WeakMap'`, `'WeakSet'`, `'Map'`, `'Set'` |
+| Anything else (plain objects, class instances, etc.) | `Object.prototype.toString.call(val)`'s tag, lowercased and stripped of spaces — e.g. a plain object is `'object'`, a `RegExp` is `'regexp'` |
+
+## Why this exists: readable runtime error messages
+
+This is purely an internals-readability tool — every "Instead, received: '...'" error message in [createStore](../02-create-store) and [bindActionCreators](../06-bind-action-creators) is built with `kindOf`:
+
+```typescript
+// from store.dispatch's validation (paraphrased)
+throw new Error(
+  `Actions must be plain objects. Instead, received: '${kindOf(action)}'.`
+);
+```
+
+So dispatching a `Map` produces `"...Instead, received: 'Map'."` rather than the far less useful `"...Instead, received: 'object'."` you'd get from `typeof`.
+
+## Basic usage (if you need this kind of message yourself)
+
+This isn't exported from `@headlesskit/state-management`'s public API, but the same pattern is trivial to replicate in your own validation/error code if you want equally readable runtime errors:
+
+```typescript
+function describeValue(val: unknown): string {
+  if (val === undefined) return 'undefined';
+  if (val === null) return 'null';
+  if (Array.isArray(val)) return 'array';
+  if (val instanceof Date) return 'date';
+  return typeof val;
+}
+
+throw new Error(`Expected a reducer function, got: ${describeValue(maybeReducer)}`);
+```
+
+## Advanced: why `kindOf` checks `stackTraceLimit` to detect errors
+
+The "is this an Error" check is intentionally duck-typed (`instanceof Error || (message is a string AND constructor.stackTraceLimit is a number)`) rather than relying solely on `instanceof Error`. This is because errors crossing a realm boundary (e.g. an error thrown inside a `vm` sandbox, an iframe, or a worker, then passed to your code) are `instanceof` the *other* realm's `Error`, not yours — `instanceof Error` would incorrectly say `false`. Checking for the `stackTraceLimit` static property (a V8/Node-specific but very reliable marker of "this is some flavor of Error class") catches those cases too.

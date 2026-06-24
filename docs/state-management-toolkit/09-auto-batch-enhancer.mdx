@@ -1,0 +1,88 @@
+# autoBatchEnhancer
+
+**File:** `src/autoBatchEnhancer.ts`
+
+A store enhancer (included by default via [getDefaultEnhancers](./11-get-default-enhancers)) that batches subscriber notifications for a run of "low-priority" actions into a single notification — meant for actions dispatched in rapid succession (e.g. RTK Query cache updates) where notifying the UI after every single one would cause wasteful re-renders.
+
+## Signature
+
+```typescript
+function autoBatchEnhancer(options?: AutoBatchOptions): StoreEnhancer
+```
+
+| `AutoBatchOptions` variant | Batches by |
+|---|---|
+| `{ type: 'raf' }` *(default)* | `requestAnimationFrame`, with a 100ms `setTimeout` fallback — so a batch flushes either at the next paint or within 100ms, whichever comes first. Falls back to a plain `setTimeout(10ms)` queue entirely in SSR environments where `requestAnimationFrame` doesn't exist. |
+| `{ type: 'tick' }` | `queueMicrotask` — flushes at the end of the current microtask queue (before the next macrotask/render). |
+| `{ type: 'timer'; timeout: number }` | `setTimeout(timeout)`. |
+| `{ type: 'callback'; queueNotification: (notify) => void }` | Your own custom scheduling function. |
+
+## How an action opts into batching
+
+This enhancer doesn't batch *every* action — only ones whose `action.meta` carries a specific flag, `action.meta[SHOULD_AUTOBATCH] === true`. The `prepareAutoBatched<T>()` helper (also exported) is the standard way to add that flag from a `prepareAction` callback:
+
+```typescript
+import { createAction, prepareAutoBatched } from '@headlesskit/state-management-toolkit';
+
+const cacheEntryUpdated = createAction(
+  'api/cacheEntryUpdated',
+  prepareAutoBatched<{ key: string; data: unknown }>(),
+);
+
+cacheEntryUpdated({ key: 'users/1', data: { name: 'Ada' } });
+// { type: 'api/cacheEntryUpdated', payload: {...}, meta: { RTK_autoBatch: true } }
+```
+
+## What it actually does
+
+The enhancer wraps `store.subscribe` and `store.dispatch`:
+
+- **`subscribe(listener)`** — wraps every listener so it only actually fires while a `notifying` flag is `true`.
+- **`dispatch(action)`** — checks the dispatched action's auto-batch flag. If present, flips `notifying` to `false` for the duration of *this* dispatch (suppressing the listener calls that would otherwise fire immediately) and schedules a single deferred `notifyListeners()` call (only once per batch window, via `notificationQueued`). If the action does **not** carry the flag, behavior is unchanged — subscribers are notified synchronously and immediately, exactly like a normal Redux store.
+
+So: a quick burst of `SHOULD_AUTOBATCH`-flagged actions all get processed by reducers normally and immediately (state is always up to date the instant you call `getState()`), but **subscriber notifications** (the thing that triggers React re-renders via `useSelector`/`useSyncExternalStore`) are coalesced into one call at the end of the batch window.
+
+## Basic usage
+
+```typescript
+import { configureStore } from '@headlesskit/state-management-toolkit';
+import { autoBatchEnhancer } from '@headlesskit/state-management-toolkit';
+
+const store = configureStore({
+  reducer: rootReducer,
+  enhancers: (getDefaultEnhancers) => getDefaultEnhancers(), // autoBatchEnhancer is already included by default
+});
+```
+
+Most apps never call `autoBatchEnhancer` directly — it's already part of [getDefaultEnhancers](./11-get-default-enhancers)'s output. You'd reach for it explicitly only to change its batching strategy:
+
+```typescript
+const store = configureStore({
+  reducer: rootReducer,
+  enhancers: (getDefaultEnhancers) =>
+    getDefaultEnhancers({ autoBatch: false }).concat(
+      autoBatchEnhancer({ type: 'tick' }), // microtask-based batching instead of the rAF default
+    ),
+});
+```
+
+## Advanced: batching your own rapid-fire dispatches
+
+```typescript
+const batchedUpdate = createAction(
+  'list/itemUpdated',
+  prepareAutoBatched<{ id: string; value: string }>(),
+);
+
+function updateManyItems(updates: { id: string; value: string }[]) {
+  // dispatching 500 of these in a tight loop notifies subscribers ONCE,
+  // not 500 times, because each carries the SHOULD_AUTOBATCH meta flag
+  updates.forEach((u) => store.dispatch(batchedUpdate(u)));
+}
+```
+
+## Common pitfalls
+
+- **A single non-batched action dispatched in the middle of a batch run immediately flushes notifications** — the enhancer treats encountering an action *without* the flag as "resume normal behavior right now," which both ends the current batch and notifies subscribers of everything queued so far. This is intentional (so a genuinely important action is never silently delayed) but means interleaving batched and non-batched dispatches doesn't give you full control over batch boundaries.
+- **`requestAnimationFrame` doesn't exist during SSR** — the enhancer detects this (`typeof window !== 'undefined'`) and falls back to a plain timer automatically, but if you rely on batching timing specifically matching a real animation frame, behavior differs between server and client renders.
+- **Batching only affects *notifications*, not state updates** — `store.getState()` always reflects the latest dispatched action immediately; don't reach for this enhancer expecting to delay state changes themselves, only UI re-render frequency.

@@ -1,0 +1,124 @@
+# combineReducers
+
+Turns an object whose values are reducer functions into a single reducer you can pass to [createStore](02-create-store). The resulting state shape mirrors the keys you passed in.
+
+```typescript
+import { combineReducers } from '@headlesskit/state-management';
+```
+
+## Signature
+
+```typescript
+combineReducers(reducers: { [key: string]: Reducer }): Reducer
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `reducers` | `Record<string, Reducer>` | A map from state-slice key to the reducer that manages it. |
+
+**Returns:** a single root `Reducer` function, suitable for `createStore`.
+
+## Basic usage
+
+```typescript
+import { combineReducers, createStore } from '@headlesskit/state-management';
+
+function counterReducer(state = 0, action) {
+  switch (action.type) {
+    case 'increment': return state + 1;
+    case 'decrement': return state - 1;
+    default: return state;
+  }
+}
+
+function todosReducer(state = [], action) {
+  switch (action.type) {
+    case 'todos/add': return [...state, action.text];
+    case 'todos/clear': return [];
+    default: return state;
+  }
+}
+
+const rootReducer = combineReducers({
+  counter: counterReducer,
+  todos: todosReducer,
+});
+
+const store = createStore(rootReducer);
+store.getState();
+// { counter: 0, todos: [] }
+
+store.dispatch({ type: 'increment' });
+store.dispatch({ type: 'todos/add', text: 'Buy milk' });
+store.getState();
+// { counter: 1, todos: ['Buy milk'] }
+```
+
+Each sub-reducer only ever sees and returns *its own slice* — `counterReducer` never sees `{ counter, todos }`, only the `number` at `state.counter`. `combineReducers` calls every sub-reducer on every dispatched action (even ones a given slice doesn't care about) and assembles the per-key results back into one object.
+
+## How it decides whether state actually changed
+
+After running every sub-reducer, `combineReducers` checks whether **any** sub-reducer returned a new reference compared to its previous slice. If none did (every sub-reducer returned its previous slice unchanged, by `===`), the combined reducer returns the *exact same* top-level state object rather than a new one with identical contents. This is what makes `===` checks on `store.getState()` (and libraries like React-Redux's `useSelector`) a reliable way to detect "did anything actually change."
+
+```typescript
+const state1 = store.getState();
+store.dispatch({ type: 'an/action/no/reducer/handles' });
+const state2 = store.getState();
+state1 === state2; // true — nothing changed, same reference
+```
+
+## Validation and dev-mode warnings
+
+`combineReducers` runs a one-time shape check the first time it's called (not on every dispatch), plus per-dispatch shape warnings in development:
+
+- **At setup time**, each reducer is probed with `{ type: '@@redux/INIT...' }` and a random unknown action type. If a reducer returns `undefined` for either, `combineReducers` throws immediately — this catches the single most common Redux mistake (forgetting `default: return state`) as early as possible, before any real action is ever dispatched.
+- **On every dispatch** (development builds only), if the **previous** state object has keys that don't match any reducer you passed in, a `console.error` warning is logged (e.g. after a `combineReducers` call drops a key, or if you preloaded state with extra fields). This is a warning, not a thrown error — execution continues, the unexpected keys are just ignored and won't appear in the combined state.
+- **If a reducer itself returns `undefined` for a real (non-probe) action**, that *does* throw, identifying the offending key and action type by name, e.g. for an action `{ type: 'todos/oops' }` mishandled by the `todos` key: `"When called with an action of type 'todos/oops', the slice reducer for key 'todos' returned undefined."`
+
+```typescript
+// ❌ Throws at combineReducers() call time — forgot the default case
+function brokenReducer(state = 0, action) {
+  switch (action.type) {
+    case 'increment': return state + 1;
+    // no default — returns undefined for every other action!
+  }
+}
+combineReducers({ counter: brokenReducer }); // throws immediately
+```
+
+## Advanced: nested combineReducers for feature modules
+
+Real apps usually nest `combineReducers` calls — one per feature module, combined again at the top:
+
+```typescript
+// features/auth/reducer.ts
+const authReducer = combineReducers({
+  user: userReducer,
+  session: sessionReducer,
+});
+
+// features/cart/reducer.ts
+const cartReducer = combineReducers({
+  items: itemsReducer,
+  totals: totalsReducer,
+});
+
+// rootReducer.ts
+const rootReducer = combineReducers({
+  auth: authReducer,
+  cart: cartReducer,
+});
+
+// Resulting shape:
+// { auth: { user, session }, cart: { items, totals } }
+```
+
+## Advanced: dropping/renaming a key (e.g. after `replaceReducer`)
+
+If you swap reducers at runtime via `store.replaceReducer` (see [createStore](02-create-store)) and the new root reducer no longer has a key that used to exist, the corresponding state slice doesn't throw — it's simply dropped from the combined output on the next dispatch, with a one-time dev warning the first time that key shows up as "unexpected." This is intentional, so that lazy-loaded/unloaded feature modules can come and go without crashing the store.
+
+## Common pitfalls
+
+- **Passing `undefined` for one of the reducers** (e.g. a typo'd import that resolves to `undefined`) is caught at setup with a dev-mode warning ("No reducer provided for key ...") and that key is silently skipped — not included in the combined reducer at all. This can look like "my data just isn't there" rather than an obvious crash; check the console for the warning.
+- **Two reducers managing overlapping concerns** isn't detected automatically — `combineReducers` has no way to know your domain boundaries are wrong, only that each individual reducer never returns `undefined`.
+- **Forgetting that each sub-reducer only sees its own slice.** A reducer for `todos` cannot read `state.user` — if a slice's logic needs data from another slice, that's a sign that logic belongs in a [thunk](../state-management-toolkit/01-overview) or that the two slices should be combined.

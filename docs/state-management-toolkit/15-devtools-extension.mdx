@@ -1,0 +1,76 @@
+# devtoolsExtension
+
+**File:** `src/devtoolsExtension.ts`
+
+Integrates with the [Redux DevTools browser extension](https://github.com/reduxjs/redux-devtools), if it's installed. [configureStore](./04-configure-store) uses this automatically (`devTools: true` by default) — most apps never import from this file directly.
+
+## `composeWithDevTools(options)`
+
+```typescript
+function composeWithDevTools(...funcs: StoreEnhancer[]): StoreEnhancer
+function composeWithDevTools(options: DevToolsEnhancerOptions): Compose
+```
+
+A drop-in alternative to plain `compose` from `@headlesskit/state-management` that also wires in the DevTools extension's enhancer, **if** `window.__REDUX_DEVTOOLS_EXTENSION_COMPOSE__` exists (set by the browser extension itself when installed). If the extension isn't installed, this silently falls back to plain `compose` — your app behaves identically whether or not the extension is present.
+
+## `devToolsEnhancer(options)`
+
+The raw enhancer itself (`window.__REDUX_DEVTOOLS_EXTENSION__`), with a safe no-op fallback (`(noop) => noop`) when the extension isn't present. `configureStore` doesn't call this directly — it uses `composeWithDevTools`, which already wraps this internally.
+
+## `DevToolsEnhancerOptions` — selected options
+
+| Option | Type | Default | Description |
+|--------|------|---------|--------------|
+| `name` | `string` | `document.title` | Label shown for this store instance in the DevTools monitor — useful when multiple stores/tabs are open at once. |
+| `trace` | `boolean \| (action) => string` | `false` (`configureStore` sets this `true` in development) | Captures a stack trace at the point each action was dispatched, so the DevTools panel can show you *where in your code* an action came from. |
+| `traceLimit` | `number` | `10` | Max stack frames recorded per action — higher values cost more memory/performance per dispatch. |
+| `actionSanitizer` / `stateSanitizer` | `(value, index) => value` | none | Redact or transform sensitive fields (auth tokens, PII) before they're sent to the DevTools panel — important if DevTools state ever gets shared/screenshotted. |
+| `actionsDenylist` / `actionsAllowlist` | `string \| string[]` (regex) | none | Hide noisy, high-frequency action types (e.g. a mouse-position-tracking action) from the monitor's timeline. |
+| `maxAge` | `number` | `50` | Maximum action history retained — older entries are dropped, bounding memory usage in long-running sessions. |
+
+## Basic usage (via configureStore — the common path)
+
+```typescript
+import { configureStore } from '@headlesskit/state-management-toolkit';
+
+const store = configureStore({
+  reducer: rootReducer,
+  devTools: {
+    name: 'My App',
+    trace: true,
+    actionsDenylist: ['mouse/moved'],
+  },
+});
+```
+
+## Advanced: redacting sensitive state before it reaches the DevTools extension
+
+```typescript
+const store = configureStore({
+  reducer: rootReducer,
+  devTools: {
+    actionSanitizer: (action) =>
+      action.type === 'auth/login' ? { ...action, payload: { ...action.payload, password: '<redacted>' } } : action,
+    stateSanitizer: (state) => ({ ...state, auth: { ...state.auth, token: '<redacted>' } }),
+  },
+});
+```
+
+## Advanced: calling `composeWithDevTools` directly with plain `createStore`
+
+If you're using plain `@headlesskit/state-management` (not the toolkit's `configureStore`) but still want DevTools support:
+
+```typescript
+import { createStore, applyMiddleware } from '@headlesskit/state-management';
+import { composeWithDevTools } from '@headlesskit/state-management-toolkit';
+
+const store = createStore(
+  rootReducer,
+  composeWithDevTools(applyMiddleware(thunkMiddleware)),
+);
+```
+
+## Common pitfalls
+
+- **`devTools: true` (the default) does nothing if the browser extension isn't installed** — it's a no-op fallback, not an error; if you expect to see your store in the DevTools panel and don't, check that the extension is actually installed/enabled in that browser, before assuming `configureStore` is misconfigured.
+- **Sanitizers only affect what the DevTools panel *displays***, not what's actually stored in application state — `actionSanitizer`/`stateSanitizer` don't redact your real Redux state, only the copy shipped to the extension's UI.

@@ -1,0 +1,325 @@
+# Field Validators (Build Your Own)
+
+Alongside the small composable form-rule helpers (`isNotEmpty`, `isEmail`, …), core ships a
+**field-validator toolkit**: a set of configurable factories for building reusable,
+type-aware validators that return **human-readable error messages**. They are framework
+agnostic — usable in React, React Native, or vanilla apps, with or without a form store.
+
+| Factory | For | Returns |
+|---------|-----|---------|
+| `createStringValidator` | text inputs | `(value: string, fieldName) => string \| null` |
+| `createNumberValidator` | numeric inputs | `(value: unknown, fieldName) => string \| null` |
+| `createArrayValidator` | multi-select / arrays | `(value: unknown, fieldName) => string \| null` |
+| `createCheckboxValidator` | checkboxes / booleans | `(value: unknown, fieldName) => string \| null` |
+| `createDateValidator` | date inputs | `(value: unknown, fieldName) => string \| null` |
+
+Every validator returns `null` when the value is valid, or an error **string** otherwise.
+The second argument, `fieldName`, is interpolated into the default messages and replaces the
+`{fieldName}` placeholder inside any custom message.
+
+> These factories are distinct from the form-rule helpers. The helpers plug straight into a
+> form's `validate` object; the field validators are standalone and need a tiny adapter to do
+> the same (see [Using with a form](#using-with-a-form)).
+
+---
+
+## Import
+
+```typescript
+import {
+  createStringValidator,
+  createNumberValidator,
+  createArrayValidator,
+  createCheckboxValidator,
+  createDateValidator,
+  parseLocalDate,
+  formatLocalDate,
+} from '@headlesskit/forms';
+// or, from the React package (re-exported):
+import { createStringValidator } from '@headlesskit/forms-react';
+```
+
+---
+
+## String validator
+
+```typescript
+const username = createStringValidator({
+  minLength: 3,
+  maxLength: 20,
+  allowedCharacters: 'alphanumeric',
+  shouldNotStartWith: /^[0-9]/,
+});
+
+username('Iamneo123', 'Username'); // null
+username('123abc', 'Username');    // "Username cannot start with special characters or numbers"
+username('jo', 'Username');        // "Username should be at least 3 characters long"
+```
+
+### Options
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `minLength` / `maxLength` | `number` | Length bounds, checked against the **trimmed** value |
+| `allowedCharacters` | `'alphanumeric' \| 'alphabetic' \| 'numeric' \| 'custom'` | Restrict the character class |
+| `customPattern` | `RegExp` | Required when `allowedCharacters: 'custom'` |
+| `allowSpaces` | `boolean` | Permit spaces within the chosen character class (default `false`) |
+| `allowSpecialChars` | `boolean` | When `false` **and** `allowedCharacters` is unset, reject non-alphanumeric chars |
+| `shouldStartWith` / `shouldEndWith` | `string \| RegExp` | Value **must** start/end with this |
+| `shouldNotStartWith` / `shouldNotEndWith` | `string \| RegExp` | Value must **not** start/end with this |
+| `mustContain` / `mustNotContain` | `string \| RegExp` | Required / forbidden substring or pattern |
+| `forbiddenWords` | `string[]` | Substrings that may not appear anywhere |
+| `caseSensitive` | `boolean` | Default `true`; when `false`, `mustContain`/`forbiddenWords` ignore case |
+| `required` | `boolean` | Default `true`; `false` lets empty values pass |
+| `customValidation` | `(value: string) => string \| null` | Runs last, receives the trimmed value |
+| `messages` | `object` | Override any default message; supports `{fieldName}` |
+
+> **String options are literal.** When you pass a **string** to `shouldStartWith`, `mustContain`,
+> etc., it is escaped and matched literally — `mustContain: 'a.b'` matches the three characters
+> `a.b`, not "a, any char, b". Pass a `RegExp` when you want pattern semantics.
+
+### Validation order
+
+`required → minLength → maxLength → allowedCharacters → allowSpecialChars →
+shouldNotStartWith → shouldStartWith → shouldNotEndWith → shouldEndWith →
+mustContain → mustNotContain → forbiddenWords → customValidation`. The **first** failing rule
+wins, so its message is the one returned.
+
+---
+
+## Number validator
+
+Accepts numbers or numeric strings (parsed with `parseFloat`). Empty values (`null`,
+`undefined`, `''`) are treated as missing for the required check.
+
+```typescript
+const age = createNumberValidator({ min: 0, max: 120, integer: true });
+
+age(25, 'Age');    // null
+age('30', 'Age');  // null  (numeric strings are parsed)
+age(-5, 'Age');    // "Age must be at least 0"
+age('abc', 'Age'); // "Age must be a valid number"
+```
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `min` / `max` | `number` | Inclusive bounds |
+| `integer` | `boolean` | Reject fractional values |
+| `positive` / `negative` | `boolean` | Strict `> 0` / `< 0` |
+| `multipleOf` | `number` | Value must be a multiple of this |
+| `precision` | `number` | Max number of decimal places |
+| `forbiddenValues` | `number[]` | Disallowed exact values |
+| `required` | `boolean` | Default `true` |
+| `customValidation` | `(value: number) => string \| null` | Runs last, receives the parsed number |
+| `messages` | `object` | Override defaults; `invalidNumber` covers `NaN` |
+
+> `multipleOf` and `precision` use native floating-point math. For money, prefer integer minor
+> units (cents) or a decimal library — `0.1 + 0.2 !== 0.3` applies here too.
+
+---
+
+## Array / multi-select validator
+
+```typescript
+const skills = createArrayValidator({
+  minItems: 1,
+  maxItems: 5,
+  uniqueItems: true,
+  allowedValues: ['JS', 'TS', 'React', 'Node'],
+});
+
+skills(['JS', 'TS'], 'Skills');       // null
+skills([], 'Skills');                 // "Skills must have at least 1 item"
+skills(['JS', 'PHP'], 'Skills');      // "Skills contains invalid selections: PHP"
+```
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `minItems` / `maxItems` | `number` | Item-count bounds (messages pluralize automatically) |
+| `uniqueItems` | `boolean` | Reject duplicates |
+| `allowedValues` | `unknown[]` | Whitelist; invalid items are listed in the error |
+| `forbiddenValues` | `unknown[]` | Blacklist; forbidden items are listed in the error |
+| `required` | `boolean` | Default `true` |
+| `customValidation` | `(value: unknown[]) => string \| null` | Runs last |
+| `messages` | `object` | Override defaults; `invalidArray` covers non-array input |
+
+> When `minItems` is set, an empty value yields the more specific **"must have at least N items"**
+> message instead of the generic required message.
+
+---
+
+## Checkbox / boolean validator
+
+Coerces common checkbox representations to a boolean: real booleans pass through; the strings
+`'true'`, `'1'`, `'on'` (case-insensitive) are truthy; the number `1` is truthy; everything
+else falls back to `Boolean(value)`.
+
+```typescript
+const terms = createCheckboxValidator({
+  mustBeTrue: true,
+  messages: { mustBeTrue: 'You must accept the terms to continue' },
+});
+
+terms(true, 'Terms');  // null
+terms(false, 'Terms'); // "You must accept the terms to continue"
+terms('on', 'Terms');  // null
+```
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `mustBeTrue` | `boolean` | Box must be checked — takes priority over `required` |
+| `mustBeFalse` | `boolean` | Box must be unchecked (e.g. a mandatory opt-out) |
+| `required` | `boolean` | Default `true`; skipped when `mustBeFalse` is set |
+| `customValidation` | `(value: boolean) => string \| null` | Runs last, receives the coerced boolean |
+| `messages` | `object` | Override defaults |
+
+---
+
+## Date validator
+
+```typescript
+const dob = createDateValidator({ maxDate: '2024-01-01', inPast: true });
+
+dob('1990-05-20', 'Date of birth'); // null
+dob('2999-01-01', 'Date of birth'); // "Date of birth cannot be after 2024-01-01"
+```
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `minDate` / `maxDate` | `string \| Date` | Inclusive bounds, compared at local-day granularity |
+| `inFuture` / `inPast` | `boolean` | Strictly after / before **today** (local day) |
+| `inFutureDateTime` / `inPastDateTime` | `boolean` | Strictly after / before the **current instant** |
+| `dateFormat` | `string` | Hint shown in the `invalidDate` message (no custom-format parsing) |
+| `required` | `boolean` | Default `true` |
+| `customValidation` | `(value: Date) => string \| null` | Runs last, receives the parsed `Date` |
+| `messages` | `object` | Override defaults |
+
+Accepted inputs: a `Date` instance, a numeric timestamp, or a string. Strings that are a bare
+`YYYY-MM-DD` are interpreted as a **local** calendar date; strings with an explicit time and/or
+timezone (e.g. `2024-01-15T09:00:00Z`) keep their absolute instant.
+
+### Timezones: UTC vs local — and why it matters
+
+The single most common date bug in forms is the **off-by-one day** caused by UTC parsing:
+
+```typescript
+// The JS spec parses a bare ISO date as UTC midnight:
+new Date('2024-01-15').toISOString(); // "2024-01-15T00:00:00.000Z"
+
+// In a UTC-5 timezone (e.g. New York), that instant is the PREVIOUS local day:
+new Date('2024-01-15').toString();    // "Sun Jan 14 2024 19:00:00 GMT-0500"
+```
+
+So a user in New York who picks **Jan 15** in a `<input type="date">` (which emits the string
+`"2024-01-15"`) would have it stored/compared as **Jan 14** if you parse it with the native
+`new Date(string)`. A `maxDate` of `"2024-01-15"` would then wrongly reject their own selection.
+
+The date validator avoids this with `parseLocalDate`, which builds bare dates from **local**
+calendar parts:
+
+```typescript
+import { parseLocalDate, formatLocalDate } from '@headlesskit/forms';
+
+// Built from local parts → local midnight, same calendar day in every timezone:
+formatLocalDate(parseLocalDate('2024-01-15')); // "2024-01-15" everywhere
+```
+
+Because both the field value **and** the `minDate`/`maxDate` bounds go through `parseLocalDate`,
+boundary comparisons are consistent across timezones: a value on its own `maxDate` day is
+accepted in UTC, UTC-11, UTC+5:30, and UTC+14 alike.
+
+Strings that carry an explicit instant are **not** shifted — `parseLocalDate('2024-01-15T00:00:00Z')`
+preserves the exact UTC moment. Use those when you genuinely mean an absolute timestamp
+(`inFutureDateTime` / `inPastDateTime`), and bare `YYYY-MM-DD` when you mean a calendar day
+(`minDate` / `maxDate` / `inFuture` / `inPast`).
+
+| Helper | Purpose |
+|--------|---------|
+| `parseLocalDate(value)` | Parse to a local `Date`; bare `YYYY-MM-DD` → local midnight, other inputs pass through |
+| `formatLocalDate(date)` | Format a `Date` as a local `YYYY-MM-DD` string (used in messages) |
+
+---
+
+## Using with the form's `validate` (existing validators)
+
+Yes — the field validators compose with the existing form-rule validators (`isNotEmpty`,
+`isEmail`, …) in the same `validate` object. The only difference is signature: field
+validators are `(value, fieldName) => string | null`, while form rules are
+`(value, values, path) => error | null`. Core ships a first-class adapter,
+**`toValidationRule`**, so you don't have to hand-roll the bridge:
+
+```tsx
+import {
+  useForm,
+  isEmail,                 // existing form-rule validator
+  createStringValidator,   // new field validator
+  createNumberValidator,
+  toValidationRule,        // the bridge
+} from '@headlesskit/forms-react';
+
+const nameRule = createStringValidator({ minLength: 3, allowedCharacters: 'alphabetic', allowSpaces: true });
+const ageRule = createNumberValidator({ min: 18, max: 120, integer: true });
+
+function SignupForm() {
+  const form = useForm({
+    mode: 'uncontrolled',
+    initialValues: { name: '', age: '', email: '' },
+    validate: {
+      name: toValidationRule(nameRule, 'Name'),
+      age: toValidationRule(ageRule),       // fieldName inferred from the path → "Age"
+      email: isEmail('Invalid email'),       // existing validators still work side-by-side
+    },
+  });
+
+  return (
+    <form onSubmit={form.onSubmit((values) => console.log(values))}>
+      <input {...form.getInputProps('name')} />
+      <input {...form.getInputProps('age')} type="number" />
+      <button type="submit">Sign up</button>
+    </form>
+  );
+}
+```
+
+`toValidationRule(validator, fieldName?)`:
+
+- Forwards the field value to your validator and supplies the `fieldName`.
+- When `fieldName` is omitted, it derives one from the field's **path** via `humanizeFieldName`
+  (`'user.email'` → `'Email'`, `'items.0.qty'` → `'Qty'`, `'firstName'` → `'First Name'`).
+- Returns a standard `ValidationRule`, so it sits next to `isNotEmpty`, `isEmail`,
+  `schemaResolver`, or any custom `(value, values, path) => …` rule.
+
+> **It's available everywhere.** `toValidationRule` (and every `create*Validator`) is exported
+> from `@headlesskit/forms`, **and** re-exported from `@headlesskit/forms-react` and
+> `@headlesskit/forms-react-native`, so you import from whichever package you already use.
+
+### Standalone (no form store)
+
+They work perfectly well on their own — e.g. in a plain event handler with no form store at all:
+
+```typescript
+const emailRule = createStringValidator({
+  allowedCharacters: 'custom',
+  customPattern: /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
+  messages: { allowedCharacters: 'Enter a valid email' },
+});
+
+const error = emailRule(input.value, 'Email');
+if (error) showError(error);
+```
+
+---
+
+## Custom messages and `{fieldName}`
+
+Every default message includes the `fieldName` you pass at call time. Custom messages may use
+the `{fieldName}` placeholder, which is replaced the same way:
+
+```typescript
+const v = createStringValidator({
+  minLength: 8,
+  messages: { minLength: '{fieldName} needs at least 8 characters' },
+});
+
+v('abc', 'Password'); // "Password needs at least 8 characters"
+```

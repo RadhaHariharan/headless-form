@@ -1,0 +1,47 @@
+# getDefaultEnhancers
+
+**File:** `src/getDefaultEnhancers.ts`
+
+The function [configureStore](./04-configure-store) passes into your `enhancers` callback — analogous to [getDefaultMiddleware](./10-get-default-middleware), but for store enhancers.
+
+## Signature
+
+```typescript
+function getDefaultEnhancers(options?: { autoBatch?: boolean | AutoBatchOptions }): Tuple<StoreEnhancer[]>
+```
+
+| Option | Type | Default | Effect |
+|--------|------|---------|--------|
+| `autoBatch` | `boolean \| AutoBatchOptions` | `true` | Includes [autoBatchEnhancer](./09-auto-batch-enhancer). Pass an options object to customize its batching strategy, or `false` to omit it. |
+
+**Returns:** a `Tuple` starting with the **middleware enhancer** (built from whatever `middleware` you configured — always first, non-optional, non-removable through this function) followed by `autoBatchEnhancer` if enabled.
+
+## Basic usage
+
+```typescript
+import { configureStore } from '@headlesskit/state-management-toolkit';
+
+const store = configureStore({
+  reducer: rootReducer,
+  enhancers: (getDefaultEnhancers) => getDefaultEnhancers({ autoBatch: { type: 'tick' } }),
+});
+```
+
+## Advanced: adding a custom enhancer after the defaults
+
+```typescript
+import { configureStore } from '@headlesskit/state-management-toolkit';
+import { persistenceEnhancer } from './persistenceEnhancer';
+
+const store = configureStore({
+  reducer: rootReducer,
+  enhancers: (getDefaultEnhancers) => getDefaultEnhancers().concat(persistenceEnhancer),
+});
+```
+
+Order matters for enhancers — each one wraps the *previous* result of `createStore`, so an enhancer appended later sees a store that's already been processed by every enhancer before it (including the middleware enhancer and `autoBatchEnhancer`, both already present in `getDefaultEnhancers()`'s return value).
+
+## Common pitfalls
+
+- **The middleware enhancer is always first and can't be reordered through this function** — if you need an enhancer to run *before* middleware is applied (rare, but possible for enhancers that need to intercept `createStore` itself before any middleware wrapping), you'd need to bypass `getDefaultEnhancers` and build the enhancer Tuple manually, calling `applyMiddleware(...)` yourself in the position you want.
+- **`configureStore` logs a console error if you build a custom `enhancers` array that omits the middleware enhancer entirely** while middleware was also configured — see the pitfalls section of [configureStore](./04-configure-store).

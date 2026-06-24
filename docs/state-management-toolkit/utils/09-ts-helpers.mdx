@@ -1,0 +1,55 @@
+# tsHelpers
+
+**File:** `src/tsHelpers.ts` · Mostly internal type-level machinery — `Matcher<T>` and `ActionFromMatcher<M>` are exported from the package root (used directly by [matchers](../07-matchers)); everything else here is internal-only.
+
+A large collection of TypeScript-only conditional-type utilities used throughout the package's generic signatures (`createAction`'s payload-shape inference, `configureStore`'s middleware/enhancer extension extraction, etc). Almost none of this has any runtime behavior — it exists purely to make the package's exported function signatures correctly infer types from how you call them.
+
+## Exported, public-facing
+
+### `Matcher<T>`
+
+```typescript
+type Matcher<T> = HasMatchFunction<T> | TypeGuard<T>
+```
+
+The type accepted by [isAnyOf/isAllOf](../07-matchers) and `builder.addMatcher` — either a plain type-guard function (`(value: any) => value is T`), or an object with a `.match` method of that same shape (the shape every [createAction](../01-create-action)-built action creator has).
+
+### `ActionFromMatcher<M>`
+
+```typescript
+type ActionFromMatcher<M extends Matcher<any>> = M extends Matcher<infer T> ? T : never
+```
+
+Given a `Matcher<T>`, extracts `T` — the action type it narrows to. This is the inference step that lets `isAnyOf(actionCreatorA, actionCreatorB)`'s returned predicate correctly narrow to `ActionA | ActionB` for whoever calls it, without you writing that union out by hand.
+
+### `hasMatchFunction(matcher)`
+
+```typescript
+function hasMatchFunction<T>(v: Matcher<T>): v is HasMatchFunction<T>
+```
+
+The one piece of this file with actual runtime code — a tiny duck-type check (`typeof v.match === 'function'`), used by [matchers](../07-matchers)'s internal `matches()` helper to decide whether to call `matcher.match(action)` or `matcher(action)` directly.
+
+## Internal-only type helpers (reference)
+
+| Type | Purpose |
+|------|---------|
+| `IsAny<T, True, False>` | Detects whether `T` resolved to `any` specifically (not just a wide type) — `any` is the only type where `T extends never ? true : false` is simultaneously satisfiable as both branches, which is the (well-known TS-community) trick this implements. |
+| `IsUnknown<T, True, False>` | Detects whether `T` is exactly `unknown` (and not also `any`, which `IsAny` already covers separately). Powers [createAction](../01-create-action)'s payload-type-driven overload selection (`ActionCreatorWithNonInferrablePayload` vs. the others). |
+| `FallbackIfUnknown<T, Fallback>` | If `T` is `unknown`, use `Fallback` instead — used wherever a generic config field wasn't supplied and a sensible default type should kick in instead of `unknown` leaking out. |
+| `IfMaybeUndefined<P, True, False>` / `IfVoid<P, True, False>` | Branch on whether a type includes `undefined`/`void` specifically — both feed into `createAction`'s payload-creator overload selection (deciding between `ActionCreatorWithOptionalPayload` vs. `ActionCreatorWithoutPayload` vs. `ActionCreatorWithPayload`). |
+| `IsEmptyObj<T, True, False>` / `AtLeastTS35<True, False>` / `IsUnknownOrNonInferrable<T, True, False>` | A chain of increasingly specific checks ultimately used by `createAction` to detect "TypeScript genuinely couldn't infer a useful payload type here" (as opposed to a deliberately empty object type), across different TS-version inference quirks. |
+| `UnionToIntersection<U>` | Standard "distribute a union through a contravariant function-parameter position" trick — turns `A \| B` into `A & B`. Used by [isAllOf](../07-matchers)'s `ActionMatchingAllOf`. |
+| `ExcludeFromTuple<T, E>` | Removes every element matching `E` from a tuple type, preserving the rest's order and tuple-ness (not widening to an array). Used by `getDefaultMiddleware`'s `ThunkMiddlewareFor` to drop the thunk middleware's type entirely when `thunk: false`. |
+| `ExtractDispatchExtensions<M>` / `ExtractStoreExtensions<E>` / `ExtractStateExtensions<E>` | Walk a `Tuple` of middleware/enhancers and accumulate (via intersection) every individual middleware's dispatch extension, or every enhancer's store/state extension — this is the machinery behind `configureStore`'s `EnhancedStore` correctly reflecting *all* your configured middleware/enhancers' type contributions at once. |
+| `NonUndefined<T>` | `T` with `undefined` removed from the union. |
+| `WithRequiredProp<T, K>` / `WithOptionalProp<T, K>` | Make specific keys of an object type required or optional, leaving the rest unchanged. |
+| `Id<T>` | The common "identity mapped type" trick (`{ [K in keyof T]: T[K] } & {}`) — forces TypeScript to eagerly resolve/flatten a complex type alias into a plain object shape for nicer hover tooltips, with no actual runtime or structural effect. |
+| `Tail<T>` | Drops the first element of a tuple type. |
+| `UnknownIfNonSpecific<T>` | If `T` is the empty-object type `{}` (i.e. "nothing specific was provided"), resolves to `unknown` instead — same purpose as the identically-named helper exported from `@headlesskit/state-management`'s [store types](../../state-management/types/04-store). |
+| `SafePromise<T>` / `asSafePromise(promise, fallback)` | A branded `Promise<T>` type plus a runtime helper that always attaches a `.catch(fallback)`, guaranteeing the promise can never reject — used by `createAsyncThunk`'s dispatched-thunk return value, since an async thunk's promise resolving to a `rejected` *action* (not a rejected *promise*) is the whole point of the pattern; nothing should ever see an unhandled rejection from it. |
+| `safeAssign(target, ...sources)` | A thin `Object.assign` wrapper with a `NoInfer<T>` constraint on the source objects, preventing TypeScript from widening `target`'s inferred type based on what you happen to assign into it. |
+
+## Common pitfalls
+
+- **None of this is meant to be imported and used in application code** — `Matcher`/`ActionFromMatcher`/`hasMatchFunction` are the only pieces with a real public-API role (and even those are mostly relevant if you're writing your own custom matcher-accepting helper, not everyday application code). The rest exists purely so the package's *own* public function signatures (`createAction`, `configureStore`, `isAnyOf`, etc.) infer correctly — treat this file as compiler plumbing, not a utility library.

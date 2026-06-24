@@ -1,0 +1,74 @@
+# isAction
+
+**File:** `src/utils/isAction.ts`
+
+A type guard: returns `true` if a value is a plain object with a `type: string` field — i.e. it satisfies the minimum shape required to be dispatched. Built on [isPlainObject](03-is-plain-object).
+
+```typescript
+import { isAction } from '@headlesskit/state-management';
+```
+
+## Signature
+
+```typescript
+isAction(action: unknown): action is Action<string>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `action` | `unknown` | Any value to check. |
+
+**Returns:** `boolean`, narrowing the TypeScript type to `Action<string>` (an object with at least `{ type: string }`) when `true`.
+
+## What it checks, exactly
+
+1. `isPlainObject(action)` is `true` (rules out arrays, class instances, `Map`/`Set`, `null`, primitives).
+2. The object has a `'type'` key (via the `in` operator — so a `type` key with value `undefined` still counts as "has the key").
+3. `typeof action.type === 'string'`.
+
+## Basic usage
+
+```typescript
+import { isAction } from '@headlesskit/state-management';
+
+isAction({ type: 'DO_THING' });          // true
+isAction({ type: 'DO_THING', data: 1 }); // true — extra fields are fine
+isAction({ type: undefined });           // false — type exists but isn't a string
+isAction({ data: 1 });                   // false — no `type` at all
+isAction('a string');                    // false — not even an object
+isAction([]);                            // false — arrays are not plain objects
+isAction(null);                          // false
+isAction(42);                            // false
+```
+
+## Advanced: validating actions before dispatch in a generic wrapper
+
+Useful when you're accepting actions from an untrusted or loosely-typed source (e.g. deserialized from `postMessage`, a WebSocket, or a plugin system) and want to fail gracefully instead of letting `store.dispatch` throw:
+
+```typescript
+import { isAction } from '@headlesskit/state-management';
+
+function safeDispatch(store: Store, candidate: unknown): boolean {
+  if (!isAction(candidate)) {
+    console.warn('Ignored invalid action:', candidate);
+    return false;
+  }
+  store.dispatch(candidate); // TypeScript now knows `candidate` has `.type: string`
+  return true;
+}
+```
+
+## Advanced: as a TypeScript narrowing guard in a reducer pipeline
+
+Because `isAction` is a type predicate (`action is Action<string>`), using it in an `if`/filter narrows the type for everything after it — handy in generic utility code that accepts `unknown[]` and needs to filter down to real actions:
+
+```typescript
+function dispatchAll(store: Store, items: unknown[]) {
+  const actions = items.filter(isAction); // typed as Action<string>[]
+  actions.forEach((a) => store.dispatch(a));
+}
+```
+
+## Relationship to `store.dispatch`'s own validation
+
+`store.dispatch` performs almost the same checks internally (see [createStore's dispatch validation](../02-create-store#dispatch)) and throws if they fail. `isAction` exists so you can run the *same* check yourself, ahead of time, without triggering an exception — e.g. to decide whether to even attempt a dispatch, or to filter a batch of candidate actions down to valid ones first.

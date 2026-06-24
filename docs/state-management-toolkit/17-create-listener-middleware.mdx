@@ -1,0 +1,174 @@
+# createListenerMiddleware
+
+**File:** `src/listenerMiddleware/index.ts` (562 lines), plus `types.ts` (886 lines), `task.ts`, `exceptions.ts`, `utils.ts`
+
+A middleware-based alternative to writing your own side-effect logic by hand (or reaching for a saga/observable library) — lets you register **effects** ("when action X happens, run this async function") with rich built-in support for cancellation, debouncing, sequencing (`take`/`condition`), and spawning cancellable child tasks (`fork`).
+
+## Signature
+
+```typescript
+function createListenerMiddleware<State, Dispatch, ExtraArgument = unknown>(
+  options?: { extra?: ExtraArgument; onError?: (error, errorInfo) => void },
+): {
+  middleware: Middleware;
+  startListening: AddListenerOverloads;
+  stopListening: (options) => boolean;
+  clearListeners: () => void;
+}
+```
+
+| Option | Description |
+|--------|--------------|
+| `extra` | An arbitrary value injected into every listener effect's API (e.g. an API client) — same purpose as the thunk middleware's `extraArgument`. |
+| `onError` | Called whenever a listener effect throws (except `TaskAbortError`, which is expected/normal cancellation, not an error) — defaults to `console.error`. |
+
+```typescript
+import { createListenerMiddleware } from '@headlesskit/state-management-toolkit';
+import { configureStore } from '@headlesskit/state-management-toolkit';
+
+const listenerMiddleware = createListenerMiddleware();
+
+const store = configureStore({
+  reducer: rootReducer,
+  middleware: (getDefaultMiddleware) =>
+    getDefaultMiddleware().prepend(listenerMiddleware.middleware),
+});
+```
+
+## `startListening(options)` — registering an effect
+
+```typescript
+listenerMiddleware.startListening({
+  actionCreator: todoAdded, // or: type: 'todos/add' / matcher: isAnyOf(...) / predicate: (action, state, prevState) => boolean
+  effect: async (action, listenerApi) => {
+    // your side effect
+  },
+});
+```
+
+Exactly one of `type` / `actionCreator` / `matcher` / `predicate` must be provided to specify *which* dispatched actions trigger this listener — same matching options as `addCase`/`addMatcher` elsewhere in the toolkit, but here a `predicate` additionally receives `(action, currentState, originalState)` for full control.
+
+**Returns** an unsubscribe function: `stopListening = startListening({...})`.
+
+## `stopListening(options)` / `listenerMiddleware.stopListening(options)`
+
+```typescript
+const wasFound = listenerMiddleware.stopListening({ actionCreator: todoAdded, effect: myEffect });
+```
+
+Removes a previously-registered listener (matched by the same `type`/`actionCreator`/`matcher`/`predicate` + `effect` reference). Returns `true` if a matching listener was found and removed. Pass `{ cancelActive: true }` to also abort any currently in-flight execution of that listener's effect.
+
+## `clearListeners()`
+
+Removes every registered listener and cancels every currently-executing effect — useful for full teardown (e.g. in tests, between test cases).
+
+## `addListener` / `removeListener` / `clearAllListeners` — dispatchable equivalents
+
+The same three operations are also available as plain actions you can `dispatch()` (useful from inside a thunk, or anywhere you have `dispatch` but not a direct reference to the `listenerMiddleware` instance):
+
+```typescript
+import { addListener, removeListener, clearAllListeners } from '@headlesskit/state-management-toolkit';
+
+dispatch(addListener({ actionCreator: todoAdded, effect: myEffect }));
+dispatch(removeListener({ actionCreator: todoAdded, effect: myEffect }));
+dispatch(clearAllListeners());
+```
+
+## The `listenerApi` object (your effect's second argument)
+
+| Field | Description |
+|-------|--------------|
+| `getState()` / `dispatch(action)` | Standard store access, same as any middleware's `api`. |
+| `getOriginalState()` | State **before** this action was processed by the reducer — only callable synchronously, at the start of your effect (it throws if called after an `await`, since by then the "original" snapshot reference has been released — see pitfalls). |
+| `extra` | Whatever you configured via `createListenerMiddleware({ extra })`. |
+| `signal` | An `AbortSignal` tied to this specific effect invocation — aborted if the listener is cancelled or unsubscribed mid-run. |
+| `condition(predicate, timeout?)` | Pauses the effect until `predicate(action, state, prevState)` becomes true for some *future* dispatched action, or `timeout` ms elapses — resolves to `true`/`false` accordingly. The core building block for "wait for X to happen, then do Y." |
+| `take(predicate, timeout?)` | Like `condition`, but resolves to the `[action, state, prevState]` tuple that satisfied the predicate (or `null` on timeout) instead of just a boolean. |
+| `pause(promise)` | Wraps any promise so it rejects with `TaskAbortError` if this listener gets cancelled while the promise is pending — use to make your own async calls cancellation-aware. |
+| `delay(ms)` | A cancellation-aware `setTimeout` — rejects with `TaskAbortError` instead of resolving, if cancelled mid-delay. |
+| `fork(taskExecutor, options?)` | Spawns a child task with its own `{ pause, delay, signal }`, cancelled automatically if the parent effect is cancelled. Pass `{ autoJoin: true }` to make the parent effect implicitly wait for the fork before fully completing. |
+| `unsubscribe()` / `subscribe()` | Stop (or, if previously stopped, resume) this listener from inside its own effect — e.g. a "run once" listener calling `unsubscribe()` as its first line. |
+| `cancelActiveListeners()` | Cancels every *other* currently-running execution of this same listener (useful for "only the latest dispatch should win" / debounce-like patterns). |
+| `cancel()` / `throwIfCancelled()` | Self-cancel this specific execution, or assert it hasn't already been cancelled (throwing `TaskAbortError` if it has). |
+
+## Basic usage: a simple side effect
+
+```typescript
+listenerMiddleware.startListening({
+  actionCreator: userLoggedIn,
+  effect: async (action, listenerApi) => {
+    localStorage.setItem('lastLogin', new Date().toISOString());
+    listenerApi.dispatch(fetchUserPreferences(action.payload.userId));
+  },
+});
+```
+
+## Advanced: debounced search-as-you-type
+
+```typescript
+listenerMiddleware.startListening({
+  actionCreator: searchQueryChanged,
+  effect: async (action, listenerApi) => {
+    // cancel any in-flight search for a previous keystroke
+    listenerApi.cancelActiveListeners();
+    // wait for the user to stop typing
+    await listenerApi.delay(300);
+
+    const results = await fetch(`/api/search?q=${action.payload}`).then((r) => r.json());
+    listenerApi.dispatch(searchResultsReceived(results));
+  },
+});
+```
+
+## Advanced: waiting for a sequence of actions (`take`)
+
+```typescript
+listenerMiddleware.startListening({
+  actionCreator: checkoutStarted,
+  effect: async (_action, listenerApi) => {
+    const result = await listenerApi.take(
+      (action) => paymentSucceeded.match(action) || paymentFailed.match(action),
+      30_000, // give up after 30s
+    );
+
+    if (result === null) {
+      listenerApi.dispatch(checkoutTimedOut());
+      return;
+    }
+
+    const [resultAction] = result;
+    if (paymentSucceeded.match(resultAction)) {
+      listenerApi.dispatch(orderConfirmed());
+    }
+  },
+});
+```
+
+## Advanced: forking a cancellable background task
+
+```typescript
+listenerMiddleware.startListening({
+  actionCreator: uploadStarted,
+  effect: async (action, listenerApi) => {
+    const uploadTask = listenerApi.fork(async (forkApi) => {
+      for (const chunk of action.payload.chunks) {
+        forkApi.signal.throwIfAborted?.(); // bail out early if the fork was cancelled
+        await uploadChunk(chunk);
+      }
+      return 'done';
+    });
+
+    const result = await uploadTask.result; // { status: 'ok' | 'cancelled' | 'rejected', value/error }
+    if (result.status === 'ok') {
+      listenerApi.dispatch(uploadCompleted());
+    }
+  },
+});
+```
+
+## Common pitfalls
+
+- **`getOriginalState()` can only be called synchronously, before your first `await`** — calling it after an `await` throws `` `listenerMiddleware: getOriginalState can only be called synchronously` `` deliberately, because the underlying state reference is released right after the listener-dispatch loop finishes synchronously processing all matching listeners for one action (to avoid leaking old state snapshots in memory for listeners that run long after the triggering action).
+- **A thrown error inside an effect doesn't crash the app** — it's caught and routed to `onError` (default: `console.error`), then execution moves on; don't rely on a listener effect's thrown error propagating anywhere else (e.g. to an `unhandledrejection` handler) unless you explicitly configure `onError` to re-throw or report it elsewhere.
+- **`TaskAbortError` thrown by `pause`/`delay`/`take`/`condition` (when cancelled) is *not* reported to `onError`** — it's treated as expected control flow (the listener was deliberately cancelled), not a bug; don't wrap every `await` in a generic try/catch that swallows this distinction, or you'll mask real cancellation behavior as a silent no-op.
+- **Listeners registered with the exact same `type`/`actionCreator`/`matcher`/`predicate` *and* the exact same `effect` function reference are treated as the same listener** (`findListenerEntry` matches both) — calling `startListening` twice with an inline arrow function effect registers two *separate* listeners (since each inline arrow is a new function reference), which is usually not what you want if you're trying to avoid duplicate registration; define the effect as a named, stable function reference if you need idempotent registration.

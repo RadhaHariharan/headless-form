@@ -1,0 +1,47 @@
+# defaultSerializeQueryArgs
+
+**File:** `src/query/defaultSerializeQueryArgs.ts`
+
+Builds the cache-key string for every query/mutation cache entry — `` `${endpointName}(${JSON.stringify(sortedQueryArgs)})` `` — unless overridden by [createApi](./01-create-api)'s top-level `serializeQueryArgs` or a per-endpoint one (see [endpoint definitions](./05-endpoint-definitions)).
+
+## Signature
+
+```typescript
+type SerializeQueryArgs<QueryArgs> = (params: {
+  queryArgs: QueryArgs;
+  endpointDefinition: EndpointDefinition;
+  endpointName: string;
+}) => string
+```
+
+## What it actually does
+
+1. Checks a `WeakMap` cache keyed by the exact `queryArgs` object reference — if this exact object was already serialized before, reuses the cached string instead of re-stringifying (a meaningful performance win when the same arg object is passed to many query subscriptions in a render-heavy app).
+2. Otherwise, `JSON.stringify`s `queryArgs` with a custom replacer that: (a) converts `bigint` values to `{ $bigint: "..." }` (since `JSON.stringify` throws on raw `bigint`), and (b) **recursively sorts every plain object's keys alphabetically** before stringifying.
+3. Prefixes the result with the endpoint name: `getPost({"id":1})`.
+
+The key-sorting step is the most important behavioral detail: it guarantees `query({ a: 1, b: 2 })` and `query({ b: 2, a: 1 })` produce the **same** cache key, so two components calling the same query with differently-ordered (but semantically identical) argument objects share one cache entry instead of each triggering a separate, redundant fetch.
+
+## Basic usage (you rarely call this directly)
+
+Most apps never call this function directly — it's the implicit default everywhere a `serializeQueryArgs` option isn't supplied. You'd reach for understanding it specifically when debugging "why are these two calls treated as different cache entries" (usually: an argument value that isn't stable/serializable the same way each time — see pitfalls) or "why are these two calls treated as the *same* cache entry when I expected separate ones" (usually: deep-equal-but-conceptually-different arg objects).
+
+## Advanced: a custom serializer that ignores irrelevant arg fields
+
+```typescript
+const api = createApi({
+  baseQuery: fetchBaseQuery({ baseUrl: '/api' }),
+  serializeQueryArgs: ({ endpointName, queryArgs }) => {
+    // ignore a `requestId`-style field that's unique per call but shouldn't affect caching
+    const { requestId, ...cacheRelevantArgs } = queryArgs;
+    return `${endpointName}(${JSON.stringify(cacheRelevantArgs)})`;
+  },
+  endpoints: (builder) => ({ /* ... */ }),
+});
+```
+
+## Common pitfalls
+
+- **Functions, `Symbol`s, and `undefined` values inside `queryArgs` are silently dropped by `JSON.stringify`** (standard JSON.stringify behavior, not anything special this function adds) — if two calls differ only in such a field, they'll collide into the same cache key; avoid passing non-serializable values as query args, or use a custom `serializeQueryArgs` that accounts for them explicitly.
+- **Object key order in your `query` function's arguments never matters for caching**, by design — don't add your own key-sorting workaround, the default serializer already handles this.
+- **The `WeakMap` reference cache only helps when the *same object reference* is reused** — constructing a brand-new arg object with identical contents on every render (e.g. `query({ id })` where `{ id }` is a fresh literal each call) still gets correctly deduplicated by content (the `JSON.stringify` result is identical), just without the reference-cache fast path; this is a performance nuance, not a correctness one.

@@ -1,0 +1,59 @@
+# utils
+
+**File:** `src/utils.ts` · Mixed visibility — `Tuple` is exported from the package root; the rest (`getTimeMeasureUtils`, `delay`, `freezeDraftable`, `getOrInsert`, `getOrInsertComputed`, `promiseWithResolvers`) are internal-only.
+
+A grab-bag of small internal helpers used across several other files.
+
+## `Tuple<Items>` — exported
+
+```typescript
+class Tuple<Items extends ReadonlyArray<unknown> = []> extends Array<Items[number]> {
+  concat(...items): Tuple<[...Items, ...AdditionalItems]>
+  prepend(...items): Tuple<[...AdditionalItems, ...Items]>
+}
+```
+
+A typed `Array` subclass that exists specifically so [getDefaultMiddleware](../10-get-default-middleware)/[getDefaultEnhancers](../11-get-default-enhancers)'s return values, and your own `.concat()`-extended versions of them, keep **precise tuple types** through chained `.concat()` calls — a plain `Array<Middleware>.concat(x)` would widen to `Middleware[]`, losing the specific ordered-tuple type information `configureStore`'s generics rely on to correctly type the final enhanced store's `dispatch`.
+
+```typescript
+import { Tuple } from '@headlesskit/state-management-toolkit';
+
+const middleware = new Tuple(thunkMiddleware, logger);
+// type: Tuple<[typeof thunkMiddleware, typeof logger]>
+
+const extended = middleware.concat(crashReporter);
+// type: Tuple<[typeof thunkMiddleware, typeof logger, typeof crashReporter]> — order and identity preserved
+```
+
+`.prepend(...)` is the same idea but adds items to the front — used internally by [getDefaultMiddleware](../10-get-default-middleware) to put the two dev-only invariant-check middlewares before the thunk middleware in the final order, regardless of what order your own `.concat()` calls run in.
+
+## Internal helpers
+
+| Function | Signature | Used by |
+|----------|-----------|---------|
+| `getTimeMeasureUtils(maxDelay, fnName)` | returns `{ measureTime(fn), warnIfExceeded() }` | [immutableStateInvariantMiddleware](../13-immutable-state-invariant-middleware) and [serializableStateInvariantMiddleware](../14-serializable-state-invariant-middleware) — wraps their per-dispatch deep-walk logic to track cumulative time spent and warn if it exceeds the configured `warnAfter` threshold. |
+| `delay(ms)` | `Promise<void>` after `ms` | Test-suite helper for the package itself; not used in any public runtime code path. |
+| `freezeDraftable(val)` | freezes `val` via Immer's `produce` if `isDraftable(val)`, else returns it unchanged | [createReducer](../02-create-reducer) — used to freeze the resolved initial state, catching accidental mutation of *initial* state (a common bug distinct from mutating state mid-reducer). |
+| `getOrInsert(map, key, value)` | reads `map.get(key)`, or sets+returns `value` if absent | Generic "get-or-default-insert" for `Map`/`WeakMap`, used in a few bookkeeping spots (e.g. [combineSlices](../08-combine-slices)). |
+| `getOrInsertComputed(map, key, compute)` | same, but lazily computes the default via `compute(key)` only when actually missing | Same purpose as `getOrInsert`, but avoids constructing the default value when the key already exists — used by [createSlice](../05-create-slice)'s internal symbol-keyed bookkeeping. |
+| `promiseWithResolvers()` | `{ promise, resolve, reject }` | An internal polyfill-style helper for the `Promise.withResolvers()` pattern (not yet universally available across all target runtimes at the time this was written) — exposes a promise's `resolve`/`reject` without nesting executor logic. |
+
+## Advanced: measuring your own expensive dev-mode check
+
+```typescript
+import { getTimeMeasureUtils } from '@headlesskit/state-management-toolkit'; // internal — illustrative only
+
+const { measureTime, warnIfExceeded } = getTimeMeasureUtils(32, 'myCustomCheck');
+
+function myMiddleware(store) {
+  return (next) => (action) => {
+    const result = measureTime(() => next(action));
+    warnIfExceeded();
+    return result;
+  };
+}
+```
+
+## Common pitfalls
+
+- **Only `Tuple` is part of the public API** — the rest of this file is internal plumbing; importing the other helpers directly from `@headlesskit/state-management-toolkit` will fail since they aren't re-exported from the package's `index.ts`. The illustrative example above shows the *pattern*, not an actually-importable call.

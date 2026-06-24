@@ -1,0 +1,125 @@
+# Matchers
+
+**File:** `src/matchers.ts`
+
+A set of predicate-function builders for checking action shapes — both general-purpose (`isAnyOf`, `isAllOf`) and specifically tailored to the pending/fulfilled/rejected actions produced by [createAsyncThunk](./05-create-async-thunk). Heavily used in `createReducer`/`createSlice`'s `addMatcher` (see [createReducer](./02-create-reducer)).
+
+## `isAnyOf(...matchers)`
+
+```typescript
+function isAnyOf<Matchers extends Matcher<any>[]>(...matchers: Matchers):
+  (action: any) => action is ActionMatchingAnyOf<Matchers>
+```
+
+Returns `true` if **any** of the supplied matchers accepts the action. Each "matcher" can be either a plain type-guard function (`(action) => boolean`) or anything with a `.match()` method (action creators from [createAction](./01-create-action), or thunk action creators from [createAsyncThunk](./05-create-async-thunk)).
+
+```typescript
+import { isAnyOf } from '@headlesskit/state-management-toolkit';
+
+const userLoggedIn = createAction('auth/login');
+const userLoggedOut = createAction('auth/logout');
+
+const isAuthEvent = isAnyOf(userLoggedIn, userLoggedOut);
+isAuthEvent({ type: 'auth/login' });  // true
+isAuthEvent({ type: 'todos/add' });   // false
+```
+
+## `isAllOf(...matchers)`
+
+```typescript
+function isAllOf<Matchers extends Matcher<any>[]>(...matchers: Matchers):
+  (action: any) => action is ActionMatchingAllOf<Matchers>
+```
+
+Returns `true` only if **every** supplied matcher accepts the action. Useful for combining a broad category check with a narrower condition — this is exactly how `isRejectedWithValue` is implemented internally (`isAllOf(isRejected(...), hasRejectedWithValueFlag)`).
+
+```typescript
+const isFulfilledOrRejected = isAnyOf(thunk.fulfilled, thunk.rejected);
+const isFulfilledOrRejectedForThisUser = isAllOf(
+  isFulfilledOrRejected,
+  (action) => action.meta.arg.userId === currentUserId,
+);
+```
+
+## Async-thunk lifecycle matchers
+
+Each of these has three overload shapes, controlling what it matches:
+
+| Call | Matches |
+|------|---------|
+| `isPending()` | **Any** pending action from **any** async thunk (detected structurally via `action.meta.requestId` + `action.meta.requestStatus === 'pending'`, not tied to specific thunk instances). |
+| `isPending(thunkA, thunkB)` | Only pending actions from `thunkA` or `thunkB` specifically. |
+| `isPending(action)` | (single-argument, non-thunk form) Directly tests one action — `isPending` used as a plain predicate instead of a factory. |
+
+The same three-shape pattern applies to `isRejected`, `isFulfilled`, and `isAsyncThunkAction` (which matches pending **or** fulfilled **or** rejected — any lifecycle action at all from a thunk).
+
+```typescript
+import { isPending, isFulfilled, isRejected } from '@headlesskit/state-management-toolkit';
+import { fetchUser, fetchPosts } from './thunks';
+
+// matches the pending action of ANY thunk in the entire app
+const isAnyLoading = isPending();
+
+// matches the pending action of ONLY these two thunks
+const isUserOrPostsLoading = isPending(fetchUser, fetchPosts);
+```
+
+### `isRejectedWithValue`
+
+```typescript
+function isRejectedWithValue(...asyncThunks): (action) => boolean
+```
+
+A narrower version of `isRejected` — only matches rejections that came from the thunk explicitly calling `rejectWithValue(...)` (see [createAsyncThunk](./05-create-async-thunk)), as opposed to an unexpected thrown error. Checks `action.meta.rejectedWithValue === true`, a flag only `rejectWithValue`-triggered rejections carry.
+
+## Basic usage: a generic "any request loading" reducer
+
+```typescript
+import { createReducer } from '@headlesskit/state-management-toolkit';
+import { isPending, isFulfilled, isRejected } from '@headlesskit/state-management-toolkit';
+
+interface ApiState {
+  loading: boolean;
+  error: string | null;
+}
+
+const apiReducer = createReducer<ApiState>({ loading: false, error: null }, (builder) => {
+  builder
+    .addMatcher(isPending, (state) => {
+      state.loading = true;
+      state.error = null;
+    })
+    .addMatcher(isFulfilled, (state) => {
+      state.loading = false;
+    })
+    .addMatcher(isRejected, (state, action) => {
+      state.loading = false;
+      state.error = action.error.message ?? 'Unknown error';
+    });
+});
+```
+
+This single reducer tracks a global loading flag for **every** async thunk dispatched anywhere in the app, without needing to know about any specific thunk.
+
+## Advanced: scoping matchers to a specific set of thunks
+
+```typescript
+import { fetchUser, fetchPosts, fetchComments } from './thunks';
+import { isAnyOf } from '@headlesskit/state-management-toolkit';
+
+const criticalThunks = [fetchUser, fetchPosts, fetchComments] as const;
+
+const isCriticalPending = isAnyOf(...criticalThunks.map((t) => t.pending));
+const isCriticalRejected = isAnyOf(...criticalThunks.map((t) => t.rejected));
+
+const dashboardReducer = createReducer({ blockingError: false }, (builder) => {
+  builder
+    .addMatcher(isCriticalPending, (state) => { state.blockingError = false; })
+    .addMatcher(isCriticalRejected, (state) => { state.blockingError = true; });
+});
+```
+
+## Common pitfalls
+
+- **`isPending`/`isRejected`/`isFulfilled` called with zero arguments still return a function** — `isPending()` is the "match any thunk" predicate, not "match nothing." If you meant to test a single action directly, that's the *other* overload (`isPending(someAction)` — a single non-thunk-looking argument), and the implementation detects which you meant based on whether the first argument structurally looks like a thunk action creator (has `.pending`/`.fulfilled`/`.rejected`) vs. a plain action.
+- **`addMatcher` runs every matching matcher**, not just the first — if two matchers in the same `createReducer` both return `true` for an action, both of their reducer functions execute, in registration order. Design matchers to be mutually exclusive if you need exactly-one-handler semantics.

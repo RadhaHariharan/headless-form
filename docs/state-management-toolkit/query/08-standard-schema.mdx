@@ -1,0 +1,75 @@
+# standardSchema (runtime validation)
+
+**File:** `src/query/standardSchema.ts`
+
+Implements RTK Query's runtime schema validation — letting [endpoint definitions](./05-endpoint-definitions) declare `argSchema`/`responseSchema`/`errorResponseSchema`/`metaSchema`/`rawResponseSchema`/`rawErrorResponseSchema` using **any** validation library that implements the [Standard Schema](https://github.com/standard-schema/standard-schema) spec (Zod, Valibot, ArkType, and others all support it) — RTK Query itself depends on none of them directly.
+
+## `NamedSchemaError`
+
+```typescript
+class NamedSchemaError extends SchemaError {
+  issues: readonly StandardSchemaV1.Issue[]; // inherited
+  value: any;             // the data that failed validation
+  schemaName: `${SchemaType}Schema`; // e.g. 'argSchema', 'responseSchema'
+  _bqMeta: any;           // base-query meta, for error context
+}
+```
+
+This is the error object passed to [createApi](./01-create-api)'s `onSchemaFailure` callback and the input to `catchSchemaFailure` — `schemaName` tells you exactly *which* of the six possible schemas failed, and `value` is the actual data that didn't validate.
+
+## `parseWithSchema(schema, data, schemaName, bqMeta)`
+
+```typescript
+async function parseWithSchema<Schema>(schema, data, schemaName, bqMeta): Promise<InferOutput<Schema>>
+```
+
+The actual validation call — invokes the schema's `~standard.validate(data)` method (the Standard Schema spec's required interface), and throws a `NamedSchemaError` if `result.issues` is present. This is called once per configured schema, at the appropriate point in the request/response pipeline (e.g. `argSchema` validated before the request fires, `responseSchema` after the response is transformed).
+
+## `shouldSkip(skipSchemaValidation, schemaName)`
+
+Implements [createApi](./01-create-api)'s `skipSchemaValidation` option's semantics: `true`/`false` applies uniformly to every schema, while an array of `SchemaType` names (`'arg' | 'response' | 'errorResponse' | 'meta' | 'rawResponse' | 'rawErrorResponse'`) skips only the listed ones.
+
+## Basic usage (via endpoint options — you don't call this file's functions directly)
+
+```typescript
+import { createApi, fetchBaseQuery } from '@headlesskit/state-management-toolkit/query';
+import * as v from 'valibot';
+
+const PostSchema = v.object({ id: v.number(), title: v.string() });
+
+const api = createApi({
+  baseQuery: fetchBaseQuery({ baseUrl: '/api' }),
+  onSchemaFailure: (error, info) => {
+    console.error(`Schema validation failed for ${info.endpoint}:`, error.issues);
+  },
+  endpoints: (builder) => ({
+    getPost: builder.query<v.InferOutput<typeof PostSchema>, { id: number }>({
+      query: ({ id }) => `/post/${id}`,
+      responseSchema: PostSchema, // validates the actual server response shape at runtime
+    }),
+  }),
+});
+```
+
+## Advanced: converting a schema failure into a normal query error
+
+By default, a schema failure is treated as fatal — it doesn't flow through the same error path real request errors do (no tag-invalidation-skip behavior, etc). `catchSchemaFailure` bridges the two:
+
+```typescript
+const api = createApi({
+  baseQuery: fetchBaseQuery({ baseUrl: '/api' }),
+  catchSchemaFailure: (error, info) => ({
+    status: 'CUSTOM_ERROR' as const,
+    error: `${error.schemaName} validation failed`,
+    data: error.issues,
+  }),
+  endpoints: (builder) => ({ /* ... */ }),
+});
+```
+
+With this in place, a schema failure now produces a normal `FetchBaseQueryError`-shaped result, so `isError`/`error` checks in your components see it exactly like any other request failure.
+
+## Common pitfalls
+
+- **Without `catchSchemaFailure`, a schema failure is unhandled by the normal error UI path** — `onSchemaFailure` is purely a side-effect hook (logging, reporting) and doesn't change what the query/mutation actually resolves to; if you want the failure to show up in your component's error state, you need `catchSchemaFailure` too, not just `onSchemaFailure`.
+- **Validating large responses on every request has a real runtime cost** — schema validation isn't free; for very large or very frequent responses, consider `skipSchemaValidation` for the heaviest endpoints, or validate only a subset (`argSchema` only, skipping `responseSchema`) if you trust the server more than the client input.

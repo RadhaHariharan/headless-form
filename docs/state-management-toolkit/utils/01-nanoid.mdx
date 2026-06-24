@@ -1,0 +1,54 @@
+# nanoid
+
+**File:** `src/nanoid.ts` · Exported from the package root.
+
+A tiny (21-character by default), non-cryptographic random ID generator — vendored from the `nanoid` non-secure build rather than taken as a dependency, to keep the toolkit's own bundle size and dependency count down.
+
+## Signature
+
+```typescript
+function nanoid(size?: number): string
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|--------------|
+| `size` | `number` | `21` | Length of the generated ID string. |
+
+**Returns:** a string built from a 64-character alphabet (`A-Za-z0-9_-`, reordered specifically to optimize gzip compression of code that embeds it), picking one random character per position via `Math.random()`.
+
+## Where this is used internally
+
+[createAsyncThunk](../06-create-async-thunk) uses `nanoid()` as the default `requestId` generator for every dispatched thunk call (overridable via the `idGenerator` option). [combineSlices](../08-combine-slices) also uses it internally for some bookkeeping.
+
+## Basic usage
+
+```typescript
+import { nanoid } from '@headlesskit/state-management-toolkit';
+
+const id = nanoid(); // e.g. 'V1StGXR8_Z5jdHi6B-myT'
+const shortId = nanoid(8); // e.g. 'V1StGXR8'
+```
+
+## Advanced: using it as a stable entity ID in a reducer
+
+```typescript
+const todosSlice = createSlice({
+  name: 'todos',
+  initialState: { items: [] as { id: string; text: string }[] },
+  reducers: {
+    add: {
+      reducer(state, action: PayloadAction<{ id: string; text: string }>) {
+        state.items.push(action.payload);
+      },
+      prepare(text: string) {
+        return { payload: { id: nanoid(), text } };
+      },
+    },
+  },
+});
+```
+
+## Common pitfalls
+
+- **Not cryptographically secure** — this is explicitly the "non-secure" build of nanoid's algorithm (uses `Math.random()`, not `crypto.getRandomValues()`). Fine for request-correlation IDs, list keys, and similar low-stakes uses; do not use it to generate security tokens, session IDs, or anything where unpredictability actually matters.
+- **Collisions are possible, if astronomically unlikely, at default length** — for extremely high-volume ID generation (millions+ per session), consider a longer `size` or a proper UUID library instead.

@@ -1,0 +1,376 @@
+# getInputProps
+
+`form.getInputProps(path, options?)` returns an object of props to spread onto a DOM input element.
+It handles `value`/`defaultValue`, `onChange`, `onFocus`, `onBlur`, and `error` automatically.
+
+---
+
+## Basic Usage
+
+```tsx
+import { useForm } from '@headlesskit/forms-react';
+
+function Demo() {
+  const form = useForm({
+    mode: 'uncontrolled',
+    initialValues: { name: '', accepted: false },
+    validate: {
+      name: (value) => value.trim().length > 2 ? null : 'Name too short',
+    },
+  });
+
+  return (
+    <>
+      {/* Text input — spread getInputProps directly */}
+      <input
+        key={form.key('name')}
+        {...form.getInputProps('name')}
+        placeholder="Name"
+      />
+      {form.errors.name && <p>{form.errors.name}</p>}
+
+      {/* Checkbox — pass { type: 'checkbox' } */}
+      <label>
+        <input
+          key={form.key('accepted')}
+          type="checkbox"
+          {...form.getInputProps('accepted', { type: 'checkbox' })}
+        />
+        Accept terms
+      </label>
+    </>
+  );
+}
+```
+
+---
+
+## Options
+
+The second argument to `getInputProps` is an options object:
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `type` | `'input' \| 'checkbox' \| 'radio'` | `'input'` | Controls which value/checked prop is returned. Use `'checkbox'` for booleans, `'radio'` for radio groups. |
+| `value` | `string` | — | **Required for `type: 'radio'`**. The value of this specific radio option. |
+| `withError` | `boolean` | `type === 'input'` | Whether to include the `error` prop. Set to `false` to suppress errors on non-text inputs. |
+| `withFocus` | `boolean` | `true` (`false` for radio) | Whether to include the `onFocus` handler. Disabling means touched state only changes on value change. |
+
+---
+
+## What getInputProps Returns
+
+### Controlled Mode
+
+```typescript
+form.getInputProps('email')
+// {
+//   value: 'user@example.com',
+//   onChange: (event) => void,
+//   onFocus: (event) => void,
+//   onBlur: (event) => void,
+//   error: 'Invalid email' | null,
+//   'data-path': 'email',
+// }
+```
+
+### Uncontrolled Mode
+
+```typescript
+form.getInputProps('email')
+// {
+//   defaultValue: 'user@example.com',
+//   onChange: (event) => void,
+//   onFocus: (event) => void,
+//   onBlur: (event) => void,
+//   error: 'Invalid email' | null,
+//   'data-path': 'email',
+// }
+```
+
+### Checkbox
+
+```typescript
+// Controlled
+form.getInputProps('active', { type: 'checkbox' })
+// { checked: true, onChange, onFocus, onBlur, 'data-path': 'active' }
+
+// Uncontrolled
+form.getInputProps('active', { type: 'checkbox' })
+// { defaultChecked: true, onChange, onFocus, onBlur, 'data-path': 'active' }
+```
+
+---
+
+## Radio Inputs
+
+Use `type: 'radio'` with the `value` option to bind individual radio options.
+`getInputProps` returns `checked` (or `defaultChecked` in uncontrolled mode) by comparing
+the form field value against the provided `value`:
+
+```tsx
+import { useForm } from '@headlesskit/forms-react';
+
+function Demo() {
+  const form = useForm({
+    mode: 'uncontrolled',
+    initialValues: { color: 'red' },
+  });
+
+  return (
+    <fieldset>
+      <legend>Color</legend>
+      {['red', 'green', 'blue'].map((color) => (
+        <label key={color}>
+          <input
+            key={form.key('color')}
+            type="radio"
+            {...form.getInputProps('color', { type: 'radio', value: color })}
+          />
+          {color}
+        </label>
+      ))}
+    </fieldset>
+  );
+}
+```
+
+The returned object for `type: 'radio'` includes:
+```typescript
+{
+  checked: formValue === optionValue,   // or defaultChecked in uncontrolled
+  value: optionValue,
+  onChange: (event) => void,
+  onBlur: (event) => void,
+  // onFocus is omitted by default for radio (withFocus: false)
+  'data-path': 'color',
+}
+```
+
+---
+
+## enhanceGetInputProps
+
+`enhanceGetInputProps` is a function in the form options that runs after the default
+`getInputProps` result is built. Its return value is merged onto the props object.
+
+The payload argument contains:
+- `inputProps` — the default result from `getInputProps`
+- `field` — the dot-notation path (e.g. `'name'`, `'user.email'`, `'users.0.name'`)
+- `options` — the second argument passed to `getInputProps`
+- `form` — the form instance
+
+### Disable a specific field
+
+```tsx
+import { useForm } from '@headlesskit/forms-react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: { name: '', role: '' },
+  enhanceGetInputProps: ({ field }) => {
+    if (field === 'role') {
+      return { disabled: true };
+    }
+  },
+});
+```
+
+### Pass additional options through getInputProps
+
+```tsx
+import { useForm } from '@headlesskit/forms-react';
+
+// Define custom options (not part of the standard GetInputPropsOptions)
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: { name: '' },
+  enhanceGetInputProps: ({ options }) => {
+    // Options can carry any custom data you pass as the second arg
+    if ((options as { size?: string }).size === 'large') {
+      return { style: { fontSize: '1.5rem' } };
+    }
+  },
+});
+
+// Pass custom options from getInputProps call
+form.getInputProps('name', { size: 'large' } as any)
+```
+
+### Disable all inputs until initialized
+
+```tsx
+import { useEffect } from 'react';
+import { useForm } from '@headlesskit/forms-react';
+
+function Demo() {
+  const form = useForm({
+    mode: 'uncontrolled',
+    initialValues: { name: '', email: '' },
+    enhanceGetInputProps: () => {
+      if (!form.initialized) {
+        return { disabled: true };
+      }
+    },
+  });
+
+  useEffect(() => {
+    fetchUser().then((user) => form.initialize(user));
+  }, []);
+
+  return (
+    <form onSubmit={form.onSubmit(console.log)}>
+      <input key={form.key('name')} {...form.getInputProps('name')} placeholder="Name" />
+      <input key={form.key('email')} {...form.getInputProps('email')} placeholder="Email" />
+      <button type="submit">Save</button>
+    </form>
+  );
+}
+```
+
+---
+
+## Initialize Form
+
+When called, `form.initialize` sets `initialValues` and `values` to the same object
+and marks the form as `initialized`. This is idempotent — subsequent calls are ignored.
+
+Use it to populate the form from an API response:
+
+```tsx
+import { useEffect } from 'react';
+import { useForm } from '@headlesskit/forms-react';
+
+function EditForm() {
+  const form = useForm({
+    mode: 'uncontrolled',
+    initialValues: { name: '', email: '' },
+    enhanceGetInputProps: () => ({
+      disabled: !form.initialized,
+    }),
+  });
+
+  useEffect(() => {
+    fetch('/api/profile')
+      .then((res) => res.json())
+      .then((data) => form.initialize(data));
+  }, []);
+
+  return (
+    <form onSubmit={form.onSubmit(console.log)}>
+      <input key={form.key('name')} {...form.getInputProps('name')} />
+      <input key={form.key('email')} {...form.getInputProps('email')} />
+      <button type="submit" disabled={!form.initialized}>
+        {form.initialized ? 'Save' : 'Loading…'}
+      </button>
+    </form>
+  );
+}
+```
+
+---
+
+## Custom Inputs
+
+`form.getInputProps` returns an object with these properties:
+
+- `value` (controlled) or `defaultValue` (uncontrolled)
+- `onChange`
+- `onFocus`
+- `onBlur`
+- `error`
+- `data-path`
+
+Build a custom input that accepts these props:
+
+```tsx
+interface CustomInputProps {
+  value?: string;
+  defaultValue?: string;
+  onChange?: (event: React.ChangeEvent<HTMLInputElement>) => void;
+  onFocus?: (event: React.FocusEvent<HTMLInputElement>) => void;
+  onBlur?: (event: React.FocusEvent<HTMLInputElement>) => void;
+  error?: React.ReactNode;
+  placeholder?: string;
+}
+
+function CustomInput({
+  value,
+  defaultValue,
+  onChange,
+  onFocus,
+  onBlur,
+  error,
+  placeholder,
+}: CustomInputProps) {
+  return (
+    <div className={error ? 'has-error' : ''}>
+      <input
+        value={value}
+        defaultValue={defaultValue}
+        onChange={onChange}
+        onFocus={onFocus}
+        onBlur={onBlur}
+        placeholder={placeholder}
+        className={error ? 'input-error' : 'input'}
+      />
+      {error && <p className="error-message">{error}</p>}
+    </div>
+  );
+}
+```
+
+Use it with `form.getInputProps`:
+
+```tsx
+function Demo() {
+  const form = useForm({
+    mode: 'uncontrolled',
+    initialValues: { name: '' },
+    validate: {
+      name: (v) => v.trim().length < 2 ? 'Too short' : null,
+    },
+  });
+
+  return (
+    <form onSubmit={form.onSubmit(console.log)}>
+      <CustomInput
+        key={form.key('name')}
+        {...form.getInputProps('name')}
+        placeholder="Your name"
+      />
+      <button type="submit">Submit</button>
+    </form>
+  );
+}
+```
+
+### Select / Textarea
+
+```tsx
+function Demo() {
+  const form = useForm({
+    mode: 'uncontrolled',
+    initialValues: { bio: '', country: 'us' },
+  });
+
+  return (
+    <form onSubmit={form.onSubmit(console.log)}>
+      <textarea
+        key={form.key('bio')}
+        {...form.getInputProps('bio')}
+        placeholder="Bio"
+      />
+
+      <select key={form.key('country')} {...form.getInputProps('country')}>
+        <option value="us">United States</option>
+        <option value="uk">United Kingdom</option>
+        <option value="ca">Canada</option>
+      </select>
+
+      <button type="submit">Submit</button>
+    </form>
+  );
+}
+```
+

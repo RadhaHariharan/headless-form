@@ -1,0 +1,68 @@
+# warning
+
+**File:** `src/utils/warning.ts` · Internal helper, not exported from the package root.
+
+Logs a development-time warning to the console, without throwing or interrupting execution.
+
+## Signature
+
+```typescript
+function warning(message: string): void
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `message` | `string` | The warning text. |
+
+**Returns:** `void` — this never throws or stops execution; it only logs.
+
+## What it actually does
+
+```typescript
+function warning(message: string): void {
+  if (typeof console !== 'undefined' && typeof console.error === 'function') {
+    console.error(message);
+  }
+  try {
+    throw new Error(message);
+  } catch (e) {}
+}
+```
+
+Two things happen, both intentional:
+
+1. **`console.error(message)`** — the actual user-visible warning. Guarded by `typeof console !== 'undefined'` so this never crashes in environments without a `console` global (some older or unusual JS runtimes).
+2. **`throw` immediately caught by an empty `catch`** — this looks like dead code, but it isn't: throwing-and-catching forces most browsers' DevTools and Node's `--stack-trace-limit` machinery to capture a stack trace *at the point of the warning*, which some debugging tools surface even though the exception itself is discarded. It's a deliberate (if old-school) trick to make `console.error` warnings easier to trace back to their source in tooling that inspects thrown errors, without actually treating the situation as a thrown-error condition the caller has to handle.
+
+## Where this is used
+
+[combineReducers](../03-combine-reducers) is the one caller in this package, for two specific situations:
+
+- A reducer key in the map you passed is `undefined` (almost always a typo'd import) — *"No reducer provided for key '...'"*.
+- The state shape looks unexpected — extra keys with no matching reducer, or the state isn't a plain object at all (helps catch e.g. accidentally passing the wrong preloaded state to `createStore`).
+
+Both are warnings, not thrown errors, because the store can still function (the unexpected/missing data is simply ignored) — `warning` exists specifically for this class of "something's probably wrong, but it's not fatal" situation, as opposed to the `throw new Error(...)` calls used everywhere else in the package for genuinely fatal misuse.
+
+## Basic usage (rarely needed in application code)
+
+This isn't exported from `@headlesskit/state-management`'s public API. If you want the same "log loudly but never throw" behavior in your own reducers or middleware, the pattern is simple to replicate directly:
+
+```typescript
+function devWarn(message: string): void {
+  if (process.env.NODE_ENV !== 'production') {
+    console.error(message);
+  }
+}
+
+function userReducer(state = initialState, action) {
+  if (action.type === 'user/setName' && typeof action.payload !== 'string') {
+    devWarn('user/setName expects a string payload — got: ' + typeof action.payload);
+    return state;
+  }
+  // ...
+}
+```
+
+## Common pitfalls
+
+- **Warnings are easy to miss** if your app's console is noisy or `console.error` is filtered out in your logging setup — if `combineReducers` is silently dropping keys you expect to see in state, check the console specifically for these messages before assuming the bug is elsewhere.

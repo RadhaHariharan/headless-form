@@ -1,0 +1,81 @@
+# bindActionCreators
+
+Wraps action creator functions so that calling them automatically dispatches the result, instead of returning a plain action object you have to dispatch yourself.
+
+```typescript
+import { bindActionCreators } from '@headlesskit/state-management';
+```
+
+## Signature
+
+```typescript
+bindActionCreators(actionCreator: Function, dispatch: Dispatch): Function
+bindActionCreators(actionCreators: Record<string, Function>, dispatch: Dispatch): Record<string, Function>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `actionCreators` | A single action-creator function, **or** an object whose values are action-creator functions | What to bind. |
+| `dispatch` | `Dispatch` | Usually `store.dispatch`. |
+
+**Returns:** the same shape you passed in (a single bound function, or an object of bound functions), where calling any of them dispatches its result instead of just returning it.
+
+## Basic usage
+
+```typescript
+import { bindActionCreators } from '@headlesskit/state-management';
+
+const actionCreators = {
+  increment: () => ({ type: 'INCREMENT' as const }),
+  decrement: () => ({ type: 'DECREMENT' as const }),
+  add: (n: number) => ({ type: 'ADD' as const, payload: n }),
+};
+
+const actions = bindActionCreators(actionCreators, store.dispatch);
+
+actions.increment();   // equivalent to store.dispatch({ type: 'INCREMENT' })
+actions.add(5);         // equivalent to store.dispatch({ type: 'ADD', payload: 5 })
+```
+
+Without binding, you'd write `store.dispatch(actionCreators.increment())` everywhere; binding lets you hand a component `actions.increment` and have it call `actions.increment()` directly, without that component needing to know `dispatch` exists at all.
+
+## Single function vs. map of functions
+
+`bindActionCreators` inspects what you pass: if it's a function, it binds just that one; otherwise it iterates every key and binds each value that's a function (non-function values, if any, are silently skipped).
+
+```typescript
+// Single action creator
+const boundIncrement = bindActionCreators(actionCreators.increment, store.dispatch);
+boundIncrement(); // dispatches { type: 'INCREMENT' }
+
+// Map of action creators — only function-valued keys get bound
+const { increment, decrement } = bindActionCreators(actionCreators, store.dispatch);
+```
+
+## Advanced: passing bound actions down without prop-drilling `dispatch`
+
+A common real-world use: a parent component creates the bound actions once, and passes only the *specific actions a child needs* — the child never needs to import `store` or know `dispatch` exists, which keeps it trivially testable (you can call the prop directly with a mock).
+
+```tsx
+const todoActions = bindActionCreators(
+  { addTodo, removeTodo, toggleTodo },
+  store.dispatch,
+);
+
+function TodoApp() {
+  return <TodoList onAdd={todoActions.addTodo} onRemove={todoActions.removeTodo} />;
+}
+
+// In a test: no store needed at all
+render(<TodoList onAdd={vi.fn()} onRemove={vi.fn()} />);
+```
+
+## Preserved function names (for debugging)
+
+The bound function's `.name` is set to `bound <original name>` (e.g. an action creator named `increment` becomes a bound function named `bound increment`). This shows up in stack traces and debugger call stacks, making it easier to tell "this is a bound action dispatcher" apart from the raw action creator when both are in scope.
+
+## Common pitfalls
+
+- **`bindActionCreators` does not validate that what you bind are real action creators** — it just calls whatever function you give it and dispatches the return value. If that return value isn't a valid action (see [dispatch's validation rules](02-create-store#dispatch)), the dispatch itself will throw, not `bindActionCreators`.
+- **Passing a single function but expecting an object back, or vice versa** — the shape of the return mirrors the shape of the input exactly; check which overload you're hitting if the result's shape doesn't match what you expected.
+- **Passing something that's neither a function nor a plain object** (e.g. `null`, a string) throws immediately: `"bindActionCreators expected a function or an object with action-creator functions..."` — this is also the error you'll see if you accidentally `import ActionCreators from './actions'` (a default import) when the module only has named exports (`import * as ActionCreators from './actions'` is what you meant).

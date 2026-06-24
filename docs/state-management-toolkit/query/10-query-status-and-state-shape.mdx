@@ -1,0 +1,93 @@
+# QueryStatus and the cache state shape
+
+**File:** `src/query/core/apiState.ts`
+
+Describes the normalized state shape RTK Query stores under `state[api.reducerPath]`, and the `QueryStatus` enum that drives every `isLoading`/`isSuccess`/`isError` flag you see on hook results and selectors.
+
+## `QueryStatus`
+
+```typescript
+enum QueryStatus {
+  uninitialized = 'uninitialized', // never been requested
+  pending = 'pending',             // currently in flight
+  fulfilled = 'fulfilled',         // succeeded, data available
+  rejected = 'rejected',           // failed, error available
+}
+```
+
+## `RequestStatusFlags` — the derived boolean flags
+
+Every query/mutation result object (whether from a hook, `endpoint.select(arg)`, or `useQueryState`) carries both the raw `status` and four mutually-exclusive derived booleans, computed by `getRequestStatusFlags(status)`:
+
+| `status` | `isUninitialized` | `isLoading` | `isSuccess` | `isError` |
+|----------|---|---|---|---|
+| `uninitialized` | `true` | `false` | `false` | `false` |
+| `pending` | `false` | `true` | `false` | `false` |
+| `fulfilled` | `false` | `false` | `true` | `false` |
+| `rejected` | `false` | `false` | `false` | `true` |
+
+These four booleans are exactly what components typically branch on (`if (isLoading) return <Spinner />`) — they're a derived convenience over `status`, not independent state; exactly one is ever `true` at a time.
+
+## `QuerySubState<D>` — one query's cache entry
+
+| Field | Description |
+|-------|--------------|
+| `status` | `QueryStatus`. |
+| `data` | The (transformed) result, once fulfilled — remains the *previous* successful value during a refetch (`status: 'pending'` with `data` still populated) unless the request is the very first for this cache key. |
+| `error` | Present when `status === 'rejected'`. |
+| `endpointName` | Which endpoint this entry belongs to. |
+| `requestId` | Correlates this entry with the specific dispatch that's currently populating/last populated it. |
+| `startedTimeStamp` / `fulfilledTimeStamp` | Used to implement `refetchOnMountOrArgChange`'s numeric-seconds variant and `keepUnusedDataFor` aging. |
+
+## `InfiniteQuerySubState` — adds page bookkeeping
+
+Extends the same shape with `pages` (the array of fetched page results) and `pageParams` (the parallel array of `pageParam` values used to fetch each one) — see [endpoint definitions](./05-endpoint-definitions)'s `infiniteQuery` section.
+
+## `MutationSubState<D>`
+
+Same `status`/`data`/`error` shape, but keyed by a one-off `requestId` per mutation call rather than a stable args-derived cache key — mutation results aren't deduplicated/shared across calls the way query results are.
+
+## `RootState<D, TagTypes, ReducerPath>` — the full per-API state shape
+
+```typescript
+{
+  queries: Record<QueryCacheKey, QuerySubState>;
+  mutations: Record<string, MutationSubState>;
+  provided: InvalidationState<TagTypes>; // tag → set of cache keys currently providing it
+  subscriptions: Record<QueryCacheKey, Subscribers>; // who's currently subscribed to each query
+  config: { online, focused, refetchOnFocus, refetchOnReconnect, refetchOnMountOrArgChange, middlewareRegistered };
+}
+```
+
+## Basic usage — reading status directly (rare; usually via a hook or selector)
+
+```typescript
+import { QueryStatus } from '@headlesskit/state-management-toolkit/query';
+
+const queryState = api.endpoints.getPosts.select()(store.getState());
+if (queryState.status === QueryStatus.pending) {
+  // ...
+}
+// equivalently, and more idiomatically:
+if (queryState.isLoading) {
+  // ...
+}
+```
+
+## Advanced: distinguishing "loading for the first time" from "refetching with stale data visible"
+
+```typescript
+const { data, isLoading, isFetching } = useGetPostsQuery();
+// isLoading: true only on the very first fetch for this arg, no data has ever existed yet
+// isFetching: true any time a request is in flight, INCLUDING background refetches where `data` is already populated from before
+if (isLoading) return <FullPageSpinner />;
+if (isFetching) return <>{data} <InlineSpinner /></>; // show stale data + a subtle indicator
+return <>{data}</>;
+```
+
+(`isFetching` itself is derived in [buildSelectors](./11-core-internals), not `apiState.ts` directly, but relies on this same underlying `status`/`data` combination.)
+
+## Common pitfalls
+
+- **`data` being populated does not mean `status` is `'fulfilled'`** — during a refetch, `status` becomes `'pending'` again while the *previous* `data` value is still present, specifically so UIs can show stale-but-present data instead of flickering to a loading state on every refetch; check `isLoading` (first load only) vs `isFetching` (any in-flight request) depending on which UX you want, not just presence of `data`.
+- **`QueryStatus` is a TypeScript `enum`, but the package's own internal code deliberately compares against separately-exported string constants** (`STATUS_PENDING` etc.) rather than the enum members directly, for safer behavior under certain bundler/transpilation configurations — application code can use either form (`status === QueryStatus.pending` or `status === 'pending'`) safely, since the enum's string values are stable.

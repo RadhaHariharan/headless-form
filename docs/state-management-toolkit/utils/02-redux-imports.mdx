@@ -1,0 +1,28 @@
+# reduxImports
+
+**File:** `src/reduxImports.ts` · Internal, not exported from the package root.
+
+A single-purpose re-export barrel:
+
+```typescript
+export {
+  createStore,
+  combineReducers,
+  applyMiddleware,
+  compose,
+  isPlainObject,
+  isAction,
+} from '@headlesskit/state-management'
+```
+
+## Why this file exists
+
+Every other file in `state-management-toolkit` that needs one of these six functions imports from `./reduxImports` rather than directly from `@headlesskit/state-management`. This indirection exists so the package has exactly **one** place that names its dependency on the base `state-management` package's exports — if the toolkit ever needed to swap in a different/patched version of these six functions (e.g. during testing, or a future internal fork), only this one file changes, not every call site across `configureStore.ts`, `devtoolsExtension.ts`, `serializableStateInvariantMiddleware.ts`, etc.
+
+## Basic usage (you won't import this directly)
+
+This is purely an internal indirection layer. To use any of these functions yourself, either import them straight from `@headlesskit/state-management`, or — for `createStore`-adjacent behavior — prefer the toolkit's own [configureStore](../04-configure-store), which already wraps `createStore`/`combineReducers`/`applyMiddleware`/`compose` with better defaults.
+
+## Common pitfalls
+
+- **None specific to application code** — this file has no runtime behavior of its own beyond re-exporting; there's nothing to misuse here directly.

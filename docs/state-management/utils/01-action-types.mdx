@@ -1,0 +1,72 @@
+# actionTypes
+
+**File:** `src/utils/actionTypes.ts` · **Exported as:** `__DO_NOT_USE__ActionTypes`
+
+The three private action types the store dispatches internally. The double-underscore export name is a deliberate signal: these exist so *you* can recognize them (e.g. in a logging middleware, or a reducer that wants to ignore them), not so you dispatch them yourself.
+
+```typescript
+import { __DO_NOT_USE__ActionTypes } from '@headlesskit/state-management';
+```
+
+## Shape
+
+```typescript
+{
+  INIT: string;                      // e.g. '@@redux/INIT a1b2c3'
+  REPLACE: string;                   // e.g. '@@redux/REPLACE x7y8z9'
+  PROBE_UNKNOWN_ACTION: () => string; // generates a fresh random type each call
+}
+```
+
+| Field | Value | When it's dispatched |
+|-------|-------|----------------------|
+| `INIT` | `"@@redux/INIT<random>"` | Once, automatically, the moment [createStore](../02-create-store) runs — this is what makes every reducer's `state = initialValue` default parameter kick in and populate the store's first state. |
+| `REPLACE` | `"@@redux/REPLACE<random>"` | Automatically, whenever you call `store.replaceReducer(...)`. |
+| `PROBE_UNKNOWN_ACTION()` | A **new** random string every call | Used internally by [combineReducers](../03-combine-reducers)'s setup-time shape check, to verify every reducer has a `default: return state` and doesn't crash on actions it's never seen. |
+
+The random suffix (`randomString()` internally) exists so user code can never accidentally collide with these by hardcoding the same literal string.
+
+## Why the random suffix matters
+
+```typescript
+// ❌ Don't do this — your reducer will incorrectly treat the literal
+// string '@@redux/INIT' as matching the real init action, but the real
+// action has a random suffix and will never equal this literal.
+function reducer(state, action) {
+  if (action.type === '@@redux/INIT') { /* never actually runs */ }
+}
+```
+
+If you need to special-case the init/replace actions in a reducer (rare, but occasionally useful for one-time setup logic), compare against the actual exported constant, not a guessed string literal:
+
+```typescript
+import { __DO_NOT_USE__ActionTypes } from '@headlesskit/state-management';
+
+function reducer(state = initialState, action) {
+  if (action.type === __DO_NOT_USE__ActionTypes.INIT) {
+    // runs exactly once, when the store is first created
+  }
+  // ...
+}
+```
+
+## Advanced: detecting these in middleware (e.g. to suppress logging noise)
+
+```typescript
+import { __DO_NOT_USE__ActionTypes } from '@headlesskit/state-management';
+import type { Middleware } from '@headlesskit/state-management';
+
+const logger: Middleware = (store) => (next) => (action) => {
+  const isInternal =
+    action.type === __DO_NOT_USE__ActionTypes.INIT ||
+    action.type === __DO_NOT_USE__ActionTypes.REPLACE;
+
+  if (!isInternal) console.log('dispatching', action);
+  return next(action);
+};
+```
+
+## Common pitfalls
+
+- **Never dispatch these yourself.** `store.dispatch({ type: __DO_NOT_USE__ActionTypes.INIT })` doesn't "reset" the store the way you might expect — it just runs every reducer's `default` branch (returning current state unchanged for any reducer that already has real state), which is rarely the reset behavior you actually want. Write your own explicit `RESET` action instead.
+- **`PROBE_UNKNOWN_ACTION` is a function, not a string** — `__DO_NOT_USE__ActionTypes.PROBE_UNKNOWN_ACTION` is itself the function; you must call it (`PROBE_UNKNOWN_ACTION()`) to get the string.
