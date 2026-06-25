@@ -1,0 +1,62 @@
+name: Feature request
+description: Suggest a new feature or improvement
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion! For changes to a public API, it helps to discuss the
+        approach here before opening a PR — see [CONTRIBUTING.md](https://github.com/RadhaHariharan/headlesskit/blob/main/CONTRIBUTING.md).
+
+  - type: dropdown
+    id: package
+    attributes:
+      label: Affected package
+      description: Which package would this feature affect?
+      options:
+        - "@headlesskit/forms"
+        - "@headlesskit/forms-react"
+        - "@headlesskit/forms-react-native"
+        - "@headlesskit/query-core"
+        - "@headlesskit/query-persist-client-core"
+        - "@headlesskit/query-async-storage-persister"
+        - "@headlesskit/query-sync-storage-persister"
+        - "@headlesskit/state-management"
+        - "@headlesskit/state-management-toolkit"
+        - New package
+        - Other / not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the use case or limitation you're running into.
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: What would you like to happen? A sketch of the API is welcome.
+      render: typescript
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any workarounds you're using today, or other approaches you considered.
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Anything else relevant — links, prior art in other libraries, etc.
+    validations:
+      required: false
