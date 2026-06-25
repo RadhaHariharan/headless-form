@@ -94,6 +94,9 @@ Contributions are welcome — bug reports, feature requests, and pull requests a
 read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening a PR, and note that this project
 follows a [Code of Conduct](./CODE_OF_CONDUCT.md).
 
+Using an AI coding agent (Claude Code, Cursor, Copilot, Codex, etc.)? See
+[AGENTS.md](./AGENTS.md) for this repo's machine-readable conventions.
+
 ## Security
 
 Found a security issue? Please see [SECURITY.md](./SECURITY.md) for how to report it
