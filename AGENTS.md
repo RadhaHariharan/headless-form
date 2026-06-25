@@ -20,6 +20,7 @@ under `packages/*`:
 | `forms`, `forms-react`, `forms-react-native` | **Native** — original code, full lint/test/typecheck rigor |
 | `query-core`, `query-persist-client-core`, `query-async-storage-persister`, `query-sync-storage-persister` | **Vendored** — ported from TanStack Query, kept close to upstream structure |
 | `state-management`, `state-management-toolkit` | **Vendored** — ported from Redux / Redux Toolkit, kept close to upstream structure |
+| `state-management-simplify`, `state-management-simplify-react` | **Vendored** — ported from [Zustand](https://github.com/pmndrs/zustand), kept close to upstream structure |
 
 This tiering matters — see [Vendored vs. native packages](#vendored-vs-native-packages) before
 you touch a vendored package.
@@ -84,16 +85,19 @@ diff that's painful for a human to review against upstream.
 - Write code the way you'd write any other TypeScript in this repo — there's no upstream to
   stay close to.
 
-**Vendored** (`query-*`, `state-management`, `state-management-toolkit`):
-- camelCase filenames (`queryClient.ts`, `createStore.ts`) — this **intentionally** mirrors the
-  upstream TanStack Query / Redux source tree, to keep diffs against upstream small and make it
-  easy to port upstream fixes. **Do not rename these files to kebab-case** or otherwise
-  "normalize" them to match the native packages' conventions.
+**Vendored** (`query-*`, `state-management`, `state-management-toolkit`,
+`state-management-simplify`, `state-management-simplify-react`):
+- camelCase filenames (`queryClient.ts`, `createStore.ts`, `subscribeWithSelector.ts`) — this
+  **intentionally** mirrors the upstream TanStack Query / Redux / Zustand source tree, to keep
+  diffs against upstream small and make it easy to port upstream fixes. **Do not rename these
+  files to kebab-case** or otherwise "normalize" them to match the native packages' conventions.
 - Not linted by the root ESLint config (no `lint` script in these packages' `package.json`).
   Match the *existing* style in the file you're editing, not the native-package rules above.
-- When fixing a bug here, check whether upstream (TanStack Query / Redux / Redux Toolkit) has
-  already fixed it — porting their fix verbatim (with attribution in the commit/PR) is usually
-  better than writing a divergent one.
+- When fixing a bug here, check whether upstream (TanStack Query / Redux / Redux Toolkit /
+  Zustand) has already fixed it — porting their fix verbatim (with attribution in the
+  commit/PR) is usually better than writing a divergent one.
+- See [NOTICE.md](./NOTICE.md) for exactly which upstream project each package is ported from
+  and its original copyright holder.
 - Still subject to the strict `tsconfig.base.json` compiler options (see below) and to whatever
   `test`/`typecheck` scripts the package *does* define.
 
@@ -191,12 +195,14 @@ needs:
 
 If your task touches one of these areas, flag it explicitly rather than assuming it's fine:
 
-- `state-management` and `state-management-toolkit` have **no test suite and no `lint`/`typecheck`
-  script** wired into their `package.json` at all. If you're asked to add tests or wire up
-  these scripts, that's a real, valuable change — don't skip it thinking it's already covered
-  elsewhere.
+- `state-management`, `state-management-toolkit`, `state-management-simplify`, and
+  `state-management-simplify-react` have **no test suite and no `lint` script** wired into
+  their `package.json` at all (the two `state-management-simplify*` packages do have a
+  `typecheck` script; the original two don't even have that). If you're asked to add tests or
+  wire up these scripts, that's a real, valuable change — don't skip it thinking it's already
+  covered elsewhere.
 - `.github/workflows/release.yml` only builds/publishes `@headlesskit/forms` and
-  `@headlesskit/forms-react` on a release tag — the other 7 packages are never published by CI
+  `@headlesskit/forms-react` on a release tag — the other 9 packages are never published by CI
   as of this writing. If you're asked to cut a release for any other package, this needs fixing
   first, not worked around manually.
 - `vitest.workspace.ts` at the repo root references `packages/core`, `packages/react`,

@@ -1,0 +1,329 @@
+/*
+ * Adapted from Zustand's demo site (https://github.com/pmndrs/zustand/tree/main/examples/demo),
+ * MIT licensed, Copyright (c) 2019 Paul Henschel — see /NOTICE.md at the repo root.
+ *
+ * The original demo's 3D parallax bear scene (react-three-fiber/drei/postprocessing) was
+ * intentionally dropped here — it's pure decoration with no state-management logic in it.
+ * Everything below is the layout/typography/syntax-highlighting CSS for the parts that DO
+ * demonstrate the package: the counter, the code preview, and the nav/footer links.
+ */
+
+.zustandDemoPage {
+  position: relative;
+  width: 100%;
+  min-height: 100vh;
+  overflow: hidden;
+  background: #010101;
+  color: white;
+  font-family:
+    -apple-system,
+    BlinkMacSystemFont,
+    'avenir next',
+    avenir,
+    'helvetica neue',
+    helvetica,
+    ubuntu,
+    roboto,
+    noto,
+    'segoe ui',
+    arial,
+    sans-serif;
+}
+
+.zustandDemoPage a {
+  font-family: inherit;
+  font-weight: 400;
+  font-size: 16px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.zustandDemoPage .main {
+  position: relative;
+  width: 100%;
+  min-height: 100vh;
+}
+
+.zustandDemoPage .main > .code {
+  position: relative;
+  margin: 0 auto;
+  padding: 160px 24px 220px;
+  width: 640px;
+  max-width: 90%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.zustandDemoPage .code-container {
+  position: relative;
+  margin-bottom: 60px;
+}
+
+.zustandDemoPage .counter {
+  position: absolute;
+  top: -100px;
+  right: -20px;
+  color: white;
+  background: #394a52;
+  padding: 40px;
+  border-radius: 10px;
+  box-shadow: 0 16px 40px -5px rgba(0, 0, 0, 0.5);
+  width: 120px;
+  height: 120px;
+  font-size: 3em;
+}
+
+.zustandDemoPage .counter > span {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  margin-top: -15px;
+  transform: translate3d(-50%, -50%, 0);
+}
+
+.zustandDemoPage .counter > button {
+  margin: 10px;
+  padding: 5px 10px;
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 100px;
+  border-radius: 5px;
+  border: solid 2px white;
+  outline: none;
+  background: transparent;
+  color: white;
+  cursor: pointer;
+  font: inherit;
+}
+
+.zustandDemoPage .code-container pre[class*='language-'] {
+  margin-top: 0;
+  display: inline-block;
+  width: auto !important;
+  padding: 40px 50px 40px 45px;
+  font-size: 0.8rem !important;
+  border-radius: 10px !important;
+  box-shadow: 0 16px 40px -5px rgba(0, 0, 0, 1);
+  white-space: pre-wrap !important;
+}
+
+.zustandDemoPage span.header-left {
+  font-weight: 700;
+  text-transform: uppercase;
+  position: absolute;
+  display: inline-block;
+  top: 40px;
+  left: 40px;
+  font-size: 3em;
+  color: white;
+  line-height: 1em;
+}
+
+.zustandDemoPage .nav {
+  align-items: center;
+  display: flex;
+  gap: 16px;
+  justify-content: flex-end;
+  left: 40px;
+  position: fixed;
+  right: 40px;
+  top: 40px;
+}
+
+.zustandDemoPage .nav a {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.zustandDemoPage .bottom {
+  position: fixed;
+  bottom: 40px;
+  left: 40px;
+  right: 40px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.zustandDemoPage .bottom a {
+  position: static;
+}
+
+.zustandDemoPage .bottom-links {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+.zustandDemoPage .snippet-container {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  padding: 5px;
+}
+
+.zustandDemoPage .snippet-lang {
+  background-color: #272822;
+  color: #fff;
+  outline: 0;
+  border: 0;
+  font: inherit;
+}
+
+.zustandDemoPage .copy-button {
+  box-shadow: none;
+  text-decoration: none;
+  font-size: 14px;
+  font-family: sans-serif;
+  line-height: 1;
+  padding: 12px;
+  width: auto;
+  border-radius: 5px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: #f8f9fa;
+  cursor: pointer;
+}
+
+.zustandDemoPage .copy-button:hover {
+  background-color: #5f5e5d;
+}
+
+@media only screen and (max-width: 700px) {
+  .zustandDemoPage span.header-left {
+    font-size: 1em;
+  }
+  .zustandDemoPage .code-container > pre[class*='language-'] {
+    font-size: 0.6rem !important;
+    border-radius: 10px 10px 0 0 !important;
+  }
+  .zustandDemoPage .counter {
+    position: absolute;
+    top: -120px;
+  }
+}
+
+/*
+ * Pmndrs Prism theme (loosely based on the VS Code "pmndrs" theme), unchanged from the
+ * original demo — see attribution comment at the top of this file.
+ */
+.zustandDemoPage code[class*='language-'],
+.zustandDemoPage pre[class*='language-'] {
+  color: #e4f0fb !important;
+  background: none !important;
+  text-shadow: 0 1px rgba(0, 0, 0, 0.3) !important;
+  font-family: Menlo, Monaco, 'Courier New', monospace !important;
+  font-size: 0.95em !important;
+  text-align: left !important;
+  white-space: pre !important;
+  word-spacing: normal !important;
+  word-break: normal !important;
+  word-wrap: normal !important;
+  line-height: 1.5 !important;
+  -moz-tab-size: 4 !important;
+  -o-tab-size: 4 !important;
+  tab-size: 4 !important;
+  -webkit-hyphens: none !important;
+  -moz-hyphens: none !important;
+  -ms-hyphens: none !important;
+  hyphens: none !important;
+}
+
+.zustandDemoPage pre[class*='language-'] {
+  padding: 3.75em !important;
+  margin: -2.5em 0 !important;
+  overflow: auto !important;
+  border-radius: 0.75em !important;
+}
+
+.zustandDemoPage :not(pre) > code[class*='language-'],
+.zustandDemoPage pre[class*='language-'] {
+  background: #252b37 !important;
+}
+
+.zustandDemoPage :not(pre) > code[class*='language-'] {
+  padding: 0.1em !important;
+  border-radius: 0.3em !important;
+  white-space: normal !important;
+}
+
+.zustandDemoPage .token.comment,
+.zustandDemoPage .token.prolog,
+.zustandDemoPage .token.doctype,
+.zustandDemoPage .token.cdata {
+  color: #a6accd !important;
+}
+
+.zustandDemoPage .token.punctuation {
+  color: #e4f0fb !important;
+}
+
+.zustandDemoPage .token.namespace {
+  opacity: 0.7 !important;
+}
+
+.zustandDemoPage .token.property,
+.zustandDemoPage .token.tag,
+.zustandDemoPage .token.constant,
+.zustandDemoPage .token.symbol,
+.zustandDemoPage .token.deleted {
+  color: #e4f0fb !important;
+}
+
+.zustandDemoPage .token.boolean,
+.zustandDemoPage .token.number {
+  color: #5de4c7 !important;
+}
+
+.zustandDemoPage .token.selector,
+.zustandDemoPage .token.attr-value,
+.zustandDemoPage .token.string,
+.zustandDemoPage .token.char,
+.zustandDemoPage .token.builtin,
+.zustandDemoPage .token.inserted {
+  color: #5de4c7 !important;
+}
+
+.zustandDemoPage .token.attr-name,
+.zustandDemoPage .token.operator,
+.zustandDemoPage .token.entity,
+.zustandDemoPage .token.url,
+.zustandDemoPage .token.variable {
+  color: #add7ff !important;
+}
+
+.zustandDemoPage .token.atrule,
+.zustandDemoPage .token.function,
+.zustandDemoPage .token.class-name {
+  color: #5de4c7 !important;
+}
+
+.zustandDemoPage .token.keyword {
+  color: #add7ff !important;
+}
+
+.zustandDemoPage .token.regex,
+.zustandDemoPage .token.important {
+  color: #fffac2 !important;
+}
+
+.zustandDemoPage .token.important,
+.zustandDemoPage .token.bold {
+  font-weight: bold !important;
+}
+
+.zustandDemoPage .token.italic {
+  font-style: italic !important;
+}
+
+.zustandDemoPage .token.entity {
+  cursor: help !important;
+}

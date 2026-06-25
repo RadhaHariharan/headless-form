@@ -1,0 +1,133 @@
+# devtools
+
+Connects a store to the [Redux DevTools Extension](https://github.com/reduxjs/redux-devtools) browser extension, so every `setState` call shows up as an inspectable action in the DevTools timeline, with time-travel ("jump to state"), state import/export, and (when paired with [`redux`](05-middleware-redux)) dispatch-from-DevTools support.
+
+```typescript
+import { devtools } from '@headlesskit/state-management-simplify';
+```
+
+## Signature
+
+```typescript
+devtools<T, U = T>(
+  initializer: StateCreator<T, [...Mps, ['zustand/devtools', never]], Mcs, U>,
+  devtoolsOptions?: DevtoolsOptions,
+): StateCreator<T, Mps, [['zustand/devtools', never], ...Mcs], U>
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `initializer` | `StateCreator<T, ..., U>` | Yes | The (possibly already middleware-wrapped) initializer to instrument. |
+| `devtoolsOptions` | `DevtoolsOptions` | No | Connection and labeling options — see table below. |
+
+### DevtoolsOptions
+
+`DevtoolsOptions` extends the Redux DevTools Extension's own `connect()` config (`Config`, from `@redux-devtools/extension`), plus:
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `name` | `string` | Label shown for this store/connection in the DevTools instance picker. |
+| `enabled` | `boolean` | Force-enable or force-disable the connection. Defaults to `import.meta.env?.MODE !== 'production'` when not provided — i.e. devtools auto-disables in production builds unless you opt back in. |
+| `anonymousActionType` | `string` | The action `type` label used when `setState` is called without a third "action name" argument and the caller name can't be detected from the stack trace. Defaults to `'anonymous'`. |
+| `store` | `string` | Groups this store under a shared "tracked" connection alongside other stores that pass the same `name` — see "tracked vs. untracked" below. |
+| *(all other `connect()` options, e.g.* `actionsBlacklist`, `trace`, `maxAge` *)* | — | Forwarded directly to `extensionConnector.connect(options)`. |
+
+**Returns:** a `StateCreator` that behaves like `initializer`, but where `setState` accepts an optional **action name/object** as a third argument (used as the DevTools timeline label), and the store gains a `devtools: { cleanup: () => void }` property.
+
+## What it actually does
+
+### Connecting
+
+On first run, `devtoolsImpl` reads `window.__REDUX_DEVTOOLS_EXTENSION__` (wrapped in a `try`/`catch` so it's silently a no-op outside the browser or when the extension isn't installed):
+
+```typescript
+extensionConnector =
+  (enabled ?? import.meta.env?.MODE !== 'production') &&
+  window.__REDUX_DEVTOOLS_EXTENSION__
+```
+
+If there's no extension connector (not installed, or explicitly disabled), `devtools` is a complete pass-through: `return fn(set, get, api)` — your store behaves exactly as if `devtools` weren't applied.
+
+### Tracked vs. untracked connections
+
+- **Untracked (`store` option omitted, the common case):** each call to `devtools(...)` opens its own independent connection via `extensionConnector.connect(options)`. The DevTools instance picker shows one entry per store.
+- **Tracked (`store: 'someName'` passed):** multiple stores sharing the same `devtoolsOptions.name` are grouped under one shared connection (`trackedConnections`, a module-level `Map` keyed by connection name), and each store's state appears nested under its `store` key in a single combined state tree shown in DevTools — e.g. `{ cartStore: {...}, userStore: {...} }`. This is how multiple independent vanilla stores can show up as one logical app in the DevTools UI. `removeStoreFromTrackedConnections` cleans up the shared connection's entry when the last tracked store using it is torn down.
+
+### Wrapped `setState`
+
+`devtools` replaces `api.setState` with a version that, after delegating to the original `set`, sends an action + the resulting state to the DevTools connection — *unless* `isRecording` is currently `false` (see "Pause recording" below):
+
+```typescript
+api.setState = (state, replace, nameOrAction) => {
+  const r = set(state, replace)
+  if (!isRecording) return r
+  const action =
+    nameOrAction === undefined
+      ? { type: anonymousActionType || findCallerName(new Error().stack) || 'anonymous' }
+      : typeof nameOrAction === 'string'
+        ? { type: nameOrAction }
+        : nameOrAction
+  // ...connection.send(action, state)
+}
+```
+
+This is why every middleware in this package that wants its `set` calls to be labeled in DevTools (like [`redux`](05-middleware-redux)) passes a third argument to `set` — that argument becomes the action `type` shown in the timeline. If you call `setState` without a third argument, `devtools` tries to infer a label automatically by parsing `new Error().stack` for the name of the function that called `api.setState` (`findCallerName`, with separate regexes for V8/Chrome-style and SpiderMonkey/Gecko-style stack traces) — falling back to `anonymousActionType` or the literal string `'anonymous'` if that fails.
+
+### `dispatchFromDevtools` interplay with `redux`
+
+If `api.dispatchFromDevtools` is truthy and `api.dispatch` is a function (i.e. the [`redux`](05-middleware-redux) middleware is also applied, since it's the one that sets both), `devtools` wraps `api.dispatch` to warn (once, in development) if you ever try to dispatch an action literally typed `'__setState'` — that string is reserved internally by `devtools` for DevTools-driven state replacement (see the message-handling switch statement below) and would otherwise collide with the protocol.
+
+### Message handling (the DevTools → store direction)
+
+`devtools` subscribes to the connection and switches on `message.type`:
+
+| `message.type` | Behavior |
+|----------------|----------|
+| `'ACTION'` | Parses `message.payload` as JSON. If the parsed action's `type` is `'__setState'`, applies `action.state` directly via `setStateFromDevtools` (bypassing recording, so it doesn't re-emit an action back to DevTools) — for an untracked store this replaces the whole state; for a tracked store it expects `action.state` to have exactly one key matching the `store` option and applies just that slice. Otherwise, if `shouldDispatchFromDevtools(api)` is true, calls `api.dispatch(action)` — this is how manually firing an action from the DevTools "Dispatcher" panel reaches your `redux` reducer. |
+| `'DISPATCH'` (sub-cases on `message.payload.type`) | `'RESET'` — resets to `initialState` and re-inits the connection. `'COMMIT'` — re-inits the connection with the current state (clears the recorded action history without changing state). `'ROLLBACK'` — applies `message.state` and re-inits. `'JUMP_TO_STATE'` / `'JUMP_TO_ACTION'` — applies the state at that point in the timeline (time-travel). `'IMPORT_STATE'` — applies the last computed state from an imported action log, then re-sends it to the connection. `'PAUSE_RECORDING'` — toggles `isRecording`, so toggling "Pause recording" in the DevTools UI stops/resumes `setState` calls from being sent as new actions. |
+
+All state-bearing messages are parsed defensively via `parseJsonThen`, which `console.error`s and skips silently if `JSON.parse` throws rather than crashing your app.
+
+## Basic usage
+
+```typescript
+import { createStore } from '@headlesskit/state-management-simplify';
+import { devtools } from '@headlesskit/state-management-simplify';
+
+type CounterState = { count: number; increment: () => void };
+
+const store = createStore<CounterState>()(
+  devtools(
+    (set) => ({
+      count: 0,
+      increment: () => set((state) => ({ count: state.count + 1 }), false, 'increment'),
+    }),
+    { name: 'CounterStore' },
+  ),
+);
+
+store.getState().increment();
+// Redux DevTools Extension timeline shows an action labeled "increment"
+```
+
+## Advanced: wiring devtools with redux's dispatchFromDevtools
+
+See the [`redux` middleware's advanced example](05-middleware-redux#advanced-combining-redux-with-devtools-for-full-devtools-dispatch-support) for the full walkthrough of `devtools(redux(reducer, initialState), options)` — `devtools` must wrap `redux`, not the reverse, so it observes `api.dispatchFromDevtools` and `api.dispatch` after `redux` installs them.
+
+## Advanced: cleaning up a connection
+
+When a store with `devtools` applied is torn down (e.g. in a test suite, or a short-lived per-request server-side store), call the `devtools.cleanup()` method it adds to the store to unsubscribe from the connection and, for tracked stores, remove this store's entry from the shared connection map:
+
+```typescript
+const store = createStore(devtools((set) => ({ count: 0 }), { name: 'Test' }));
+// ...
+store.devtools.cleanup();
+```
+
+## Common pitfalls
+
+- **Nothing happens without the browser extension.** `devtools` silently becomes a no-op pass-through if `window.__REDUX_DEVTOOLS_EXTENSION__` doesn't exist — there's no error, no warning; your app just behaves as if `devtools` weren't applied. Make sure the [Redux DevTools browser extension](https://github.com/reduxjs/redux-devtools) is installed before assuming the middleware is broken.
+- **It's disabled by default in production.** `enabled` defaults to `import.meta.env?.MODE !== 'production'` — if your bundler doesn't define `import.meta.env.MODE`, this check can behave unexpectedly; explicitly pass `enabled: true`/`false` if you need deterministic behavior independent of the build mode.
+- **Dispatching the reserved `'__setState'` action type.** This string is read internally by the message handler to mean "replace state with this payload," not "run my reducer." If you have your own action literally typed `__setState`, it will be intercepted by `devtools` rather than reaching `dispatch`.
+- **Mixing tracked stores under the same `name` with different `store` keys is required.** If you pass `store` without giving every store sharing that connection a *distinct* `store` value, they will overwrite each other's slot in the shared `stores` map.
+- **`findCallerName` is best-effort.** Automatic action labeling parses raw stack trace text with regexes tuned for V8 and SpiderMonkey formats; minified/transpiled stacks, or engines with different stack formats, can produce a generic `'anonymous'` label instead of the real caller name. Pass an explicit action name/object as `setState`'s third argument when you need reliable labels.

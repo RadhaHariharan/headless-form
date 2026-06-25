@@ -1,0 +1,147 @@
+# create / useStore
+
+**File:** `src/react.ts`
+
+`useStore` is the hook that bridges a vanilla [store](../state-management-simplify/01-overview) to React's rendering model via `useSyncExternalStore`. `create` is the convenience wrapper most code actually calls — it builds the store for you and returns an auto-generated hook with `useStore` already wired to it.
+
+## Signature
+
+```typescript
+function useStore<S extends ReadonlyStoreApi<unknown>>(api: S): ExtractState<S>
+function useStore<S extends ReadonlyStoreApi<unknown>, U>(
+  api: S,
+  selector: (state: ExtractState<S>) => U,
+): U
+```
+
+```typescript
+type Create = {
+  <T, Mos extends [StoreMutatorIdentifier, unknown][] = []>(
+    initializer: StateCreator<T, [], Mos>,
+  ): UseBoundStore<Mutate<StoreApi<T>, Mos>>
+  <T>(): <Mos extends [StoreMutatorIdentifier, unknown][] = []>(
+    initializer: StateCreator<T, [], Mos>,
+  ) => UseBoundStore<Mutate<StoreApi<T>, Mos>>
+}
+
+type UseBoundStore<S extends ReadonlyStoreApi<unknown>> = {
+  (): ExtractState<S>
+  <U>(selector: (state: ExtractState<S>) => U): U
+} & S
+```
+
+`create` has a curried form: call it with no arguments (`create<T>()`) to get back a function you then call with the initializer — this exists purely so you can annotate `T` explicitly when TypeScript can't infer it from the initializer alone. Either form returns a `UseBoundStore`: a callable hook that is also `Object.assign`ed with the store's own API (`getState`, `setState`, `getInitialState`, `subscribe`), so `useCounterStore.getState()` works outside of React just as well as calling the hook inside a component.
+
+## How it actually works
+
+```typescript
+export function useStore<TState, StateSlice>(
+  api: ReadonlyStoreApi<TState>,
+  selector: (state: TState) => StateSlice = identity as any,
+) {
+  const slice = React.useSyncExternalStore(
+    api.subscribe,
+    React.useCallback(() => selector(api.getState()), [api, selector]),
+    React.useCallback(() => selector(api.getInitialState()), [api, selector]),
+  )
+  React.useDebugValue(slice)
+  return slice
+}
+```
+
+`useSyncExternalStore` takes three arguments, and `useStore` supplies all three directly from the store API:
+- **`subscribe`** is `api.subscribe` itself — the store's listener registration, unchanged.
+- **`getSnapshot`** calls `selector(api.getState())` — when no selector is passed, `identity` is used, so the whole state object is the snapshot.
+- **`getServerSnapshot`** calls `selector(api.getInitialState())` — this is what's read during SSR, before any client-side `setState` calls have run, mirroring how [`useForm`](../forms-react/01-use-form)'s `getServerSnapshot` argument works for the exact same reason.
+
+`useSyncExternalStore` is used (rather than, say, `useEffect` + `useState`) because it's the only React API that's safe under concurrent rendering — it guarantees the component never reads a torn/stale snapshot even if the store updates while a render is in progress, and it's what makes this hook safe to call during SSR/RSC rendering in the first place.
+
+`create`'s implementation is a thin layer on top:
+
+```typescript
+const createImpl = <T>(createState: StateCreator<T, [], []>) => {
+  const api = createStore(createState)
+  const useBoundStore: any = (selector?: any) => useStore(api, selector)
+  Object.assign(useBoundStore, api)
+  return useBoundStore
+}
+```
+
+The store is built once, when `create(...)` is called at module scope — not per-component-render. Every component that calls the returned hook shares the exact same store instance.
+
+## Basic usage
+
+```tsx
+import { create } from '@headlesskit/state-management-simplify-react';
+
+const useCounterStore = create((set) => ({
+  count: 0,
+  increment: () => set((state) => ({ count: state.count + 1 })),
+  reset: () => set({ count: 0 }),
+}));
+
+function Counter() {
+  const count = useCounterStore((state) => state.count);
+  const increment = useCounterStore((state) => state.increment);
+  return <button onClick={increment}>Count: {count}</button>;
+}
+```
+
+Calling the hook with no selector at all (`useCounterStore()`) returns the entire state object, and the component re-renders on every `setState` call regardless of which fields actually changed.
+
+## Advanced: selecting a slice to avoid unnecessary re-renders
+
+```tsx
+interface AppState {
+  user: { name: string; email: string };
+  theme: 'light' | 'dark';
+  setTheme: (theme: 'light' | 'dark') => void;
+}
+
+const useAppStore = create<AppState>((set) => ({
+  user: { name: 'Ada', email: 'ada@example.com' },
+  theme: 'light',
+  setTheme: (theme) => set({ theme }),
+}));
+
+// Only re-renders when `theme` changes — toggling it does not
+// re-render any component that only selected `user`.
+function ThemeToggle() {
+  const theme = useAppStore((state) => state.theme);
+  const setTheme = useAppStore((state) => state.setTheme);
+  return (
+    <button onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}>
+      {theme}
+    </button>
+  );
+}
+
+function Greeting() {
+  const name = useAppStore((state) => state.user.name);
+  return <p>Hello, {name}</p>;
+}
+```
+
+Each component subscribes to the same store but selects a different slice — `useSyncExternalStore`'s snapshot comparison means a component only re-renders when the value its own selector returns actually changes (by `Object.is`).
+
+## Advanced: using `useStore` directly with an externally-created store
+
+```tsx
+import { createStore } from '@headlesskit/state-management-simplify';
+import { useStore } from '@headlesskit/state-management-simplify-react';
+
+const counterStore = createStore(() => ({ count: 0 }));
+
+function Counter() {
+  const count = useStore(counterStore, (state) => state.count);
+  return <span>{count}</span>;
+}
+```
+
+Reach for `useStore` directly (instead of `create`) when the store is built elsewhere — e.g. via [`createStore`](../state-management-simplify/01-overview) shared across both React and non-React code — and you just need the React subscription on top of an existing store API.
+
+## Common pitfalls
+
+- **Returning a new object/array from a selector on every call causes infinite re-renders.** `selector(state)` is compared with `Object.is` against the previous snapshot; `(state) => ({ name: state.user.name, theme: state.theme })` returns a brand-new object reference every render, which `useSyncExternalStore` treats as "changed," triggering another render, which calls the selector again, forever. Either select a single primitive value per hook call, or wrap the selector in [`useShallow`](./03-use-shallow) (or use [`createWithEqualityFn`](./04-traditional)) when you need to select multiple fields into one object.
+- **`create(...)` builds the store once, at the call site — not per component.** Calling `create` inside a component body would create a brand-new store on every render; always call it at module scope (or inside a `useState`/`useRef` lazy-initializer if you genuinely need a component-scoped store).
+- **The hook's selector argument is not memoized for you.** Passing an inline arrow function like `useCounterStore((state) => state.count)` is fine because it returns a primitive, but if the selector itself is expensive or you're relying on referential stability of the selector function across renders for some other reason, define it outside the component or wrap it in `useCallback`.

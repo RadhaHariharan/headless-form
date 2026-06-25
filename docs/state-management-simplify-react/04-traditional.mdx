@@ -1,0 +1,145 @@
+# createWithEqualityFn / useStoreWithEqualityFn
+
+**File:** `src/traditional.ts`
+
+A version of [`create`/`useStore`](./02-create) that takes an explicit equality function — either a default supplied once at `createWithEqualityFn(initializer, defaultEqualityFn)`, or per-call as the hook's third argument — instead of requiring callers to wrap every multi-field selector in [`useShallow`](./03-use-shallow). It exists as the "traditional" pre-`useShallow` API surface and remains useful when you want one equality function applied automatically to every selector call on a given store, without remembering to wrap each one.
+
+## Signature
+
+```typescript
+function useStoreWithEqualityFn<S extends ReadonlyStoreApi<unknown>>(api: S): ExtractState<S>
+function useStoreWithEqualityFn<S extends ReadonlyStoreApi<unknown>, U>(
+  api: S,
+  selector: (state: ExtractState<S>) => U,
+  equalityFn?: (a: U, b: U) => boolean,
+): U
+```
+
+```typescript
+type CreateWithEqualityFn = {
+  <T, Mos extends [StoreMutatorIdentifier, unknown][] = []>(
+    initializer: StateCreator<T, [], Mos>,
+    defaultEqualityFn?: <U>(a: U, b: U) => boolean,
+  ): UseBoundStoreWithEqualityFn<Mutate<StoreApi<T>, Mos>>
+  <T>(): <Mos extends [StoreMutatorIdentifier, unknown][] = []>(
+    initializer: StateCreator<T, [], Mos>,
+    defaultEqualityFn?: <U>(a: U, b: U) => boolean,
+  ) => UseBoundStoreWithEqualityFn<Mutate<StoreApi<T>, Mos>>
+}
+
+type UseBoundStoreWithEqualityFn<S extends ReadonlyStoreApi<unknown>> = {
+  (): ExtractState<S>
+  <U>(
+    selector: (state: ExtractState<S>) => U,
+    equalityFn?: (a: U, b: U) => boolean,
+  ): U
+} & S
+```
+
+The returned hook accepts an `equalityFn` as its second argument (after the selector), which — if provided — **overrides** the `defaultEqualityFn` passed to `createWithEqualityFn` for that one call only.
+
+## How it actually works
+
+```typescript
+import useSyncExternalStoreExports from 'use-sync-external-store/shim/with-selector'
+const { useSyncExternalStoreWithSelector } = useSyncExternalStoreExports
+
+export function useStoreWithEqualityFn<TState, StateSlice>(
+  api: ReadonlyStoreApi<TState>,
+  selector: (state: TState) => StateSlice = identity as any,
+  equalityFn?: (a: StateSlice, b: StateSlice) => boolean,
+) {
+  const slice = useSyncExternalStoreWithSelector(
+    api.subscribe,
+    api.getState,
+    api.getInitialState,
+    selector,
+    equalityFn,
+  )
+  React.useDebugValue(slice)
+  return slice
+}
+```
+
+Unlike [`useStore`](./02-create), which calls plain `React.useSyncExternalStore` and runs the selector itself inside `getSnapshot`/`getServerSnapshot`, `useStoreWithEqualityFn` calls `useSyncExternalStoreWithSelector` from the `use-sync-external-store/shim/with-selector` package — a userland shim that adds selector-plus-equality-function memoization on top of the base API. That shim, not this package's own code, is what actually compares each new selector result against the previous one using `equalityFn` and bails out of triggering a re-render when they're considered equal. This is why `use-sync-external-store` is a peer dependency of `@headlesskit/state-management-simplify-react` (and listed as optional in `peerDependenciesMeta`, since it's only needed if you actually import `createWithEqualityFn`/`useStoreWithEqualityFn`) — `create`/`useStore`/`useShallow` don't need it, but `traditional.ts` does.
+
+`createWithEqualityFn`'s own implementation mirrors `create`'s exactly, just threading the equality function through:
+
+```typescript
+const createWithEqualityFnImpl = <T>(
+  createState: StateCreator<T, [], []>,
+  defaultEqualityFn?: <U>(a: U, b: U) => boolean,
+) => {
+  const api = createStore(createState)
+  const useBoundStoreWithEqualityFn: any = (
+    selector?: any,
+    equalityFn = defaultEqualityFn,
+  ) => useStoreWithEqualityFn(api, selector, equalityFn)
+  Object.assign(useBoundStoreWithEqualityFn, api)
+  return useBoundStoreWithEqualityFn
+}
+```
+
+If a call site doesn't pass its own `equalityFn`, the hook falls back to whatever `defaultEqualityFn` was supplied when `createWithEqualityFn` was first called.
+
+## Basic usage
+
+```tsx
+import { createWithEqualityFn } from '@headlesskit/state-management-simplify-react';
+import { shallow } from '@headlesskit/state-management-simplify';
+
+const useAppStore = createWithEqualityFn(
+  (set) => ({
+    user: { name: 'Ada', email: 'ada@example.com' },
+    theme: 'light' as 'light' | 'dark',
+    setTheme: (theme: 'light' | 'dark') => set({ theme }),
+  }),
+  shallow, // applied to every selector call on this store unless overridden
+);
+
+function Header() {
+  // No useShallow needed here — shallow equality is already the default.
+  const { name, theme } = useAppStore((state) => ({ name: state.user.name, theme: state.theme }));
+  return <h1>{name} — {theme}</h1>;
+}
+```
+
+## Advanced: overriding the default equality function per call
+
+```tsx
+import { createWithEqualityFn } from '@headlesskit/state-management-simplify-react';
+import { shallow } from '@headlesskit/state-management-simplify';
+
+interface TodosState {
+  todos: { id: string; text: string; done: boolean }[];
+}
+
+const useTodosStore = createWithEqualityFn<TodosState>(
+  () => ({
+    todos: [
+      { id: '1', text: 'Write docs', done: false },
+      { id: '2', text: 'Ship it', done: true },
+    ],
+  }),
+  shallow,
+);
+
+function DoneCount() {
+  // Overrides the store's default `shallow` with a custom comparator
+  // that only cares about the array's length, not its contents.
+  const doneCount = useTodosStore(
+    (state) => state.todos.filter((t) => t.done).length,
+    (a, b) => a === b,
+  );
+  return <p>{doneCount} done</p>;
+}
+```
+
+Passing `equalityFn` as the hook's third argument always wins over the store's `defaultEqualityFn` for that specific call, which is useful when most selectors on a store want the default but a handful need something stricter or looser.
+
+## Common pitfalls
+
+- **Requires the `use-sync-external-store` peer dependency to actually be installed.** `package.json` lists it under `peerDependencies` (`>=1.2.0`) with `peerDependenciesMeta` marking it `optional` — meaning your package manager won't hard-fail if it's missing, but importing `createWithEqualityFn`/`useStoreWithEqualityFn` (or anything from `traditional.ts`) at runtime will throw if the module can't be resolved. If you only ever use [`create`/`useStore`](./02-create) and [`useShallow`](./03-use-shallow), you don't need this dependency at all.
+- **`createWithEqualityFn` and `create` produce store instances that are not interchangeable mid-flight.** Pick one API per store at creation time — you can't take a `create`-based store and retroactively give its existing hook a default equality function; you'd need to build the store with `createWithEqualityFn` from the start.
+- **An `equalityFn` passed to the hook call overrides — it does not merge with — the store's `defaultEqualityFn`.** If you need *both* behaviors (e.g. shallow equality as a baseline plus an extra check), write a single combined comparator function and pass that.
+- **This largely overlaps with [`useShallow`](./03-use-shallow)** for the common shallow-equality case — prefer `useShallow` wrapping a plain `create`-based store unless you specifically want a non-shallow default applied automatically across every selector on that store without remembering to wrap each one.

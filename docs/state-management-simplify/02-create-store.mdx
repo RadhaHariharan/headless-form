@@ -1,0 +1,182 @@
+# createStore
+
+Creates a vanilla (framework-agnostic) store from a single initializer function. There should normally be only one store per concern in your app.
+
+```typescript
+import { createStore } from '@headlesskit/state-management-simplify';
+```
+
+## Signature
+
+`createStore` has two call shapes:
+
+```typescript
+createStore(initializer)
+createStore<T>()(initializer)
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `initializer` | `StateCreator<T, [], Mos>` | Yes | A function `(set, get, store) => T` that returns the initial state object. |
+
+**Returns:** a `Mutate<StoreApi<T>, Mos>` — in the common case with no middleware-added type mutations, this is just `StoreApi<T>` (see [Store API](#store-api) below).
+
+The curried form, `createStore<T>()(initializer)`, exists purely so you can explicitly annotate `T` without TypeScript trying (and usually failing) to infer it from the initializer alone — useful when your state type references itself (e.g. action methods that read `get()`).
+
+```typescript
+// Direct form — T is inferred from the return type of the initializer
+const store = createStore((set, get) => ({ count: 0 }));
+
+// Curried form — T is explicit
+const store = createStore<{ count: number }>()((set, get) => ({ count: 0 }));
+```
+
+## Basic usage
+
+```typescript
+import { createStore } from '@headlesskit/state-management-simplify';
+
+type CounterState = {
+  count: number;
+  increment: () => void;
+  decrement: () => void;
+  reset: () => void;
+};
+
+const store = createStore<CounterState>((set) => ({
+  count: 0,
+  increment: () => set((state) => ({ count: state.count + 1 })),
+  decrement: () => set((state) => ({ count: state.count - 1 })),
+  reset: () => set({ count: 0 }, true),
+}));
+
+store.getState().increment();
+store.getState().increment();
+console.log(store.getState().count); // 2
+```
+
+## Advanced: composing middleware around the initializer
+
+Because every middleware in this package wraps a `StateCreator` and returns another `StateCreator`, you compose them by nesting calls — outermost middleware runs first and can see what inner middleware added to the store:
+
+```typescript
+import { createStore } from '@headlesskit/state-management-simplify';
+import { devtools, persist } from '@headlesskit/state-management-simplify';
+
+type TodoState = {
+  todos: string[];
+  addTodo: (text: string) => void;
+};
+
+const store = createStore<TodoState>()(
+  devtools(
+    persist(
+      (set, get) => ({
+        todos: [],
+        addTodo: (text) => set((state) => ({ todos: [...state.todos, text] })),
+      }),
+      { name: 'todo-storage' },
+    ),
+    { name: 'TodoStore' },
+  ),
+);
+```
+
+## Store API
+
+The object returned by `createStore`.
+
+### setState
+
+```typescript
+store.setState(partial: T | Partial<T> | ((state: T) => T | Partial<T>), replace?: false): void
+store.setState(state: T | ((state: T) => T), replace: true): void
+```
+
+Updates the store's state.
+
+- `partial` can be a plain object to merge in, or a function `(state) => partial` that returns the value(s) to merge in (read the current state and compute the next one in the same call).
+- **Merge vs. replace:** by default (`replace` omitted or `false`), the next state is shallow-merged onto the current state with `Object.assign({}, state, nextState)` — **unless** the computed `nextState` is not an object (or is `null`), in which case it replaces outright regardless of the `replace` flag. Pass `replace: true` explicitly to always replace the whole state object rather than merge.
+- **No-op short-circuit:** if the computed next state is `Object.is`-equal to the current state, `setState` does nothing — listeners are not notified.
+
+```typescript
+// Merge (default) — only `count` changes, other keys are preserved
+store.setState({ count: 5 });
+
+// Functional updater — computes from current state
+store.setState((state) => ({ count: state.count + 1 }));
+
+// Replace — wipes out any keys not included in the new object
+store.setState({ count: 0 }, true);
+```
+
+### getState
+
+```typescript
+store.getState(): T
+```
+
+Returns the current state synchronously. Always the most recently set value.
+
+```typescript
+const { count } = store.getState();
+```
+
+### getInitialState
+
+```typescript
+store.getInitialState(): T
+```
+
+Returns the state as it was the very first time the initializer ran — independent of any subsequent `setState` calls. Useful for implementing a "reset to defaults" action, and used internally by the [`persist`](07-middleware-persist) middleware to fall back to a sane state when `get()` hasn't produced anything yet.
+
+```typescript
+const resetTodos = () => store.setState(store.getInitialState(), true);
+```
+
+### subscribe
+
+```typescript
+store.subscribe(listener: (state: T, prevState: T) => void): () => void
+```
+
+Registers `listener`, called with the new state and the previous state after every `setState` call that actually changes the state (no call if the no-op short-circuit above applies). Returns an `unsubscribe` function.
+
+```typescript
+const unsubscribe = store.subscribe((state, prevState) => {
+  console.log('count went from', prevState.count, 'to', state.count);
+});
+
+store.setState({ count: 1 }); // listener fires
+unsubscribe();
+store.setState({ count: 2 }); // listener does not fire
+```
+
+## Types
+
+### StoreApi\<T\>
+
+The shape described above: `{ setState, getState, getInitialState, subscribe }`.
+
+### StateCreator\<T, Mis, Mos, U\>
+
+The type of the function you pass to `createStore`: `(setState, getState, store) => U`, where `setState`/`getState`/`store` are typed according to any middleware mutations declared by `Mis` (mutators *in*, applied by middleware wrapping this initializer from the outside) and the creator itself may declare `Mos` (mutators *out*, the middleware-added capabilities this initializer's own middleware contributes) via the `$$storeMutators` phantom property.
+
+### ExtractState\<S\>
+
+```typescript
+type ExtractState<S> = S extends { getState: () => infer T } ? T : never
+```
+
+A utility type that pulls the state type `T` back out of anything shaped like a `StoreApi` (i.e. anything with a `getState` method) — useful for deriving a state type from a store instance instead of writing it out twice.
+
+### Mutate\<S, Ms\>
+
+The type-level mechanism that lets middleware declare "this adds capability X to the store." Each middleware that augments the store (e.g. `redux` adding `dispatch`, `persist` adding a `persist` object, `devtools` adding a `devtools` object) declares an entry in the module-augmented `StoreMutators<S, A>` interface, and `Mutate` walks the list of `[identifier, augmentation]` tuples to compute the final, fully-augmented store type. You generally don't write `Mutate` by hand — it's threaded through automatically by `createStore`'s return type and by each middleware's exported type.
+
+## Common pitfalls
+
+- **Expecting `setState` to always merge.** If your `partial` (or what your updater function returns) is not a plain object — e.g. you call `set(0)` or `set(null)` — it **replaces** the whole state regardless of the `replace` argument, because the merge logic only triggers `typeof nextState === 'object' && nextState !== null`. Only object-shaped partials get merged by default.
+- **Mutating state in place inside `set`.** `set((state) => { state.count++; return state })` returns the same object reference, so `Object.is(nextState, state)` is `true` and the no-op short-circuit silently drops the update — no error, no re-render, no listener call. Always return a new object (or use the [`immer` middleware](10-middleware-immer) if you want mutation-style syntax).
+- **Reading `getInitialState()` expecting it to reflect middleware augmentation.** It returns the raw return value of the initializer the very first time it ran, before any subsequent `setState` — it is not automatically kept in sync with structural changes added later by middleware that mutate the API object.
+- **Forgetting the curried form when `T` can't be inferred.** If your initializer's return type recursively depends on `get()`'s return type in a way TypeScript can't resolve in one pass, use `createStore<T>()(initializer)` instead of `createStore(initializer)`.

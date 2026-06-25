@@ -1,0 +1,124 @@
+# immer
+
+Lets you write state updates using mutable-looking syntax (`state.todos.push(...)`, `state.user.name = 'x'`) that [Immer](https://immerjs.github.io/immer/) turns into an immutable, structurally-shared next state under the hood — instead of hand-writing spreads for every nested update.
+
+```typescript
+import { immer } from '@headlesskit/state-management-simplify';
+```
+
+> **Requires the optional peer dependency `immer`.** This package declares `immer` as an optional peer dependency (`>=9.0.6` in `package.json`) — it is not bundled. You must install it yourself:
+> ```bash
+> pnpm add immer
+> ```
+> If `immer` isn't installed, importing this middleware throws a module-resolution error at import time, not a graceful runtime fallback.
+
+## Signature
+
+```typescript
+immer<T, U = T>(
+  initializer: StateCreator<T, [...Mps, ['zustand/immer', never]], Mcs, U>,
+): StateCreator<T, Mps, [['zustand/immer', never], ...Mcs], U>
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `initializer` | `StateCreator<T, ...>` | Yes | The initializer whose `set` should accept Immer-style recipe functions. |
+
+**Returns:** a `StateCreator` whose store's `setState` (and the `set` passed into the initializer) accepts, in addition to the usual plain object/updater-function forms, a **recipe function** `(draft: Draft<T>) => void` that mutates a Proxy-backed draft instead of returning a new value.
+
+## What it actually does
+
+```typescript
+const immerImpl: ImmerImpl = (initializer) => (set, get, store) => {
+  store.setState = (updater, replace, ...args) => {
+    const nextState =
+      typeof updater === 'function' ? produce(updater as any) : updater
+    return set(nextState, replace as any, ...args)
+  }
+  return initializer(store.setState, get, store)
+}
+```
+
+The middleware replaces `store.setState` (and therefore the `set` your initializer receives, since `initializer` is invoked with `store.setState` directly) with a version that checks whether you passed a function:
+
+- **If `updater` is a function,** it's treated as an Immer recipe and passed to `produce(updater)` — Immer's curried form, which returns a new function `(baseState) => nextState` that, when called, runs your recipe against a draft proxy of `baseState` and returns the finalized (structurally-shared) immutable result. That produced function is what actually gets passed down to the underlying `set`.
+- **If `updater` is not a function** (a plain partial object), it's passed through unchanged — `immer` doesn't intercept direct object updates, only function-style ones.
+
+Because `produce(updater)` is curried (returns a function rather than immediately running), and that returned function is exactly what's forwarded as the first argument to the underlying `set`, the underlying store's own functional-updater handling (`typeof partial === 'function' ? partial(state) : partial`, from [`createStore`](02-create-store)) is what actually invokes it against the current state — `immer` itself never calls `get()`.
+
+## Basic usage
+
+```typescript
+import { createStore } from '@headlesskit/state-management-simplify';
+import { immer } from '@headlesskit/state-management-simplify';
+
+type TodoState = {
+  todos: { id: number; text: string; done: boolean }[];
+  addTodo: (text: string) => void;
+  toggleTodo: (id: number) => void;
+};
+
+const store = createStore<TodoState>()(
+  immer((set) => ({
+    todos: [],
+    addTodo: (text) =>
+      set((state) => {
+        state.todos.push({ id: Date.now(), text, done: false });
+      }),
+    toggleTodo: (id) =>
+      set((state) => {
+        const todo = state.todos.find((t) => t.id === id);
+        if (todo) todo.done = !todo.done;
+      }),
+  })),
+);
+
+store.getState().addTodo('Buy milk');
+store.getState().toggleTodo(store.getState().todos[0].id);
+console.log(store.getState().todos[0].done); // true
+```
+
+Notice the recipe function **does not `return`** anything — like any Immer producer, you mutate the `draft` argument directly, and Immer derives the next state from those mutations.
+
+## Advanced: deeply nested updates without manual spreading
+
+Immer's main value is collapsing what would otherwise be several levels of spread operators into direct property assignment — most useful for state shapes with nested objects/arrays several levels deep:
+
+```typescript
+import { createStore } from '@headlesskit/state-management-simplify';
+import { immer } from '@headlesskit/state-management-simplify';
+
+type FormState = {
+  sections: {
+    address: { street: string; city: string; country: string };
+    contact: { email: string; phone: string };
+  };
+  setAddressField: (field: keyof FormState['sections']['address'], value: string) => void;
+};
+
+const store = createStore<FormState>()(
+  immer((set) => ({
+    sections: {
+      address: { street: '', city: '', country: '' },
+      contact: { email: '', phone: '' },
+    },
+    setAddressField: (field, value) =>
+      set((state) => {
+        state.sections.address[field] = value;
+      }),
+  })),
+);
+
+store.getState().setAddressField('city', 'Berlin');
+// Without immer this would be:
+// set((state) => ({
+//   sections: { ...state.sections, address: { ...state.sections.address, city: 'Berlin' } },
+// }))
+```
+
+## Common pitfalls
+
+- **`immer` is not bundled — you must install it yourself.** It's a peer dependency, listed as `optional: true` in `peerDependenciesMeta`. Forgetting to `pnpm add immer` produces a module-not-found error the moment this middleware's module is imported, before any store code runs.
+- **Recipe functions must not `return` a new state and also mutate the draft.** Immer recipes follow the same rule as plain Immer `produce` calls: either mutate `draft` and return nothing (`undefined`), or return a brand-new value and don't touch `draft` — mixing both in the same recipe is an Immer-level error, not specific to this middleware.
+- **Plain object updates bypass Immer entirely.** `set({ count: 5 })` (a non-function argument) is forwarded as-is to the underlying merge logic — Immer's draft/proxy machinery only kicks in for the function form. This is usually what you want (no overhead for simple merges) but means you can't rely on Immer-specific behaviors (like its handling of `Map`/`Set`) for object-literal updates.
+- **The `replace` flag still applies after Immer produces the next state.** `set(recipe, true)` runs the recipe, gets back a finalized object, and *then* passes `replace: true` straight through to the underlying `set` — so the produced object still replaces the whole state outright rather than merging, same as without `immer`.

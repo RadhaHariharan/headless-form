@@ -1,0 +1,86 @@
+# shallow
+
+A shallow-equality comparator for two values — most often used as the `equalityFn` passed to [`subscribeWithSelector`](08-middleware-subscribe-with-selector), or by framework bindings to decide whether a selected slice of state actually changed.
+
+```typescript
+import { shallow } from '@headlesskit/state-management-simplify';
+```
+
+## Signature
+
+```typescript
+shallow<T>(valueA: T, valueB: T): boolean
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `valueA` | `T` | Yes | The first value to compare. |
+| `valueB` | `T` | Yes | The second value to compare. |
+
+**Returns:** `boolean` — `true` if the two values are considered shallowly equal.
+
+## Comparison algorithm
+
+`shallow` runs through these checks, in order, and returns as soon as one applies:
+
+1. **Reference/primitive equality first.** `Object.is(valueA, valueB)` — if `true` (same reference, or equal primitives, including `NaN === NaN` and distinguishing `+0`/`-0`), returns `true` immediately without inspecting contents.
+2. **Type mismatch → not equal.** If either value is not a non-null `object` (i.e. either is a primitive, or either is `null`), returns `false`. Two different primitives that aren't `Object.is`-equal can never be shallowly equal.
+3. **Prototype mismatch → not equal.** `Object.getPrototypeOf(valueA) !== Object.getPrototypeOf(valueB)` returns `false` — a plain object will never be considered shallowly equal to a `Map`, a class instance to a plain object, etc.
+4. **Iterables with `.entries()` (`Map`-like) →** compared key-by-key: same `.size`, and every key in `valueA`'s map has a matching key in `valueB`'s map with an `Object.is`-equal value.
+5. **Other iterables (e.g. `Set`, arrays) →** compared element-by-element, in iteration order, with `Object.is`; both iterators must exhaust together (same length).
+6. **Plain objects (fallback) →** compared via `Object.entries`, using the same entry-comparison logic as step 4 — same number of own enumerable keys, and every key's value is `Object.is`-equal.
+
+In every case, comparison is **one level deep**: nested objects/arrays are compared by reference (`Object.is`), not recursively.
+
+## Basic usage
+
+```typescript
+import { shallow } from '@headlesskit/state-management-simplify';
+
+shallow({ a: 1, b: 2 }, { a: 1, b: 2 }); // true — same keys/values
+shallow({ a: 1, b: 2 }, { a: 1, b: 3 }); // false — b differs
+shallow({ a: { x: 1 } }, { a: { x: 1 } }); // false — nested object is a *different reference*
+
+shallow([1, 2, 3], [1, 2, 3]); // true — array elements compared in order
+shallow(new Set([1, 2]), new Set([1, 2])); // true
+shallow(new Map([['a', 1]]), new Map([['a', 1]])); // true
+```
+
+## Advanced: pairing with subscribeWithSelector to avoid redundant notifications
+
+The most realistic use of `shallow` in this package is as the `equalityFn` for a selector-scoped subscription, so a listener only fires when the *selected slice* meaningfully changes, even if unrelated parts of the store change (which would otherwise produce a new object reference for the selected slice on every render-triggering update):
+
+```typescript
+import { createStore } from '@headlesskit/state-management-simplify';
+import { subscribeWithSelector } from '@headlesskit/state-management-simplify';
+import { shallow } from '@headlesskit/state-management-simplify';
+
+type FormState = {
+  values: Record<string, string>;
+  touched: Record<string, boolean>;
+  setValue: (key: string, value: string) => void;
+};
+
+const store = createStore<FormState>()(
+  subscribeWithSelector((set) => ({
+    values: {},
+    touched: {},
+    setValue: (key, value) =>
+      set((state) => ({ values: { ...state.values, [key]: value } })),
+  })),
+);
+
+// Only fires when the *contents* of `values` actually differ —
+// not on every setValue call to unrelated state.
+store.subscribe(
+  (state) => state.values,
+  (values) => console.log('values changed:', values),
+  { equalityFn: shallow },
+);
+```
+
+## Common pitfalls
+
+- **Expecting deep equality.** `shallow({ a: { x: 1 } }, { a: { x: 1 } })` is `false` because the nested `a` objects are different references — `shallow` only compares one level. If you need to compare nested structures, select a flatter slice of state, or write/bring your own deep-equality function.
+- **Mixing container types.** A `Map` and a plain object with the same key/value pairs are never shallowly equal — the prototype check fails before any entries are compared.
+- **Relying on it for `Object.is`-sensitive values.** Because the leaf comparison is `Object.is`, two `NaN` values are equal, but `+0` and `-0` are not — same semantics as `Object.is` throughout, not `===`.

@@ -1,0 +1,104 @@
+# combine
+
+A small middleware that lets you split an initial state object from the functions/actions that operate on it, then merges the two together into the final store state. Most useful for organizing a large store into named pieces without writing out a full object literal by hand.
+
+```typescript
+import { combine } from '@headlesskit/state-management-simplify';
+```
+
+## Signature
+
+```typescript
+combine<T, U>(initialState: T, create: StateCreator<T, Mps, Mcs, U>): StateCreator<Write<T, U>, Mps, Mcs>
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `initialState` | `T extends object` | Yes | The plain initial-state object (data only, typically no functions). |
+| `create` | `StateCreator<T, Mps, Mcs, U>` | Yes | A standard `(set, get, store) => U` initializer; typically returns the actions/methods that operate on `initialState`. |
+
+**Returns:** a `StateCreator<Write<T, U>, Mps, Mcs>` — a new initializer whose resulting state is `initialState` merged with whatever `create` returns (`U`'s keys win over `T`'s on type conflicts, per `Write<T, U> = Omit<T, keyof U> & U`).
+
+## What it actually does
+
+The implementation is a single line:
+
+```typescript
+return (...args) => Object.assign({}, initialState, (create as any)(...args))
+```
+
+`combine` returns a new `StateCreator`. When `createStore` invokes that creator with `(set, get, store)`, it calls your `create` function with the same arguments, then `Object.assign`s the result *onto a copy of* `initialState` — so the final returned state object has `initialState`'s keys first, and any returned by `create` are merged in afterward (overwriting on key collision).
+
+## Basic usage
+
+```typescript
+import { createStore } from '@headlesskit/state-management-simplify';
+import { combine } from '@headlesskit/state-management-simplify';
+
+const store = createStore(
+  combine({ count: 0 }, (set) => ({
+    increment: () => set((state) => ({ count: state.count + 1 })),
+    decrement: () => set((state) => ({ count: state.count - 1 })),
+  })),
+);
+
+store.getState().increment();
+console.log(store.getState().count); // 1
+```
+
+This is functionally identical to writing the object out directly:
+
+```typescript
+const store = createStore((set) => ({
+  count: 0,
+  increment: () => set((state) => ({ count: state.count + 1 })),
+  decrement: () => set((state) => ({ count: state.count - 1 })),
+}));
+```
+
+`combine`'s value is purely organizational — separating "what the data looks like" from "what operations exist on it" — plus, because `initialState`'s type is inferred directly from the literal you pass (rather than from the return type of a larger arrow function), you sometimes get better type inference for the data shape than you would writing one large object literal with mixed data and methods.
+
+## Advanced: splitting a large store into named slices
+
+A common real-world pattern: define each "slice" of a large store as its own `combine` call producing data + actions for that slice, then merge the slices together by spreading each one inside a top-level initializer:
+
+```typescript
+import { createStore } from '@headlesskit/state-management-simplify';
+import { combine } from '@headlesskit/state-management-simplify';
+
+type UserSlice = { user: { name: string } | null; setUser: (name: string) => void };
+type CartSlice = { items: string[]; addItem: (item: string) => void; clearCart: () => void };
+
+const createUserSlice = combine(
+  { user: null as { name: string } | null },
+  (set) => ({
+    setUser: (name: string) => set({ user: { name } }),
+  }),
+);
+
+const createCartSlice = combine(
+  { items: [] as string[] },
+  (set) => ({
+    addItem: (item: string) => set((state: CartSlice) => ({ items: [...state.items, item] })),
+    clearCart: () => set({ items: [] }),
+  }),
+);
+
+const store = createStore<UserSlice & CartSlice>()((...a) => ({
+  ...createUserSlice(...a),
+  ...createCartSlice(...a),
+}));
+
+store.getState().setUser('Alice');
+store.getState().addItem('Widget');
+console.log(store.getState());
+// { user: { name: 'Alice' }, items: ['Widget'], setUser: [Function], addItem: [Function], clearCart: [Function] }
+```
+
+Each slice creator still receives the *same* `set`/`get`/`store` from the top-level `createStore` call (because `(...a) => ({ ...createUserSlice(...a), ...createCartSlice(...a) })` forwards the same arguments to both), so actions in one slice can read or update state belonging to another slice via the shared `get`/`set`.
+
+## Common pitfalls
+
+- **Putting functions in `initialState`.** `combine`'s first argument is meant to be plain data; while nothing technically stops you from putting a function there, anything `create` returns with the same key will silently overwrite it (because `Object.assign` applies `create`'s result *after* `initialState`), which can be a confusing source of "my method got replaced."
+- **Forgetting that `Object.assign` is shallow.** Just like `setState`'s default merge behavior, `combine`'s merge is one level deep — nested objects in `initialState` are not deep-merged with anything `create` returns under the same key, the latter simply replaces the former.
+- **Re-creating a fresh `initialState` object on every call.** If `initialState` is computed inline (e.g. `combine({ items: [] }, ...)`), the array literal is evaluated once, when `combine` is called (not once per store instance) — be mindful if you reuse the same `combine(...)` result to create multiple stores, since `Object.assign({}, initialState, ...)` does protect against *mutating* the shared `initialState` reference, but any object/array values *inside* it are still shared by reference across stores until something replaces them.

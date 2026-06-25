@@ -1,0 +1,50 @@
+# State Management Simplify React
+
+`@headlesskit/state-management-simplify-react` provides the React bindings for [`@headlesskit/state-management-simplify`](../state-management-simplify/01-overview) — the hooks layer that subscribes a component to a vanilla store and re-renders it on change. It is a faithful port of [Zustand](https://github.com/pmndrs/zustand)'s React integration (`src/react.ts`, `src/react/shallow.ts`, `src/traditional.ts`), created by Paul Henschel and the [pmndrs](https://github.com/pmndrs) collective. Zustand is MIT licensed, and this port carries the same license.
+
+```bash
+pnpm add @headlesskit/state-management-simplify-react
+# or
+npm install @headlesskit/state-management-simplify-react
+```
+
+> `@headlesskit/state-management-simplify-react` depends on `@headlesskit/state-management-simplify` for the vanilla store primitives (`createStore`, `shallow`) — see that package's docs for `setState`/`getState`/`subscribe` semantics, since none of that is re-explained here. `react` (`>=18`) is a peer dependency, and `use-sync-external-store` (`>=1.2.0`) is an optional peer dependency required only by [`createWithEqualityFn`/`useStoreWithEqualityFn`](./04-traditional).
+
+---
+
+## What's in this package
+
+| Export | File | Description |
+|--------|------|-------------|
+| [`create`](./02-create) | `react.ts` | Builds a store and returns an auto-generated React hook bound to it — the primary entry point. |
+| [`useStore`](./02-create) | `react.ts` | The lower-level hook `create` is built on — subscribes a component to an existing store API via `useSyncExternalStore`. |
+| [`useShallow`](./03-use-shallow) | `react/shallow.ts` | Wraps a selector so it returns a shallowly-stable reference across renders, preventing unnecessary re-renders when the selector returns a new object/array each call. |
+| [`createWithEqualityFn`](./04-traditional) | `traditional.ts` | Like `create`, but accepts an explicit equality function (per-call or as a default) instead of requiring `useShallow`. |
+| [`useStoreWithEqualityFn`](./04-traditional) | `traditional.ts` | The lower-level hook `createWithEqualityFn` is built on. |
+
+---
+
+## A complete mental model, end to end
+
+```typescript
+import { create } from '@headlesskit/state-management-simplify-react';
+
+const useCounterStore = create((set) => ({
+  count: 0,
+  increment: () => set((state) => ({ count: state.count + 1 })),
+}));
+
+function Counter() {
+  const count = useCounterStore((state) => state.count);
+  const increment = useCounterStore((state) => state.increment);
+  return <button onClick={increment}>{count}</button>;
+}
+```
+
+`create` builds a vanilla store with [`createStore`](../state-management-simplify/01-overview) under the hood, then wraps it in a hook that calls `useStore` internally — every render, the hook subscribes to the store via `useSyncExternalStore` and re-renders only when the selected slice changes.
+
+---
+
+## License
+
+MIT — identical to Zustand upstream.

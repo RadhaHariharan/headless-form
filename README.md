@@ -24,6 +24,11 @@ reference, options, advanced examples, internals — see each package's own READ
 | [`@headlesskit/query-sync-storage-persister`](./packages/query-sync-storage-persister) | A persister backed by a synchronous key-value store (e.g. `localStorage`) |
 | [`@headlesskit/state-management`](./packages/state-management) | Predictable state container, API-compatible with Redux v5 |
 | [`@headlesskit/state-management-toolkit`](./packages/state-management-toolkit) | Slices, async thunks, entities, listener middleware, and an RTK-Query-style data layer |
+| [`@headlesskit/state-management-simplify`](./packages/state-management-simplify) | A small, fast, scalable bare-bones store, API-compatible with Zustand |
+| [`@headlesskit/state-management-simplify-react`](./packages/state-management-simplify-react) | React bindings for `state-management-simplify` |
+
+Several packages are ports of well-known open-source libraries, published under the
+`@headlesskit` scope — see [NOTICE.md](./NOTICE.md) for the full attribution.
 
 Click into any package above for its full README — install instructions, quick start,
 complete API surface, and links to its in-depth docs.
@@ -104,4 +109,5 @@ responsibly instead of opening a public issue.
 
 ## License
 
-[MIT](./LICENSE) © headlesskit contributors
+[MIT](./LICENSE) © headlesskit contributors. See [NOTICE.md](./NOTICE.md) for attribution of
+the upstream open-source projects some packages are ported from.

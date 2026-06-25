@@ -37,6 +37,18 @@ const PACKAGE_META = {
     group: 'State Management',
     description: 'Slices, async thunks, entities, listener middleware, and a data-fetching layer.',
   },
+  'state-management-simplify': {
+    name: 'state-management-simplify',
+    npm: '@headlesskit/state-management-simplify',
+    group: 'State Management',
+    description: 'A small, fast, scalable bare-bones store — API-compatible with Zustand.',
+  },
+  'state-management-simplify-react': {
+    name: 'state-management-simplify-react',
+    npm: '@headlesskit/state-management-simplify-react',
+    group: 'State Management',
+    description: 'React bindings for state-management-simplify — create, useShallow, and friends.',
+  },
   'query-core': {
     name: 'query-core',
     npm: '@headlesskit/query-core',

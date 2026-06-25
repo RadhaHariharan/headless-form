@@ -1,0 +1,199 @@
+# persist
+
+Persists a store's state to `localStorage` (or any custom storage you provide), and rehydrates it automatically when the store is created. Supports versioned schema migration, partial persistence, custom merge strategies, and SSR-safe deferred hydration.
+
+```typescript
+import { persist, createJSONStorage } from '@headlesskit/state-management-simplify';
+```
+
+## Signature
+
+```typescript
+persist<T, U = T>(
+  initializer: StateCreator<T, [...Mps, ['zustand/persist', unknown]], Mcs>,
+  options: PersistOptions<T, U>,
+): StateCreator<T, Mps, [['zustand/persist', U], ...Mcs]>
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `initializer` | `StateCreator<T, ...>` | Yes | The initializer to persist. |
+| `options` | `PersistOptions<T, U>` | Yes | Storage and lifecycle configuration — see table below. |
+
+**Returns:** a `StateCreator` whose store gains a `persist: { setOptions, clearStorage, rehydrate, hasHydrated, onHydrate, onFinishHydration, getOptions }` object.
+
+### PersistOptions\<S, PersistedState, PersistReturn\>
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `name` | `string` | — (required) | Storage key. Must be unique — collisions overwrite each other's persisted data. |
+| `storage` | `PersistStorage<PersistedState, PersistReturn>` | `createJSONStorage(() => window.localStorage)` | Where to read/write. Use `createJSONStorage` to wrap a raw `getItem`/`setItem`/`removeItem` storage (e.g. `sessionStorage`, React Native's `AsyncStorage`) with JSON serialization. |
+| `partialize` | `(state: S) => PersistedState` | `(state) => state` (persist everything) | Filters/transforms state before writing — e.g. to exclude transient UI state or functions from being persisted. |
+| `onRehydrateStorage` | `(state: S) => ((state?: S, error?: unknown) => void) \| void` | — | Called *before* rehydration starts, with the best-available state at that point. Return a callback to be invoked *after* hydration finishes (or fails) — that callback receives the final hydrated state, or an `error`. |
+| `version` | `number` | `0` | The current schema version. If the persisted value's stored `version` doesn't match, `migrate` is invoked instead of merging directly. |
+| `migrate` | `(persistedState: unknown, version: number) => PersistedState \| Promise<PersistedState>` | — | Transforms an old persisted shape into the current one. If versions mismatch and no `migrate` is provided, an error is logged to the console and the stored state is effectively unused for that migration step. |
+| `merge` | `(persistedState: unknown, currentState: S) => S` | `(persisted, current) => ({ ...current, ...persisted })` (shallow merge) | Combines the persisted value with the state already produced by the initializer. Override for deep merges or custom reconciliation. |
+| `skipHydration` | `boolean` | `false` | If `true`, the middleware does **not** automatically call `hydrate()` on store creation — you must call `store.persist.rehydrate()` yourself. Intended for SSR, where you don't want hydration racing the server-rendered markup. |
+
+## createJSONStorage
+
+```typescript
+createJSONStorage<S, R = unknown>(
+  getStorage: () => StateStorage<R>,
+  options?: { reviver?: (key, value) => unknown; replacer?: (key, value) => unknown },
+): PersistStorage<S, unknown> | undefined
+```
+
+Wraps a raw, string-based `StateStorage` (an object with `getItem(name): string | null`, `setItem(name, value: string)`, `removeItem(name)` — the shape of `window.localStorage`/`window.sessionStorage`) into a `PersistStorage` that automatically `JSON.stringify`s on write and `JSON.parse`s on read, including an optional `reviver`/`replacer` pair forwarded to `JSON.parse`/`JSON.stringify`.
+
+`getStorage` is called **lazily, inside a `try`/`catch`**, and `createJSONStorage` returns `undefined` if it throws — this is what makes it safe to write `createJSONStorage(() => window.localStorage)` at module scope in an isomorphic codebase: on the server, where `window` doesn't exist, accessing it throws, the `catch` swallows it, and `persist` falls back to its "storage unavailable" warning path (see below) instead of crashing.
+
+```typescript
+const storage = createJSONStorage<MyState>(() => window.localStorage);
+// On the server (no `window`): storage is `undefined`, and persist warns instead of throwing.
+```
+
+## Basic usage
+
+```typescript
+import { createStore } from '@headlesskit/state-management-simplify';
+import { persist, createJSONStorage } from '@headlesskit/state-management-simplify';
+
+type SettingsState = {
+  theme: 'light' | 'dark';
+  setTheme: (theme: 'light' | 'dark') => void;
+};
+
+const store = createStore<SettingsState>()(
+  persist(
+    (set) => ({
+      theme: 'light',
+      setTheme: (theme) => set({ theme }),
+    }),
+    {
+      name: 'app-settings',
+      storage: createJSONStorage(() => localStorage),
+    },
+  ),
+);
+
+store.getState().setTheme('dark');
+// localStorage now has key "app-settings" → '{"state":{"theme":"dark"},"version":0}'
+```
+
+## Advanced: versioned migration with a custom migrate function
+
+When you ship a breaking change to your persisted shape, bump `version` and provide `migrate` to transform whatever's already in storage into the new shape — this runs automatically the first time a client with an old persisted version loads the new code:
+
+```typescript
+import { createStore } from '@headlesskit/state-management-simplify';
+import { persist, createJSONStorage } from '@headlesskit/state-management-simplify';
+
+// v0 shape: { favoriteColor: string }
+// v1 shape: { theme: { color: string; mode: 'light' | 'dark' } }
+type SettingsStateV1 = {
+  theme: { color: string; mode: 'light' | 'dark' };
+  setColor: (color: string) => void;
+};
+
+const store = createStore<SettingsStateV1>()(
+  persist(
+    (set) => ({
+      theme: { color: 'blue', mode: 'light' },
+      setColor: (color) => set((state) => ({ theme: { ...state.theme, color } })),
+    }),
+    {
+      name: 'app-settings',
+      storage: createJSONStorage(() => localStorage),
+      version: 1,
+      migrate: (persistedState, version) => {
+        if (version === 0) {
+          const old = persistedState as { favoriteColor: string };
+          return { theme: { color: old.favoriteColor, mode: 'light' } };
+        }
+        return persistedState as SettingsStateV1;
+      },
+    },
+  ),
+);
+```
+
+`migrate` can also return a `Promise` — useful if migration needs to read additional data asynchronously (e.g. fetching a default from a server) before the new shape is ready. The hydration pipeline (`hydrate()`'s `.then` chain) awaits it either way.
+
+## Advanced: SSR with skipHydration and manual rehydrate
+
+In a server-rendered app, you typically render the initial state on the server (where there's no `localStorage`) and only want hydration to run once on the client, at a controlled point — not racing the framework's own hydration pass:
+
+```typescript
+import { createStore } from '@headlesskit/state-management-simplify';
+import { persist, createJSONStorage } from '@headlesskit/state-management-simplify';
+
+const store = createStore<SettingsState>()(
+  persist(
+    (set) => ({ theme: 'light', setTheme: (theme) => set({ theme }) }),
+    {
+      name: 'app-settings',
+      storage: createJSONStorage(() => localStorage),
+      skipHydration: true,
+    },
+  ),
+);
+
+// Later, once you're certain you're on the client and it's safe to read storage:
+if (typeof window !== 'undefined') {
+  store.persist.rehydrate();
+}
+```
+
+## Persist API
+
+### persist.rehydrate()
+
+```typescript
+store.persist.rehydrate(): Promise<void>
+```
+
+Manually triggers hydration. Internally bumps a `hydrationVersion` counter so that if `rehydrate()` is called again before a prior hydration finishes, the stale one's `.then` callbacks detect the version mismatch and abort without applying outdated state — this guards against race conditions from overlapping concurrent rehydrations.
+
+### persist.hasHydrated()
+
+```typescript
+store.persist.hasHydrated(): boolean
+```
+
+Returns whether the most recent hydration has completed (`true` once the success or error path of the current hydration's promise chain finishes).
+
+### persist.onHydrate(fn) / persist.onFinishHydration(fn)
+
+```typescript
+store.persist.onHydrate(fn: (state: T) => void): () => void
+store.persist.onFinishHydration(fn: (state: T) => void): () => void
+```
+
+Subscribe to the start (`onHydrate`) and end (`onFinishHydration`) of every hydration pass — useful for showing a loading indicator while persisted state is being read and merged. Both return an unsubscribe function.
+
+### persist.setOptions(options) / persist.getOptions()
+
+```typescript
+store.persist.setOptions(options: Partial<PersistOptions<T, U>>): void
+store.persist.getOptions(): Partial<PersistOptions<T, U>>
+```
+
+Reconfigure persistence options at runtime (e.g. swap `storage` after the fact) and read the currently active options.
+
+### persist.clearStorage()
+
+```typescript
+store.persist.clearStorage(): void
+```
+
+Calls `storage.removeItem(name)` — erases the persisted entry without touching in-memory state.
+
+## Common pitfalls
+
+- **`skipHydration` requires you to call `rehydrate()` yourself.** If you set `skipHydration: true` and never call `store.persist.rehydrate()`, the store's state simply stays whatever the initializer produced — persisted data is never read back in.
+- **Storage unavailable degrades silently, not loudly.** If `createJSONStorage`'s `getStorage()` throws (e.g. no `window` on the server) or you explicitly pass `storage: undefined`, `persist` doesn't error — it returns the unwrapped initializer wrapped only with a `console.warn` on every `setState` ("the given storage is currently unavailable"), and reading/writing persisted state is effectively disabled for that session.
+- **`migrate` is required once you bump `version`.** If `version` no longer matches what's in storage and you haven't provided `migrate`, the middleware logs `"State loaded from storage couldn't be migrated since no migrate function was provided"` and the old persisted data is discarded for that load rather than merged.
+- **`partialize` only affects what's *written*, not what's read back.** If you exclude a key from persistence with `partialize`, `merge`'s `currentState` argument still has that key (from the live initializer), but anything previously written under an older `partialize` config that included it may still be present in storage until overwritten.
+- **The default `merge` is shallow.** `{ ...currentState, ...persistedState }` — nested objects in `persistedState` fully replace the corresponding nested object in `currentState`, they are not deep-merged. Provide a custom `merge` if you need deep reconciliation.
+- **`name` collisions silently share storage.** Two different stores configured with the same `name` (and no distinguishing storage instance) will read and overwrite each other's persisted data.

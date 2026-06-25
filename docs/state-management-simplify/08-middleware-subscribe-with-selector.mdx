@@ -1,0 +1,142 @@
+# subscribeWithSelector
+
+Augments a store's `subscribe` method to accept an optional **selector**, so listeners can be scoped to a slice of state and only fire when that slice actually changes (per a configurable equality check), instead of firing on every state update.
+
+```typescript
+import { subscribeWithSelector } from '@headlesskit/state-management-simplify';
+```
+
+## Signature
+
+```typescript
+subscribeWithSelector<T>(
+  initializer: StateCreator<T, [...Mps, ['zustand/subscribeWithSelector', never]], Mcs>,
+): StateCreator<T, Mps, [['zustand/subscribeWithSelector', never], ...Mcs]>
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `initializer` | `StateCreator<T, ...>` | Yes | The initializer whose store's `subscribe` should gain selector support. |
+
+**Returns:** a `StateCreator` whose store's `subscribe` method is overloaded to accept either the original `(listener)` signature or a new `(selector, listener, options?)` signature.
+
+### subscribe overloads after applying this middleware
+
+```typescript
+store.subscribe(listener: (state: T, prevState: T) => void): () => void
+
+store.subscribe<U>(
+  selector: (state: T) => U,
+  listener: (selectedState: U, previousSelectedState: U) => void,
+  options?: { equalityFn?: (a: U, b: U) => boolean; fireImmediately?: boolean },
+): () => void
+```
+
+### Selector subscribe options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `equalityFn` | `(a: U, b: U) => boolean` | `Object.is` | How to decide whether the selected slice changed. Pass [`shallow`](03-shallow) to treat shallowly-equal objects/arrays as unchanged. |
+| `fireImmediately` | `boolean` | `false` | If `true`, calls `listener` once immediately with the current selected value (as both "current" and "previous"), in addition to on future changes. |
+
+## What it actually does
+
+```typescript
+const origSubscribe = api.subscribe
+api.subscribe = (selector, optListener, options) => {
+  let listener = selector // if no selector passed, `selector` IS the listener
+  if (optListener) {
+    const equalityFn = options?.equalityFn || Object.is
+    let currentSlice = selector(api.getState())
+    listener = (state) => {
+      const nextSlice = selector(state)
+      if (!equalityFn(currentSlice, nextSlice)) {
+        const previousSlice = currentSlice
+        optListener((currentSlice = nextSlice), previousSlice)
+      }
+    }
+    if (options?.fireImmediately) {
+      optListener(currentSlice, currentSlice)
+    }
+  }
+  return origSubscribe(listener)
+}
+```
+
+The middleware wraps `api.subscribe`, preserving backward compatibility: if you call it with a single function and no second argument, that function is treated as a plain whole-state listener (the original behavior) and passed straight through to the original `subscribe`. Only when a second argument (`optListener`) is present does it switch into selector mode — computing `selector(state)` on every change, comparing it against the previously-selected value with `equalityFn`, and only invoking your `listener` when they differ. The closed-over `currentSlice` is updated on every comparison (even ones that don't fire the listener get checked, but only differing ones update `currentSlice` — actually `currentSlice` is reassigned exactly when the equality check fails, via `(currentSlice = nextSlice)` inside the `optListener` call argument).
+
+## Basic usage
+
+```typescript
+import { createStore } from '@headlesskit/state-management-simplify';
+import { subscribeWithSelector } from '@headlesskit/state-management-simplify';
+
+type FormState = {
+  email: string;
+  password: string;
+  setEmail: (email: string) => void;
+  setPassword: (password: string) => void;
+};
+
+const store = createStore<FormState>()(
+  subscribeWithSelector((set) => ({
+    email: '',
+    password: '',
+    setEmail: (email) => set({ email }),
+    setPassword: (password) => set({ password }),
+  })),
+);
+
+// Only fires when `email` changes — not when `password` changes
+const unsubscribe = store.subscribe(
+  (state) => state.email,
+  (email, prevEmail) => console.log('email changed from', prevEmail, 'to', email),
+);
+
+store.getState().setPassword('secret'); // listener does not fire
+store.getState().setEmail('a@b.com');   // listener fires: "email changed from  to a@b.com"
+```
+
+## Advanced: shallow equality and fireImmediately for derived UI state
+
+Combining `equalityFn: shallow` with a selector that returns a new object/array on every call avoids needless listener invocations when the *individual fields* haven't changed, even though the selector produces a structurally-different reference each time. `fireImmediately` is useful for initializing UI state (e.g. syncing to an external non-React system) without a separate manual read on mount:
+
+```typescript
+import { createStore } from '@headlesskit/state-management-simplify';
+import { subscribeWithSelector } from '@headlesskit/state-management-simplify';
+import { shallow } from '@headlesskit/state-management-simplify';
+
+type CartState = {
+  items: { id: string; qty: number }[];
+  total: number;
+  addItem: (id: string) => void;
+};
+
+const store = createStore<CartState>()(
+  subscribeWithSelector((set, get) => ({
+    items: [],
+    total: 0,
+    addItem: (id) =>
+      set((state) => {
+        const items = [...state.items, { id, qty: 1 }];
+        return { items, total: items.length };
+      }),
+  })),
+);
+
+store.subscribe(
+  (state) => ({ count: state.items.length, total: state.total }),
+  ({ count, total }) => {
+    document.title = `Cart (${count}) — $${total}`;
+  },
+  { equalityFn: shallow, fireImmediately: true },
+);
+// Title is set immediately to "Cart (0) — $0", then updates only when count or total actually change
+```
+
+## Common pitfalls
+
+- **Forgetting that the default equality is `Object.is`, not deep/shallow.** If your selector returns a freshly-constructed object or array (e.g. `(state) => ({ a: state.a, b: state.b })`), the listener fires on *every* state change, because the new object is never `Object.is`-equal to the previous one — pass `equalityFn: shallow` (or your own comparator) when selecting derived object/array values.
+- **Single-argument `subscribe` calls bypass selector logic entirely.** `store.subscribe(listener)` (one argument) is routed straight to the original `subscribe`, unaffected by `equalityFn`/`fireImmediately` — those only apply to the two-or-three-argument selector form.
+- **`fireImmediately` calls the listener with `(currentSlice, currentSlice)`** — both "current" and "previous" are the same initial value, not `undefined`/`previousSlice`. Code that expects to distinguish "first call" from "real change" by comparing the two arguments needs an extra flag.
+- **This middleware must wrap the initializer, not be applied after `createStore` returns.** Like all middleware here, it only takes effect if passed into `createStore(subscribeWithSelector(...))` — calling `store.subscribe` on a plain store created without this middleware does not support the selector overload.

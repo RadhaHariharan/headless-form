@@ -1,0 +1,104 @@
+# unstable_ssrSafe
+
+Guards a store against state mutation during server-side rendering by replacing `setState` with a function that throws, for the duration of the initializer call, when running in an SSR environment. Exported as `unstable_ssrSafe`; the function is named `ssrSafe` internally in the source (`packages/state-management-simplify/src/middleware/ssrSafe.ts`) and re-exported under the `unstable_` prefix from `middleware.ts`.
+
+```typescript
+import { unstable_ssrSafe } from '@headlesskit/state-management-simplify';
+```
+
+This is explicitly marked **experimental** in the upstream Zustand source — the file carries the comment *"This is experimental middleware. It will be changed before finalizing it."* with a link to [pmndrs/zustand discussion #2740](https://github.com/pmndrs/zustand/discussions/2740), and a TODO noting the maintainers aren't fully happy with the middleware's name yet. Treat the API as subject to change.
+
+## Signature
+
+```typescript
+unstable_ssrSafe<T, U = T>(
+  config: StateCreator<T, Mps, Mcs, U>,
+  isSSR?: boolean,
+): StateCreator<T, Mps, Mcs, U>
+```
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `config` | `StateCreator<T, ...>` | Yes | — | The initializer to guard. |
+| `isSSR` | `boolean` | No | `typeof window === 'undefined'` | Explicitly control whether the SSR guard is active. By default, detected automatically by checking for the absence of a `window` global. |
+
+**Returns:** a `StateCreator<T, Mps, Mcs, U>` with the same external type signature as `config` — the guard is purely a runtime behavior change, not a type-level one.
+
+## What it actually does
+
+```typescript
+export function ssrSafe(config, isSSR = typeof window === 'undefined') {
+  return (set, get, api) => {
+    if (!isSSR) {
+      return config(set, get, api)
+    }
+    const ssrSet = () => {
+      throw new Error('Cannot set state of Zustand store in SSR')
+    }
+    api.setState = ssrSet
+    return config(ssrSet as never, get, api)
+  }
+}
+```
+
+- If `isSSR` is `false` (the common client-side case), this middleware is a complete pass-through — `config` is called with the original `set`/`get`/`api`, unmodified.
+- If `isSSR` is `true` (no `window`, e.g. running inside a Node SSR render pass), the middleware **replaces both** the `set` function passed into `config` *and* `api.setState` with a function that unconditionally throws `Error('Cannot set state of Zustand store in SSR')`. Note it replaces `api.setState` directly (not just the local `set` closure) — so any code that reaches the store via `api` (e.g. other middleware, or code holding a reference to the store object) also gets the throwing version, not just the initializer itself.
+
+## Basic usage
+
+```typescript
+import { createStore } from '@headlesskit/state-management-simplify';
+import { unstable_ssrSafe } from '@headlesskit/state-management-simplify';
+
+type CounterState = { count: number; increment: () => void };
+
+const store = createStore<CounterState>()(
+  unstable_ssrSafe((set) => ({
+    count: 0,
+    increment: () => set((state) => ({ count: state.count + 1 })),
+  })),
+);
+
+// On the server (no `window`):
+store.getState().increment(); // throws: "Cannot set state of Zustand store in SSR"
+
+// On the client (window exists): behaves like a normal store
+```
+
+## Advanced: explicitly forcing the SSR branch for testing
+
+Because the default detection relies on `typeof window === 'undefined'`, you can deterministically exercise the guarded branch in a Node test environment (where `window` is genuinely absent) without any extra setup, or force it on/off explicitly regardless of environment — useful for unit-testing that your store's setup code never tries to call `set` during the synchronous initializer body when rendered on the server:
+
+```typescript
+import { createStore } from '@headlesskit/state-management-simplify';
+import { unstable_ssrSafe } from '@headlesskit/state-management-simplify';
+
+type Store = { value: number; setValue: (n: number) => void };
+
+function makeStore(forceSSR: boolean) {
+  return createStore<Store>()(
+    unstable_ssrSafe(
+      (set) => ({
+        value: 0,
+        setValue: (n) => set({ value: n }),
+      }),
+      forceSSR,
+    ),
+  );
+}
+
+const serverStore = makeStore(true);
+expect(() => serverStore.getState().setValue(1)).toThrow(
+  'Cannot set state of Zustand store in SSR',
+);
+
+const clientStore = makeStore(false);
+clientStore.getState().setValue(1); // does not throw
+```
+
+## Common pitfalls
+
+- **It's experimental and may change.** This is flagged as such directly in the upstream source — don't build critical infrastructure assuming the current name or exact throw message is stable across future Zustand versions this package may be re-synced against.
+- **The guard only protects the *initializer's* synchronous setup.** If your initializer calls `set(...)` synchronously while building the initial state (e.g. to "self-initialize" some derived field), that call now throws on the server — by design, since calling `set` during SSR usually indicates a side effect that shouldn't run during server rendering. Code that conditionally calls `set` based on environment checks elsewhere is unaffected until it actually invokes `set`/`setState`.
+- **`isSSR` is evaluated once, at the time `ssrSafe(...)`'s returned `StateCreator` is invoked** — it does not re-check `window` per call. If you toggle environments without recreating the store (unlikely in practice, but worth knowing), the guard won't adapt.
+- **This does not persist or rehydrate anything by itself.** It only throws on writes during SSR — it's not a substitute for [`persist`](07-middleware-persist)'s own `skipHydration` option if you also need to defer rehydration.

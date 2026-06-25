@@ -13,7 +13,9 @@
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "@headlesskit/forms": "workspace:*",
-    "@headlesskit/forms-react": "workspace:*"
+    "@headlesskit/forms-react": "workspace:*",
+    "@headlesskit/state-management-simplify-react": "workspace:*",
+    "prism-react-renderer": "^2.4.1"
   },
   "devDependencies": {
     "@types/node": "^20",

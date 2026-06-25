@@ -1,0 +1,90 @@
+# useShallow
+
+**File:** `src/react/shallow.ts`
+
+A selector wrapper that memoizes the selector's return value using shallow equality, so selecting multiple fields into a new object/array doesn't cause a re-render on every store update — only when one of the shallowly-compared fields actually changes.
+
+## Signature
+
+```typescript
+function useShallow<S, U>(selector: (state: S) => U): (state: S) => U
+```
+
+Takes a selector and returns a **new selector** with the same signature — you pass the wrapped selector to [`useStore`/`create`'s hook](./02-create) exactly where you'd pass the original.
+
+## How it actually works
+
+```typescript
+export function useShallow<S, U>(selector: (state: S) => U): (state: S) => U {
+  const prev = React.useRef<U>(undefined)
+  return (state) => {
+    const next = selector(state)
+    return shallow(prev.current, next)
+      ? (prev.current as U)
+      : (prev.current = next)
+  }
+}
+```
+
+`useShallow` holds one piece of state across renders: `prev`, a `useRef` storing the last value the wrapped selector returned. Every time the underlying hook's `getSnapshot` runs the wrapped selector:
+1. It runs your original `selector(state)` to compute `next`.
+2. It compares `next` against `prev.current` using [`shallow`](../state-management-simplify/01-overview) — Zustand's shallow-equality function (re-exported from `@headlesskit/state-management-simplify`), which checks `Object.is` on top-level keys/array-elements rather than deep-equality or reference equality on the whole object.
+3. If they're shallowly equal, it returns the **previous reference** (`prev.current`) instead of `next` — this is the entire trick. Because `useSyncExternalStore` (inside `useStore`) compares snapshots with `Object.is`, returning the same reference as last time means React sees "nothing changed" and skips the re-render, even though `selector` itself just built a fresh object.
+4. Only when the shallow comparison fails does it store and return the new `next`, updating `prev.current` as a side effect of the snapshot-reading call itself.
+
+This directly solves the problem described in [create's pitfalls](./02-create): a selector like `(state) => ({ name: state.user.name, theme: state.theme })` returns a new object identity every call, which alone would mean every store update re-renders the component regardless of whether `name`/`theme` changed. Wrapping it in `useShallow` makes the *returned reference* stable across calls whose shallow contents are equal, restoring the "only re-render when this slice actually changed" behavior you get for free when selecting a single primitive.
+
+## Basic usage
+
+```tsx
+import { create, useShallow } from '@headlesskit/state-management-simplify-react';
+
+const useAppStore = create((set) => ({
+  user: { name: 'Ada', email: 'ada@example.com' },
+  theme: 'light' as 'light' | 'dark',
+  setTheme: (theme: 'light' | 'dark') => set({ theme }),
+}));
+
+function Header() {
+  // Without useShallow, this object's identity changes every render,
+  // re-rendering Header on *any* store update, not just name/theme changes.
+  const { name, theme } = useAppStore(
+    useShallow((state) => ({ name: state.user.name, theme: state.theme })),
+  );
+  return <h1>{name} — {theme}</h1>;
+}
+```
+
+## Advanced: selecting an array slice (e.g. filtered/mapped lists)
+
+```tsx
+interface TodosState {
+  todos: { id: string; text: string; done: boolean }[];
+}
+
+const useTodosStore = create<TodosState>(() => ({
+  todos: [
+    { id: '1', text: 'Write docs', done: false },
+    { id: '2', text: 'Ship it', done: true },
+  ],
+}));
+
+function DoneCount() {
+  // .filter() returns a new array every call — useShallow keeps the
+  // *returned reference* stable as long as the array's elements
+  // (by Object.is, one level deep) are the same.
+  const doneIds = useTodosStore(
+    useShallow((state) => state.todos.filter((t) => t.done).map((t) => t.id)),
+  );
+  return <p>{doneIds.length} done</p>;
+}
+```
+
+Note that `shallow` only compares one level deep — if the array contains objects and those objects' *own* fields change identity, `useShallow` will still consider the array "changed" because the array's elements (the object references) differ. This is the expected boundary: shallow equality, not deep equality.
+
+## Common pitfalls
+
+- **`useShallow` only buys you anything if your selector returns a new object/array each call** — wrapping a selector that already returns a primitive (`(state) => state.count`) is unnecessary; `Object.is` comparison already handles that case for free inside `useSyncExternalStore`.
+- **Shallow means one level deep, not deep equality.** `useShallow((state) => ({ user: state.user }))` will re-trigger every time `state.user` is replaced wholesale, even if every field inside it is unchanged — `shallow` compares `state.user`'s reference directly (`Object.is`) at that key, it doesn't recurse into `user`'s own fields. If you need deeper comparisons, select the individual primitive fields you actually need instead of nesting an object.
+- **`useShallow` is per-hook-call state, not per-store.** Each call to `useShallow(selector)` creates its own `useRef`, so calling it fresh inside a component on every render (as shown in the examples, `useStore(useShallow(...))`) is the correct usage — `useRef`'s identity is preserved by React across re-renders of the *same* component instance, which is what `prev` relies on. Don't try to hoist a `useShallow`-wrapped selector to module scope and share it across unrelated components; each component needs its own `prev` ref.
+- **This is an alternative to, not a replacement for, [`createWithEqualityFn`](./04-traditional).** `useShallow` wraps a selector per call-site; `createWithEqualityFn`/`useStoreWithEqualityFn` bakes an equality function into the store-level hook itself (or accepts one per call). Reach for `useShallow` when you only need shallow equality occasionally on an otherwise plain `create`-based store; reach for `createWithEqualityFn` if you want a custom (non-shallow) equality function, or want it applied by default everywhere without remembering to wrap every selector.
