@@ -1,0 +1,137 @@
+# InfiniteQueryObserver
+
+**File:** `src/infiniteQueryObserver.ts` (130 lines)
+
+`InfiniteQueryObserver` extends [`QueryObserver`](./05-query-observer) to support paginated/cursor-based data. It does not implement page-fetching logic itself — that lives in `infiniteQueryBehavior` (see [`./07-infinite-query-behavior`](./07-infinite-query-behavior)), which is installed as `options.behavior` every time `setOptions` runs. This file's job is narrower: wire up `fetchNextPage`/`fetchPreviousPage`, and augment the base `QueryObserverResult` with infinite-specific fields (`hasNextPage`, `isFetchingNextPage`, etc.).
+
+```typescript
+import { InfiniteQueryObserver } from '@headlesskit/query-core';
+
+const observer = new InfiniteQueryObserver(queryClient, {
+  queryKey: ['posts', 'infinite'],
+  queryFn: ({ pageParam }) =>
+    fetch(`/api/posts?cursor=${pageParam}`).then((r) => r.json()),
+  initialPageParam: 0,
+  getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+  getPreviousPageParam: (firstPage) => firstPage.prevCursor ?? undefined,
+  maxPages: 5,
+});
+```
+
+## Signature
+
+```typescript
+new InfiniteQueryObserver<TQueryFnData, TError, TData, TQueryData, TQueryKey, TPageParam>(
+  client: QueryClient,
+  options: InfiniteQueryObserverOptions<TQueryFnData, TError, TData, TQueryData, TQueryKey, TPageParam>,
+)
+```
+
+| Type parameter | Default | Description |
+|---|---|---|
+| `TQueryFnData` | `unknown` | The shape of a single page's raw data. |
+| `TData` | `InfiniteData<TQueryFnData>` | The shape of the full cached result (`{ pages, pageParams }`). |
+| `TPageParam` | `unknown` | The type of a page cursor/param. |
+
+| Option (in addition to `QueryObserverOptions`) | Type | Description |
+|---|---|---|
+| `initialPageParam` | `TPageParam` | Page param for the first page. |
+| `getNextPageParam` | `(lastPage, allPages, lastPageParam, allPageParams) => TPageParam \| undefined \| null` | Returning `null`/`undefined` means there is no next page. |
+| `getPreviousPageParam` | same shape, for the first page | Returning `null`/`undefined` means there is no previous page. |
+| `maxPages` | `number` | Maximum pages retained at once; oldest pages are evicted as new ones are fetched (enforced by `infiniteQueryBehavior`, not this file). |
+
+The constructor simply forwards to `super(client, options)` — all the subscription/timer machinery is identical to [`QueryObserver`](./05-query-observer); only the methods listed below are overridden or added.
+
+## Basic usage
+
+```typescript
+const observer = new InfiniteQueryObserver(queryClient, {
+  queryKey: ['posts', 'infinite'],
+  queryFn: ({ pageParam }) => fetchPosts(pageParam),
+  initialPageParam: 0,
+  getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+});
+
+const unsubscribe = observer.subscribe((result) => {
+  if (result.isSuccess) {
+    const allPosts = result.data.pages.flatMap((page) => page.items);
+    console.log(allPosts, result.hasNextPage);
+  }
+});
+
+await observer.fetchNextPage();
+unsubscribe();
+```
+
+## Advanced: bidirectional pagination with `maxPages` eviction
+
+Both directions can be combined on the same observer — useful for chat-style or infinite-scroll-in-both-directions UIs:
+
+```typescript
+const observer = new InfiniteQueryObserver(queryClient, {
+  queryKey: ['messages', channelId],
+  queryFn: ({ pageParam, direction }) => fetchMessages(channelId, pageParam),
+  initialPageParam: { cursor: latestMessageId, direction: 'backward' },
+  getNextPageParam: (lastPage) => lastPage.olderCursor ?? undefined,
+  getPreviousPageParam: (firstPage) => firstPage.newerCursor ?? undefined,
+  maxPages: 3, // keep memory bounded — only the 3 most recent fetched pages stay cached
+});
+
+await observer.fetchPreviousPage(); // load newer messages
+await observer.fetchNextPage();     // load older messages
+```
+
+When `maxPages` is set, `setOptions` installs `infiniteQueryBehavior(maxPages)` as `options.behavior` (see [`./07-infinite-query-behavior`](./07-infinite-query-behavior) for the exact eviction algorithm — this file only plumbs the value through, it does not implement the slicing itself). Each call to `fetchNextPage`/`fetchPreviousPage` tags the fetch with `meta: { fetchMore: { direction: 'forward' | 'backward' } }`, which the behavior reads to decide whether to append/prepend a page and which end to evict from once `pages.length > maxPages`.
+
+## Method-by-method
+
+### `bindMethods()` (protected, overrides `QueryObserver`)
+
+Calls `super.bindMethods()` (binds `refetch`), then additionally binds `this.fetchNextPage` and `this.fetchPreviousPage` to the instance — necessary because these are handed out as standalone callbacks on the result object (`result.fetchNextPage`) and must retain `this`.
+
+### `setOptions(options)` (overrides `QueryObserver`)
+
+Before delegating to `super.setOptions(options)`, mutates the incoming options object in place:
+
+```typescript
+(options as any).behavior = infiniteQueryBehavior(
+  (options as InfiniteQueryObserverOptions).maxPages,
+)
+```
+
+This means `options.behavior` is **always overwritten** on every `setOptions` call (construction, option changes, etc.) — you cannot supply a custom `behavior` for an infinite query; it is unconditionally replaced with a fresh `infiniteQueryBehavior(maxPages)` closure every time, even if `maxPages` itself hasn't changed.
+
+### `createResult(query, options)` (overrides `QueryObserver`)
+
+Calls `super.createResult(query, options)` to get the base `QueryObserverResult`, then layers infinite-specific fields on top:
+
+- **`isFetchingNextPage`** = `result.isFetching && query.state.fetchMeta?.fetchMore?.direction === 'forward'`.
+- **`isFetchingPreviousPage`** = `result.isFetching && query.state.fetchMeta?.fetchMore?.direction === 'backward'`.
+
+  Both read `fetchMeta` directly off the query's state (set by the `'fetch'` reducer action from whatever `meta` was passed into `fetch()` — see [`Query`](./04-query)). Because `fetchMeta` is cleared to `null` on both `'success'` and `'error'`, these flags are only ever true *while* that specific fetch is in flight, not retroactively.
+
+- **`hasNextPage`** = `!isError && !!data && getNextPageParam != null && getNextPageParam(lastPage, allPages, lastPageParam, allPageParams) != null`. Note the `!= null` (not `!== undefined`) — both `null` and `undefined` returned by `getNextPageParam` mean "no next page." If `getNextPageParam` is not provided at all, `hasNextPage` is always `false`. If the query errored, `hasNextPage` is forced `false` regardless of what the data looks like.
+- **`hasPreviousPage`** — symmetric, using `getPreviousPageParam`, `data.pages[0]`, and `data.pageParams[0]`.
+- `fetchNextPage` / `fetchPreviousPage` on the result are always the bound instance methods.
+
+Because this overrides (not wraps) `QueryObserver.createResult`, and `QueryObserver.updateResult` calls `this.createResult(...)` polymorphically, every result computed by an `InfiniteQueryObserver` — including ones produced via inherited `getOptimisticResult`/`fetchOptimistic` — automatically gets these extra fields for free.
+
+### `fetchNextPage(options?)`
+
+```typescript
+fetchNextPage(options?: FetchNextPageOptions): Promise<InfiniteQueryObserverResult<TData, TError>>
+```
+
+Calls the inherited protected `fetch({ ...options, meta: { fetchMore: { direction: 'forward' } } })`. Recall from [`QueryObserver.fetch`](./05-query-observer#fetch-options-protected) that `cancelRefetch` defaults to `true` there — so calling `fetchNextPage()` while a previous `fetchNextPage()`/`fetchPreviousPage()` is still in flight cancels it by default unless you pass `cancelRefetch: false`.
+
+### `fetchPreviousPage(options?)`
+
+Symmetric to `fetchNextPage`, tagging the fetch with `meta: { fetchMore: { direction: 'backward' } }`.
+
+## Common pitfalls
+
+- **You cannot pass a custom `behavior` option.** `setOptions` unconditionally overwrites `options.behavior` with `infiniteQueryBehavior(maxPages)` on every call — any `behavior` you set yourself is silently discarded.
+- **`hasNextPage`/`hasPreviousPage` are `false`, not `undefined`, when the corresponding `getNextPageParam`/`getPreviousPageParam` is omitted.** If you forget to pass `getNextPageParam`, your UI's "Load more" button will simply never appear — `hasNextPage` evaluates to `false` because the `!= null` check on the option itself fails before the function is even considered.
+- **`isFetchingNextPage`/`isFetchingPreviousPage` are derived from `fetchMeta`, which is reset to `null` on settle.** Don't rely on these flags to tell you *which direction the most recent completed fetch was* — they're only meaningful while `isFetching` is true for that specific in-flight request.
+- **Calling `fetchNextPage()` and `fetchPreviousPage()` concurrently cancels one of them** (whichever started first) by default, because both ultimately call the same inherited `fetch()` with `cancelRefetch: true` by default — pass `{ cancelRefetch: false }` to both if you intend to load both directions truly in parallel.
+- **`maxPages` eviction logic itself is not in this file.** If pages seem to disappear unexpectedly, check [`./07-infinite-query-behavior`](./07-infinite-query-behavior) — `infiniteQueryObserver.ts` only forwards the `maxPages` value into that behavior factory.

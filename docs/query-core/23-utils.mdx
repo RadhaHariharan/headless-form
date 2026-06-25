@@ -1,0 +1,385 @@
+# Utilities
+
+**File:** `src/utils.ts`
+
+This file is the shared, dependency-free toolkit that the rest of `@headlesskit/query-core` is built on: query-key hashing and matching, data-update/structural-sharing helpers, staleness and timeout math, option resolvers for function-or-value style settings, infinite-query page-array helpers, and a handful of small runtime utilities (`noop`, `skipToken`, `sleep`, etc). None of it depends on `Query`, `QueryCache`, or `QueryClient` internals beyond type imports — everything here is plain, testable functions.
+
+---
+
+## Query key hashing and matching
+
+These functions decide whether two query/mutation keys refer to "the same" cache entry, and provide the canonical string hash used as a `Map` key internally.
+
+### `hashKey(queryKey)`
+
+```typescript
+function hashKey(queryKey: QueryKey | MutationKey): string
+```
+
+The canonical hashing algorithm, verified from source:
+
+```typescript
+export function hashKey(queryKey: QueryKey | MutationKey): string {
+  return JSON.stringify(queryKey, (_, val) =>
+    isPlainObject(val)
+      ? Object.keys(val)
+          .sort()
+          .reduce((result, key) => {
+            result[key] = val[key]
+            return result
+          }, {} as any)
+      : val,
+  )
+}
+```
+
+It is `JSON.stringify` with a custom replacer: every time the replacer encounters a **plain object** (per [`isPlainObject`](#isplainobject-and-isplainarray), so arrays, class instances, `Map`, `Date`, etc. are passed through unchanged), it rebuilds that object with its keys sorted alphabetically before stringifying. This means key **order inside object literals does not matter**, but **array element order always does** (arrays are never re-sorted).
+
+```typescript
+import { hashKey } from '@headlesskit/query-core';
+
+hashKey(['todos', { status: 'active', page: 1 }]);
+// '["todos",{"page":1,"status":"active"}]'
+
+hashKey(['todos', { page: 1, status: 'active' }]);
+// same string — key order in the object didn't matter
+
+hashKey(['todos', 1]) !== hashKey(['todos', '1']); // true — JSON.stringify preserves types
+```
+
+`hashKey` is used as the default query-key and mutation-key hash function throughout the package (e.g. `Query.queryHash`, mutation scope/key comparisons in [`matchMutation`](#matchquery-and-matchmutation)).
+
+### `hashQueryKeyByOptions(queryKey, options?)`
+
+```typescript
+function hashQueryKeyByOptions<TQueryKey extends QueryKey = QueryKey>(
+  queryKey: TQueryKey,
+  options?: Pick<QueryOptions, 'queryKeyHashFn'>,
+): string
+```
+
+Thin wrapper: uses `options.queryKeyHashFn` if one was supplied (see [`queryKeyHashFn`](./24-types) on `QueryOptions`), otherwise falls back to `hashKey`. This is the indirection point that lets you plug in a custom hashing algorithm per-query — see [Advanced](#advanced-a-custom-queryKeyHashFn) below.
+
+### `partialMatchKey(a, b)`
+
+```typescript
+function partialMatchKey(a: QueryKey, b: QueryKey): boolean
+```
+
+Recursive structural "does `a` contain everything in `b`" check, used for **non-exact** filter matching (the default for `invalidateQueries`, `findAll`, etc. — see [`QueryFilters`](./24-types)):
+
+```typescript
+export function partialMatchKey(a: any, b: any): boolean {
+  if (a === b) return true
+  if (typeof a !== typeof b) return false
+  if (a && b && typeof a === 'object' && typeof b === 'object') {
+    return Object.keys(b).every((key) => partialMatchKey(a[key], b[key]))
+  }
+  return false
+}
+```
+
+Key behavior to internalize: it walks **`b`'s** keys, not `a`'s — so `b` is a *prefix/subset pattern* and `a` (the real query key) may have extra keys/elements that `b` doesn't mention. Since arrays are also plain objects with numeric-string keys for `Object.keys`, this is also how "key array starts with this prefix" matching falls out naturally.
+
+```typescript
+import { partialMatchKey } from '@headlesskit/query-core';
+
+partialMatchKey(['todos', 'list', { status: 'active' }], ['todos']); // true (prefix)
+partialMatchKey(['todos', { status: 'active', page: 2 }], ['todos', { status: 'active' }]); // true
+partialMatchKey(['todos'], ['todos', 'list']); // false — a is shorter than b
+```
+
+### `matchQuery(filters, query)` and `matchMutation(filters, mutation)`
+
+```typescript
+function matchQuery(filters: QueryFilters, query: Query): boolean
+function matchMutation(filters: MutationFilters, mutation: Mutation): boolean
+```
+
+These implement the full semantics of [`QueryFilters`](./24-types) and `MutationFilters` used by `QueryCache.find`/`findAll`, `queryClient.invalidateQueries`, `cancelQueries`, etc. (see [`./03-query-cache`](./03-query-cache)). `matchQuery` checks, in order: exact-hash-or-partial key match, `type` (`'active' | 'inactive' | 'all'` via `query.isActive()`), `stale` (via `query.isStale()`), `fetchStatus`, then a custom `predicate`. `matchMutation` is the mutation-key analogue, using `hashKey` for the exact case and `partialMatchKey` otherwise.
+
+---
+
+## Data updates and structural sharing
+
+### `functionalUpdate(updater, input)`
+
+```typescript
+function functionalUpdate<TInput, TOutput>(
+  updater: Updater<TInput, TOutput>,
+  input: TInput,
+): TOutput
+```
+
+Implements the `Updater<TInput, TOutput> = TOutput | ((input: TInput) => TOutput)` pattern used everywhere a method accepts either a direct value or a function-of-the-previous-value (e.g. `queryClient.setQueryData`). If `updater` is a function, calls it with `input`; otherwise returns `updater` itself unchanged.
+
+```typescript
+functionalUpdate((old: number) => old + 1, 5); // 6
+functionalUpdate(10, 5); // 10 — direct value, input ignored
+```
+
+### `replaceEqualDeep(a, b, depth?)`
+
+```typescript
+function replaceEqualDeep<T>(a: unknown, b: T, depth?: number): T
+```
+
+The structural-sharing engine. Recursively compares plain objects/arrays `a` (old) and `b` (new) and returns **`a`'s actual object/array reference** for any sub-tree that is deeply equal, while still wholesale-returning `b` for anything that changed — so unrelated parts of a re-fetched response keep their old object identity (good for memoized selectors, `React.memo`, etc.).
+
+Behavior verified from source:
+- `a === b` → returns `a` immediately.
+- Recursion depth is capped at `500`; beyond that it just returns `b` (protects against cyclic/deeply-nested structures).
+- Only recurses when both sides are plain arrays ([`isPlainArray`](#isplainobject-and-isplainarray)) or both plain objects ([`isPlainObject`](#isplainobject-and-isplainarray)) — anything else (including the case where only one side qualifies) short-circuits to returning `b` directly.
+- For each key/index in `b`, if `a[key] === b[key]` it keeps that reference; if either side is `null` or not an object, it takes `b`'s value; otherwise it recurses.
+- At the end, if `a` and `b` have the same size and *every* item came back equal to `a`'s, the whole call returns `a` itself (not a copy) — preserving the parent reference too.
+
+### `replaceData(prevData, data, options)`
+
+```typescript
+function replaceData<TData, TOptions extends QueryOptions>(
+  prevData: TData | undefined,
+  data: TData,
+  options: TOptions,
+): TData
+```
+
+The entry point `Query` calls after every successful fetch to decide what to actually store, based on [`structuralSharing`](./24-types):
+- If `options.structuralSharing` is a **function**, calls it as `structuralSharing(prevData, data)` and uses the result.
+- Else if `structuralSharing !== false` (the default), calls `replaceEqualDeep(prevData, data)`. In non-production (`process.env['NODE_ENV'] !== 'production'`), this call is wrapped in `try/catch`: if it throws, it `console.error`s a message telling you structural sharing requires JSON-serializable data and to either disable `structuralSharing` or fix your `queryFn`, then **re-throws**.
+- Else (`structuralSharing === false`) returns `data` unchanged — no diffing at all.
+
+```typescript
+// Disable structural sharing for a query returning non-serializable data (Map, class instances, etc.)
+useQuery({
+  queryKey: ['session'],
+  queryFn: fetchSession,
+  structuralSharing: false,
+});
+
+// Custom merge function
+useQuery({
+  queryKey: ['todos'],
+  queryFn: fetchTodos,
+  structuralSharing: (prev, next) => mergeTodoLists(prev, next),
+});
+```
+
+### `keepPreviousData(previousData)`
+
+```typescript
+function keepPreviousData<T>(previousData: T | undefined): T | undefined
+```
+
+Identity function — literally `return previousData`. Intended to be passed as a `placeholderData` value: `placeholderData: keepPreviousData` tells the observer to show the last-known data while a new query-key's fetch is in flight, instead of flashing to `undefined`.
+
+### `shallowEqualObjects(a, b)`
+
+```typescript
+function shallowEqualObjects<T extends Record<string, any>>(
+  a: T,
+  b: T | undefined,
+): boolean
+```
+
+One-level `===` comparison: returns `false` immediately if `b` is falsy or the two objects have a different number of keys, then `false` on the first key whose values aren't reference-equal, else `true`. Used internally for comparing observer option objects/results without deep-diffing.
+
+---
+
+## Plain-object and plain-array detection
+
+### `isPlainObject(o)`
+
+```typescript
+function isPlainObject(o: any): o is Record<PropertyKey, unknown>
+```
+
+Stricter than a typical "is it an object" check — it's specifically trying to exclude class instances, `Date`, `Map`, `RegExp`, etc., while still accepting objects from other realms/iframes. Verified logic:
+1. `Object.prototype.toString.call(o) === '[object Object]'` (via the private `hasObjectPrototype` helper) — rules out arrays, `Date`, `RegExp`, `Map`, etc.
+2. If `o.constructor === undefined`, treat it as plain (handles `Object.create(null)`).
+3. Otherwise, the constructor's `.prototype` must also pass the `[object Object]` check, must itself have an own `isPrototypeOf` property, and `Object.getPrototypeOf(o)` must be exactly `Object.prototype`.
+
+This is what `hashKey` and `replaceEqualDeep` use to decide whether to treat a value as a "diffable record" vs. an opaque value.
+
+### `isPlainArray(value)`
+
+```typescript
+function isPlainArray(value: unknown): value is Array<unknown>
+```
+
+`Array.isArray(value) && value.length === Object.keys(value).length` — rejects sparse arrays (where `Object.keys` would return fewer entries than `.length`), since `replaceEqualDeep` assumes dense, index-contiguous arrays.
+
+---
+
+## Time, staleness, and option resolution
+
+### `isValidTimeout(value)`
+
+```typescript
+function isValidTimeout(value: unknown): value is number
+```
+
+`typeof value === 'number' && value >= 0 && value !== Infinity` — used to validate things like `gcTime`/`refetchInterval` before passing them to `setTimeout`-style scheduling, since `Infinity` and negative numbers aren't valid timer delays.
+
+### `timeUntilStale(updatedAt, staleTime?)`
+
+```typescript
+function timeUntilStale(updatedAt: number, staleTime?: number): number
+```
+
+`Math.max(updatedAt + (staleTime || 0) - Date.now(), 0)` — milliseconds remaining until the data becomes stale, clamped to `0` (never negative). `Query.isStale()` is effectively `timeUntilStale(...) === 0`.
+
+### `resolveStaleTime(staleTime, query)` and `resolveQueryBoolean(option, query)`
+
+```typescript
+function resolveStaleTime(staleTime: undefined | StaleTimeFunction, query: Query): StaleTime | undefined
+function resolveQueryBoolean(option: undefined | QueryBooleanOption, query: Query): boolean | undefined
+```
+
+Both implement the same tiny pattern as `functionalUpdate`, specialized for the "value-or-function-of-the-query" options described in [`StaleTimeFunction`](./24-types) and [`QueryBooleanOption`](./24-types) (`staleTime`, `enabled`, `refetchOnWindowFocus`, etc.): if the option is a function, call it with the `Query` instance and return the result; otherwise return it as-is.
+
+```typescript
+// staleTime as a function of the query — e.g. longer for paginated pages beyond the first
+useQuery({
+  queryKey: ['posts', page],
+  queryFn: () => fetchPosts(page),
+  staleTime: (query) => (query.queryKey[1] === 1 ? 0 : 5 * 60_000),
+});
+```
+
+---
+
+## Infinite query page helpers
+
+### `addToEnd(items, item, max?)` and `addToStart(items, item, max?)`
+
+```typescript
+function addToEnd<T>(items: Array<T>, item: T, max = 0): Array<T>
+function addToStart<T>(items: Array<T>, item: T, max = 0): Array<T>
+```
+
+Pure, immutable array helpers used by the infinite-query machinery to append/prepend a fetched page. Both build a new array first (`[...items, item]` / `[item, ...items]`), then — only if `max` is truthy and the new array now exceeds it — trim exactly one element off the *opposite* end (`slice(1)` for `addToEnd`, `slice(0, -1)` for `addToStart`). This is how `maxPages` (see [`InfiniteQueryObserverOptions`](./24-types)) caps the number of cached pages: old pages fall off the far side as new ones are added.
+
+```typescript
+addToEnd([1, 2, 3], 4, 3);   // [2, 3, 4] — oldest (1) dropped from the start
+addToStart([1, 2, 3], 0, 3); // [0, 1, 2] — oldest (3) dropped from the end
+```
+
+---
+
+## Query function resolution
+
+### `ensureQueryFn(options, fetchOptions?)`
+
+```typescript
+function ensureQueryFn<TQueryFnData, TQueryKey extends QueryKey>(
+  options: { queryFn?: QueryFunction | SkipToken; queryHash?: string },
+  fetchOptions?: FetchOptions,
+): QueryFunction<TQueryFnData, TQueryKey>
+```
+
+Normalizes "what function should actually run to fetch" into a single callable, covering edge cases:
+1. In non-production, if `options.queryFn === skipToken`, logs a `console.error` warning that invoking a skipped query function is "likely a configuration error" (the caller should have checked `enabled`/skip logic first).
+2. If there's no `queryFn` but `fetchOptions?.initialPromise` was provided, returns `() => fetchOptions.initialPromise!` — reuses an already-in-flight/known promise instead of calling a function.
+3. If `queryFn` is missing or is `skipToken`, returns a function that always does `Promise.reject(new Error("Missing queryFn: '<hash>'"))`.
+4. Otherwise returns `options.queryFn` itself.
+
+### `skipToken`
+
+```typescript
+const skipToken: unique symbol
+type SkipToken = typeof skipToken
+```
+
+A unique `Symbol()`. Passing it as `queryFn` is the type-safe way to conditionally disable a query (see [`./01-overview`](./01-overview#skiptoken)) — `ensureQueryFn` and the dev-mode warning above are what enforce that it's never actually invoked.
+
+---
+
+## Miscellaneous
+
+### `noop()`
+
+```typescript
+function noop(): void
+```
+
+Does nothing, returns nothing. Used as a default value for optional callback options across the package so call sites don't need `option?.()` guards everywhere.
+
+### `sleep(timeout)`
+
+```typescript
+function sleep(timeout: number): Promise<void>
+```
+
+`new Promise((resolve) => timeoutManager.setTimeout(resolve, timeout))` — a promisified delay, routed through the package's `timeoutManager` (so tests can fake/advance time) rather than the raw global `setTimeout`. Used by the retryer for retry-delay waits.
+
+### `shouldThrowError(throwOnError, params)`
+
+```typescript
+function shouldThrowError<T extends (...args: Array<any>) => boolean>(
+  throwOnError: boolean | T | undefined,
+  params: Parameters<T>,
+): boolean
+```
+
+Resolves the `throwOnError` option (see [`QueryObserverOptions`](./24-types) / `MutationOptions`): if it's a function, calls it with `params` (e.g. `[error, query]`) and returns the boolean result; otherwise coerces it to boolean with `!!throwOnError` (so `undefined` → `false`).
+
+### `addConsumeAwareSignal(object, getSignal, onCancelled)`
+
+```typescript
+function addConsumeAwareSignal<T>(
+  object: T,
+  getSignal: () => AbortSignal,
+  onCancelled: VoidFunction,
+): T & { signal: AbortSignal }
+```
+
+Defines a lazy, **consumption-aware** `signal` getter on `object` via `Object.defineProperty`. The `AbortSignal` is only created (via `getSignal()`) on first access, and only on that *first* read does it register an `abort` listener (`onCancelled`, `{ once: true }`) — or call `onCancelled` synchronously if the signal is already aborted. This is the mechanism behind `queryFn`'s context `signal`: a `queryFn` that never reads `context.signal` doesn't pay the cost of (or trigger) cancellation bookkeeping, but the moment it does read it, the query becomes properly cancelable.
+
+### `isServer`
+
+```typescript
+/** @deprecated use `environmentManager.isServer()` instead. */
+const isServer: boolean = typeof window === 'undefined' || 'Deno' in globalThis
+```
+
+A one-time computed boolean (not a function) detecting SSR/non-browser environments. **Deprecated** in favor of `environmentManager.isServer()`, which presumably supports runtime overrides (e.g. for tests) that a static boolean cannot.
+
+---
+
+## Advanced: a custom `queryKeyHashFn`
+
+Because [`hashQueryKeyByOptions`](#hashquerykeybyoptions-querykey-options) checks `options.queryKeyHashFn` before falling back to `hashKey`, you can override hashing per query — useful when your key contains values that don't serialize meaningfully with `JSON.stringify` (e.g. you want two `Date` objects representing the same day to hash identically):
+
+```typescript
+import type { QueryKeyHashFunction } from '@headlesskit/query-core';
+
+const dayBucketedHashFn: QueryKeyHashFunction<readonly [string, Date]> = ([scope, date]) =>
+  `${scope}:${date.toISOString().slice(0, 10)}`;
+
+queryClient.fetchQuery({
+  queryKey: ['report', new Date()],
+  queryFn: fetchReport,
+  queryKeyHashFn: dayBucketedHashFn,
+});
+```
+
+You can similarly lean on [`partialMatchKey`](#partialmatchkey-a-b) semantics directly (outside the cache) to build your own "does this key match this pattern" filter — e.g. for a custom devtools panel — without going through `QueryFilters`:
+
+```typescript
+import { partialMatchKey } from '@headlesskit/query-core';
+
+const allKeys: Array<readonly unknown[]> = queryClient.getQueryCache().getAll().map(q => q.queryKey);
+const matchingActiveUserKeys = allKeys.filter((key) => partialMatchKey(key, ['users', { active: true }]));
+```
+
+See [`./03-query-cache`](./03-query-cache) for the cache-level filtering APIs that build on these primitives.
+
+---
+
+## Common pitfalls
+
+- **`hashKey` only normalizes object key order, not array order.** `['todos', [1, 2]]` and `['todos', [2, 1]]` hash differently — if you need order-independent array matching, sort the array yourself before putting it in the key.
+- **`hashKey` distinguishes types JSON does** — `1` and `'1'` hash differently, `undefined` values inside objects are dropped (standard `JSON.stringify` behavior), and values like functions, `Symbol`, or class instances inside a key will either be dropped or stringify unpredictably. Keep query keys to plain, JSON-serializable primitives/objects/arrays.
+- **Structural sharing (`replaceEqualDeep`) only helps with plain objects/arrays.** Anything else (`Map`, `Set`, `Date`, custom classes) is treated as opaque and replaced wholesale on every fetch — if your `queryFn` returns such data, set `structuralSharing: false` or supply a custom function, otherwise you lose the reference-stability benefit for that branch (and in dev mode a thrown serialization error inside `replaceData` will surface to the console and propagate).
+- **`partialMatchKey`'s direction matters.** It's `partialMatchKey(actualKey, patternKey)`, not symmetric — extra fields on the *pattern* side will never match, but extra fields on the *actual* key side are fine. Passing the arguments in the wrong order silently changes filter results.
+- **`addToEnd`/`addToStart` trim from the opposite end, one item at a time**, and only when `max` is a truthy nonzero number — passing `max: 0` (the default) disables capping entirely, which is easy to forget when wiring up `maxPages`.

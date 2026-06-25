@@ -1,0 +1,152 @@
+# dehydrate and hydrate
+
+**File:** `src/hydration.ts` (171 lines)
+
+Serializes (`dehydrate`) a `QueryClient`'s cache into a plain, JSON-safe object, and restores (`hydrate`) that object back into a (possibly different) `QueryClient` — the mechanism behind SSR: prefetch on the server, ship the dehydrated state to the client, hydrate it there with zero loading flash.
+
+```typescript
+import { dehydrate, hydrate } from '@headlesskit/query-core';
+```
+
+## Signature
+
+```typescript
+function dehydrate(client: QueryClient, options?: DehydrateOptions): DehydratedState
+
+function hydrate(client: QueryClient, dehydratedState: unknown, options?: HydrateOptions): void
+```
+
+| Function | Param | Type | Description |
+|----------|-------|------|-------------|
+| `dehydrate` | `client` | `QueryClient` | The client whose `QueryCache`/`MutationCache` to serialize |
+| | `options.shouldDehydrateMutation` | `(mutation: Mutation) => boolean` | Filter — default `defaultShouldDehydrateMutation` |
+| | `options.shouldDehydrateQuery` | `(query: Query) => boolean` | Filter — default `defaultShouldDehydrateQuery` |
+| | `options.serializeData` | `(data: unknown) => unknown` | Transforms `query.state.data` (and any pending `query.promise`'s resolved value) before it goes into the output |
+| | `options.shouldRedactErrors` | `(error: unknown) => boolean` | Present on the `DehydrateOptions` type, but **not read anywhere in `dehydrate.ts`'s implementation** — see Common pitfalls |
+| `hydrate` | `client` | `QueryClient` | The client to populate |
+| | `dehydratedState` | `unknown` | The object previously returned by `dehydrate` (typed `unknown` because it commonly arrives via `JSON.parse` from the network) |
+| | `options.defaultOptions.queries` | `QueryOptions` | Base options merged onto every hydrated query (lowest precedence) |
+| | `options.defaultOptions.mutations` | `MutationOptions` | Base options merged onto every hydrated mutation |
+| | `options.defaultOptions.dehydratedQueryToQueryOptions` | `(dehydratedQuery) => QueryOptions \| undefined` | Per-query options resolver — if set, takes precedence over `defaultOptions.queries` |
+| | `options.defaultOptions.dehydratedMutationToMutationOptions` | `(dehydratedMutation) => MutationOptions \| undefined` | Per-mutation options resolver — same precedence rule as above |
+| | `options.deserializeData` | `(data: unknown) => unknown` | Inverse of `serializeData` |
+
+**Returns:** `dehydrate` returns a `DehydratedState`:
+
+```typescript
+interface DehydratedState {
+  mutations: Array<DehydratedMutation>
+  queries: Array<DehydratedQuery>
+}
+```
+
+`hydrate` returns `void` — it mutates `client`'s caches in place.
+
+## Basic usage
+
+```typescript
+import { QueryClient, dehydrate, hydrate } from '@headlesskit/query-core';
+
+// --- Server ---
+const serverClient = new QueryClient();
+await serverClient.prefetchQuery({
+  queryKey: ['posts'],
+  queryFn: fetchPosts,
+});
+const dehydratedState = dehydrate(serverClient);
+// JSON.stringify(dehydratedState) and embed it in the HTML response
+
+// --- Client ---
+const clientClient = new QueryClient();
+const dehydratedState = JSON.parse(/* ...from the HTML payload... */);
+hydrate(clientClient, dehydratedState);
+// clientClient now has the 'posts' query pre-populated with success state
+```
+
+## Advanced: redacted errors and custom serialization (Dates)
+
+The two options most teams reach for in production SSR — sending non-JSON-safe data (`Date`, `Map`, custom classes) across the wire, and not leaking server error details to the client — behave differently from what you might expect from the option names alone. Read this before relying on either.
+
+**Custom serialization works exactly as documented.** `serializeData` is invoked on `query.state.data` (and again on whatever a still-pending `query.promise` eventually resolves to) inside `dehydrateQuery`; `deserializeData` is applied symmetrically in `hydrate`, both on the resolved `dehydratedQuery.state.data` and on the value a still-in-flight `dehydratedQuery.promise` resolves to client-side:
+
+```typescript
+const dehydratedState = dehydrate(serverClient, {
+  serializeData: (data) => JSON.parse(JSON.stringify(data, (_key, value) =>
+    value instanceof Date ? { __type: 'Date', value: value.toISOString() } : value,
+  )),
+});
+
+hydrate(clientClient, dehydratedState, {
+  deserializeData: (data) => JSON.parse(JSON.stringify(data), (_key, value) =>
+    value && value.__type === 'Date' ? new Date(value.value) : value,
+  ),
+});
+```
+
+**`shouldRedactErrors` is declared on `DehydrateOptions` but is dead in this implementation.** Searching `dehydrate`, `dehydrateQuery`, and `dehydrateMutation` in `src/hydration.ts` shows the option is never destructured or referenced — `mutation.state` (which can include `error`) and `query.state` are spread into the dehydrated output verbatim regardless of what `shouldRedactErrors` returns. If your server-side errors contain sensitive details (stack traces, internal messages) and you must keep them out of the client payload, do it yourself before calling `dehydrate`, e.g. by filtering with `shouldDehydrateQuery`/`shouldDehydrateMutation` to exclude `'error'`-status entries entirely, or by post-processing the returned `DehydratedState` to strip `state.error` fields.
+
+```typescript
+// Workaround: drop errored queries from the payload entirely instead of
+// relying on the (non-functional) shouldRedactErrors option.
+const dehydratedState = dehydrate(serverClient, {
+  shouldDehydrateQuery: (query) =>
+    defaultShouldDehydrateQuery(query) && query.state.status !== 'error',
+});
+```
+
+## `dehydrate(client, options?)`
+
+1. Resolves the mutation filter: `options.shouldDehydrateMutation ?? defaultShouldDehydrateMutation`.
+2. Reads every mutation via `client.getMutationCache().getAll()`, keeps the ones the filter accepts, and maps each through `dehydrateMutation`, which returns `{ mutationKey, state: mutation.state, ...(scope && { scope }), ...(meta && { meta }) }` — `scope` and `meta` are only included if truthy (spread via `...(x && {...})`).
+3. Resolves the query filter: `options.shouldDehydrateQuery ?? defaultShouldDehydrateQuery`.
+4. Reads every query via `client.getQueryCache().getAll()`, keeps the ones the filter accepts, and maps each through `dehydrateQuery(query, options.serializeData)`, which returns:
+   - `state`: a shallow copy of `query.state`, with `data` overwritten by `serializeData(query.state.data)` if `serializeData` was passed (otherwise `query.state` is spread as-is).
+   - `queryKey`, `queryHash` copied directly.
+   - `meta` included only if truthy.
+   - `promise` included only if the query currently has an in-flight `query.promise` — it's re-wrapped: `query.promise.then(data => serializeData ? serializeData(data) : data).catch(error => { ...dev warning...; throw error })`. This lets a query that was still fetching at dehydration time be sent to the client as a pending promise rather than waiting for it to settle first.
+5. Returns `{ mutations, queries }`.
+
+### `defaultShouldDehydrateMutation(mutation)`
+
+```typescript
+return mutation.state.status === 'pending'
+```
+
+Only currently-pending mutations are dehydrated by default — i.e. mutations that were in flight (or paused, since `'pending'` covers both fetching and network-paused mutation state) when `dehydrate` was called. Settled (`'success'`/`'error'`/`'idle'`) mutations are excluded unless you supply your own `shouldDehydrateMutation`.
+
+### `defaultShouldDehydrateQuery(query)`
+
+```typescript
+return query.state.status === 'success'
+```
+
+Only queries with `state.status === 'success'` are dehydrated by default. Queries still `'pending'` (loading, or fetched-and-failed-but-not-yet-resolved) or in `'error'` status are excluded unless you override the filter — meaning errored queries are **not** sent to the client at all under the default filter (a more reliable way to avoid leaking error details than `shouldRedactErrors`, which see above).
+
+## `hydrate(client, dehydratedState, options?)`
+
+1. Guard: if `typeof dehydratedState !== 'object' || dehydratedState === null`, returns immediately and does nothing — passing `undefined`, a string, a number, or `null` is a silent no-op rather than a thrown error.
+2. Reads `mutations` and `queries` off the cast object, defaulting each to `[]` if absent (`dehydratedState.mutations || []`).
+3. For each dehydrated mutation:
+   - Resolves a per-mutation options resolver: `options?.defaultOptions?.dehydratedMutationToMutationOptions`, falling back to `() => options.defaultOptions.mutations` if that's set, else `undefined`.
+   - Builds `mutationOptions` by spreading the resolver's result (if any), then forcing `mutationKey`, and conditionally including `scope`/`meta` from the dehydrated record.
+   - Calls `client.getMutationCache().build(client, mutationOptions)` to get or create the `Mutation` instance, then `mutation.setState(dehydratedMutation.state)` to force its state directly — this **always overwrites** the mutation's state, with no staleness check (contrast with queries below).
+4. For each dehydrated query:
+   - Resolves a per-query options resolver the same way (`dehydratedQueryToQueryOptions` falling back to `defaultOptions.queries`).
+   - Builds `resolvedQueryOptions`, forcing `queryKey`, `queryHash`, and conditional `meta`.
+   - Calls `client.getQueryCache().build(client, resolvedQueryOptions)` — finds the existing query by hash or creates a new one.
+   - **Staleness check:** only calls `query.setState(...)` if `query.state.dataUpdatedAt < dehydratedQuery.state.dataUpdatedAt` — i.e. hydration never overwrites data that's already *newer* on the client than what's in the dehydrated payload. When it does apply, `data` is passed through `deserializeData` if provided.
+   - If the dehydrated query carried a pending `promise`, it's awaited here too: on resolve, if the query is still `'pending'`, the query is force-set to `{ status: 'success', data: deserializeData?.(data) ?? data, dataUpdatedAt: Date.now() }`; on reject, if still `'pending'`, set to `{ status: 'error', error, errorUpdatedAt: Date.now() }`. Both branches check `query.state.status === 'pending'` first, so if something else (e.g. a client-side refetch) already resolved the query by the time the dehydrated promise settles, this late update is dropped.
+
+## Cross-links
+
+- [Overview — Hydration section](./01-overview)
+- [QueryClient](./02-query-client) — `getQueryCache()` / `getMutationCache()` used internally by both functions
+- [notifyManager](./16-notify-manager) — `query.setState`/`mutation.setState` calls inside `hydrate` ultimately flow through cache notifications batched by `notifyManager`
+
+## Common pitfalls
+
+- **`shouldRedactErrors` does nothing.** It's part of the `DehydrateOptions` type but is never read by `dehydrate`, `dehydrateQuery`, or `dehydrateMutation` in this port — passing it silently has no effect on the output. Use `shouldDehydrateQuery`/`shouldDehydrateMutation` to exclude error states, or strip `state.error` from the returned `DehydratedState` yourself.
+- **`dehydratedState` must be a non-null object or `hydrate` no-ops.** If you forget to `JSON.parse` a string payload before calling `hydrate`, the `typeof dehydratedState !== 'object'` guard fires and nothing happens — no error, no hydration, just silence.
+- **Mutation hydration is unconditional; query hydration is not.** `mutation.setState` always runs for every dehydrated mutation passed in, but `query.setState` is gated by `dataUpdatedAt` comparison — if your client already fetched fresher data than the server snapshot before hydration runs, the server's data is correctly ignored, but this also means re-hydrating the *same* (stale) payload twice has no effect the second time.
+- **Pending promises don't survive serialization.** `JSON.stringify`-ing a `DehydratedQuery` with a `promise` field will silently drop it (`Promise` isn't JSON-serializable) — the pending-promise mechanism only matters when `dehydrate`/`hydrate` are called in the same process without a JSON round-trip (e.g. streaming SSR hand-off), not for a typical "stringify, send over the wire, parse" flow.
+- **Default filters exclude more than expected.** `defaultShouldDehydrateQuery` only keeps `'success'` queries — a query that's still loading (`'pending'`) at dehydration time is dropped entirely unless it has an in-flight `promise` captured via a custom filter, and an `'error'` query is dropped with no trace, which can surprise you if you expected error states to round-trip to the client by default.

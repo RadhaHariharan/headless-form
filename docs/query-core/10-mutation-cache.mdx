@@ -1,0 +1,178 @@
+# MutationCache
+
+**File:** `src/mutationCache.ts` (230 lines)
+
+Stores every `Mutation` instance created by `queryClient.getMutationCache().build(...)` (called internally by [MutationObserver](./11-mutation-observer)`.mutate()`). Beyond plain storage, `MutationCache` is also the **serialization point for scoped mutations** — it decides, for a group of mutations sharing a `scope.id`, which one is allowed to actually run at any given moment — and it's the place global (cache-level) `onMutate`/`onSuccess`/`onError`/`onSettled` callbacks live, as opposed to the per-mutation callbacks passed to an individual `useMutation`/`MutationObserver`.
+
+```typescript
+import { MutationCache } from '@headlesskit/query-core';
+
+const mutationCache = new MutationCache({
+  onMutate: (variables, mutation) => {
+    console.log('starting', mutation.options.mutationKey);
+  },
+  onSuccess: (data, variables, context, mutation) => {
+    // runs after every mutation in the app succeeds
+  },
+  onError: (error, variables, context, mutation) => {
+    toast.error(`Failed: ${(error as Error).message}`);
+  },
+  onSettled: (data, error, variables, context, mutation) => {
+    // always runs, success or failure
+  },
+});
+```
+
+## Signature
+
+```typescript
+new MutationCache(config?: MutationCacheConfig)
+```
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `onMutate` | `(variables, mutation) => Promise<unknown> \| unknown` | Cache-wide hook, invoked from inside `Mutation.execute()` before the per-mutation `onMutate` (see [Mutation source](#) — `mutation.ts`'s `execute()` calls `this.options.onMutate` directly, not through the cache config; the cache-level `onMutate` field exists in `MutationCacheConfig` but is **not currently invoked** by `Mutation.execute()` — only `onError`, `onSuccess`, and `onSettled` are called against `this.#mutationCache.config` in the source read for this doc). |
+| `onSuccess` | `(data, variables, context, mutation) => Promise<unknown> \| unknown` | Called by `Mutation.execute()` immediately after the mutation function resolves, **before** the per-mutation `options.onSuccess`. |
+| `onError` | `(error, variables, context, mutation) => Promise<unknown> \| unknown` | Called by `Mutation.execute()` when the mutation function rejects (after retries are exhausted), **before** the per-mutation `options.onError`. Also called if the per-mutation `onMutate` itself throws. |
+| `onSettled` | `(data, error, variables, context, mutation) => Promise<unknown> \| unknown` | Called after either success or error path, **after** the per-mutation `onSettled`. |
+
+`MutationCache` extends `Subscribable`, so it also exposes `subscribe(listener)` for low-level cache events (see [Cache events](#cache-events) below). `config` (the object above) is a plain public field, not just a constructor-time snapshot — `mutationCache.config` is read live by `Mutation.execute()` every time a mutation runs.
+
+## Basic usage
+
+```typescript
+import { QueryClient, MutationCache } from '@headlesskit/query-core';
+
+const queryClient = new QueryClient({
+  mutationCache: new MutationCache({
+    onError: (error) => {
+      console.error('A mutation failed:', error);
+    },
+  }),
+});
+
+// Mutations created anywhere in the app (via MutationObserver / useMutation)
+// are added to this same cache and trigger the callbacks above.
+```
+
+Reading the cache directly:
+
+```typescript
+const cache = queryClient.getMutationCache();
+
+cache.getAll();                                   // every Mutation instance, in insertion order
+cache.find({ mutationKey: ['createPost'] });       // first match (exact key match by default)
+cache.findAll({ status: 'pending' });              // all currently-running mutations
+```
+
+## Advanced: scope-based serialization to prevent racing submissions
+
+Two rapid clicks on a "Save profile" button can fire two overlapping `mutationFn` calls that race — whichever response lands second silently overwrites the first, even if it's stale. Giving both mutations the same `scope.id` makes `MutationCache` run them **one at a time, in the order they were added** — the second one transparently waits.
+
+```typescript
+const observer = new MutationObserver(queryClient, {
+  mutationFn: (profile: Profile) => api.updateProfile(profile),
+  scope: { id: 'update-profile' },
+});
+
+// First click
+observer.mutate(formValuesV1);
+// Second click (e.g. user double-clicked, or a second field auto-saved)
+// — same scope id — this run is queued, not raced
+observer.mutate(formValuesV2);
+```
+
+**Exact mechanism**, verified against source:
+
+- `MutationCache.#scopes` is a `Map<string, Array<Mutation>>` keyed by `mutation.options.scope.id` (via the private `scopeFor(mutation)` helper, which reads `mutation.options.scope?.id`).
+- `add(mutation)` pushes the mutation onto `#mutations`, and if it has a scope, also appends it to `#scopes.get(scope)` (creating the array if it doesn't exist yet). It then calls `this.runIfAble(mutation)`.
+- `runIfAble(mutation)`: looks at the scoped array for this mutation's scope and finds the *first* mutation in it whose `state.status === 'pending'`. If there is **no** such pending mutation, it calls `mutation.continue()` — i.e. it's allowed to run immediately. If there **is** one already pending (and it isn't this mutation), nothing happens — this mutation simply does not get started yet.
+- This is what makes the second `mutate()` call above appear to "wait": `Mutation.execute()` always calls `this.#retryer.start()` to begin the retryer, but the retryer's own `canStart()` check (`canFetch(networkMode) && config.canRun()`, where `canRun` is wired to `mutationCache.canRun(this)`) gates the actual run.
+- `canRun(mutation)`: for a scoped mutation, finds the first `pending` mutation in that scope's array. Returns `true` only if there is none, **or** if the first pending one *is this mutation* — i.e. only the head-of-queue mutation is allowed to proceed; everyone else is blocked.
+- When a mutation finishes (success or error), `Mutation.execute()`'s `finally` block calls `this.#mutationCache.runNext(this)`. `runNext` looks in the same scope's array for the first **other** mutation whose `state.isPaused` is `true`, and calls `nextMutation.continue()` on it — unblocking the next queued mutation in line.
+- `remove(mutation)` (called when a mutation is garbage-collected, see [Mutation](./09-mutation)'s `gcTime`) also prunes it out of the relevant `#scopes` array, deleting the array entirely if it becomes empty.
+
+Mutations **without** a `scope` (the default) skip all of this — `scopeFor` returns `undefined`, and every `canRun`/`runIfAble`/`runNext` check short-circuits to "always runnable."
+
+## Method-by-method breakdown
+
+### `build(client, options, state?)`
+
+```typescript
+build(client, options, state?): Mutation
+```
+
+Constructs a new `Mutation` (with a strictly-increasing `mutationId` derived from `#mutationId`, which is seeded from `Date.now()` in the constructor so ids are both unique and roughly chronological), merges in any per-`mutationKey` defaults via `client.getMutationDefaults(options.mutationKey)`, calls `this.add(mutation)`, and returns it. This is what `MutationObserver.mutate()` calls on every invocation — **a brand-new `Mutation` instance is built for every `mutate()` call**, even on the same observer (see [MutationObserver](./11-mutation-observer)).
+
+### `add(mutation)`
+
+Pushes onto the internal `#mutations` array, registers it in `#scopes` if scoped, fires a `{ type: 'added', mutation }` cache event, then calls `runIfAble(mutation)` to kick off execution if nothing else in its scope is currently pending.
+
+### `remove(mutation)`
+
+Filters the mutation out of `#mutations` and out of its scope's array (deleting the scope's array entry entirely if it was the only mutation in it). Fires a `{ type: 'removed', mutation }` event. Does **not** call `runNext` itself — that only happens from inside `Mutation.execute()`'s `finally` block, not from removal. A mutation is normally removed via `Mutation`'s inherited `Removable.scheduleGc()` once it has no observers and its `gcTime` elapses (default mutation `gcTime` is the same default as queries).
+
+### `canRun(mutation)` / `runIfAble(mutation)` / `runNext(mutation)`
+
+Covered in detail above — the scope-serialization trio. All three are no-ops (well, `canRun` returns `true`) for unscoped mutations.
+
+### `clear()`
+
+```typescript
+clear(): void
+```
+
+Wraps a loop over every mutation in `#mutations`, calling `this.remove(mutation)` for each, inside a single `notifyManager.batch(...)` so subscribers only see one flush instead of N individual `removed` events being delivered one-by-one (they're still individually fired, just coalesced into one notification tick).
+
+### `getAll()`
+
+Returns the live `#mutations` array reference (not a copy) — all mutations currently tracked, in insertion order.
+
+### `find(filters)` / `findAll(filters)`
+
+```typescript
+find(filters: MutationFilters): Mutation | undefined
+findAll(filters?: MutationFilters): Array<Mutation>
+```
+
+Both delegate to `matchMutation(filters, mutation)` from `utils.ts`. `find` defaults `exact: true` (`{ exact: true, ...filters }`) and returns the first array match; `findAll` defaults to `{}` (no `exact` forcing) and returns every match. `MutationFilters` supports `exact`, `predicate`, `mutationKey` (partial-prefix unless `exact`), and `status`.
+
+### `notify(event)`
+
+Internal — wraps `this.listeners.forEach(listener => listener(event))` in `notifyManager.batch(...)`. Called by `add`, `remove`, and indirectly by `Mutation` itself for `'updated'`, `'observerAdded'`, `'observerRemoved'` events (Mutation holds a reference back to its owning cache and calls `this.#mutationCache.notify(...)`).
+
+### Cache events
+
+`MutationCacheNotifyEvent` is a discriminated union over `type`:
+
+| `type` | Payload | Fired by |
+|--------|---------|----------|
+| `'added'` | `{ mutation }` | `MutationCache.add()` |
+| `'removed'` | `{ mutation }` | `MutationCache.remove()` |
+| `'updated'` | `{ mutation, action }` | `Mutation.dispatch()` on every state transition (`loading`, `failed`, `pause`, `continue`, `success`, `error`, `setState`) |
+| `'observerAdded'` | `{ mutation, observer }` | `Mutation.addObserver()` and `MutationObserver.setOptions()` (when options actually changed) |
+| `'observerRemoved'` | `{ mutation, observer }` | `Mutation.removeObserver()` |
+
+```typescript
+queryClient.getMutationCache().subscribe((event) => {
+  if (event.type === 'updated' && event.action.type === 'pause') {
+    console.log('mutation paused — offline, will resume on reconnect');
+  }
+});
+```
+
+### `resumePausedMutations()`
+
+```typescript
+resumePausedMutations(): Promise<unknown>
+```
+
+Filters `#mutations` for every mutation with `state.isPaused === true`, then — inside a single `notifyManager.batch(...)` — calls `mutation.continue().catch(noop)` on each and returns `Promise.all(...)` over them. `mutation.continue()` resumes a [Retryer](./12-retryer) that's parked in its `pause()` promise (see Retryer docs for the exact pause/resume mechanism). Each resumed mutation's own failure is swallowed here (`.catch(noop)`) so one failing mutation doesn't reject the whole batch — this is what `queryClient.resumePausedMutations()` calls under the hood, and it's also what framework adapters typically wire up to `onlineManager`'s `online` event so paused mutations automatically retry when connectivity returns.
+
+## Common pitfalls
+
+- **Scoped mutations only serialize mutations sharing the *exact same* `scope.id`** — a typo or a dynamically-generated id that differs between calls (e.g. `scope: { id: `update-${userId}` }` where `userId` happens to differ) silently disables serialization; the two mutations will race exactly as if no scope had been set.
+- **A blocked (non-head-of-queue) scoped mutation isn't rejected or errored — it's left `isPaused: true` indefinitely** until `runNext` is invoked by the mutation ahead of it finishing. If that earlier mutation never settles (e.g. its `mutationFn` hangs forever), every subsequent mutation in the same scope queues forever too.
+- **`getAll()` returns the live internal array, not a defensive copy.** Mutating the returned array directly (push/splice) will corrupt the cache's internal bookkeeping; treat it as read-only.
+- **The cache-level `onMutate` field on `MutationCacheConfig` exists in the type but `Mutation.execute()` does not call it** in this codebase — only `onSuccess`, `onError`, and `onSettled` are invoked against `mutationCache.config`. Don't rely on a global `onMutate` firing; put that logic in the per-mutation `options.onMutate` instead.
+- **`clear()` removes mutations but does not cancel their in-flight retryers.** A currently-executing `mutationFn` keeps running to completion even after `clear()` — it just won't be found via `find`/`findAll`/`getAll` afterward, and its eventual settle won't usefully update anything still referencing the removed `Mutation`.

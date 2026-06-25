@@ -1,0 +1,263 @@
+# Query
+
+**File:** `src/query.ts`
+
+`Query` is the state machine at the heart of `@headlesskit/query-core` — one instance per unique `queryKey`/`queryHash`, holding the cached `data`/`error`, the current `status`/`fetchStatus`, and (while a fetch is in flight) the [`Retryer`](./12-retryer) driving that fetch. Every `fetchQuery`, `useQuery`, `invalidateQueries`, etc. ultimately reads or mutates one of these.
+
+You almost never construct a `Query` yourself. [`QueryCache`](./03-query-cache) owns the registry of `Query` instances and creates them lazily via `QueryCache.build()`:
+
+```typescript
+// inside QueryCache.build() — illustrative, not something you call directly
+import { Query } from '@headlesskit/query-core';
+
+const query = new Query({
+  cache: queryCache,
+  queryKey: ['todos'],
+  queryHash: hashQueryKeyByOptions(['todos'], options),
+  options: client.defaultQueryOptions(options),
+  defaultOptions: client.getQueryDefaults(['todos']),
+});
+```
+
+The only normal way to reach a live `Query` instance is `queryClient.getQueryCache().find({ queryKey })`, or the `query` argument passed into `QueryCache`'s `onError`/`onSuccess`/`onSettled` callbacks.
+
+## Signature
+
+```typescript
+class Query<TQueryFnData, TError, TData, TQueryKey extends QueryKey>
+  extends Removable
+```
+
+### Constructor (`QueryConfig`)
+
+| Option | Type | Required | Description |
+|--------|------|----------|-------------|
+| `cache` | `QueryCache` | Yes | The owning cache — used for `cache.notify(...)` and `cache.remove(this)` (garbage collection). |
+| `queryKey` | `TQueryKey` | Yes | The (unhashed) array key. Stored verbatim on `this.queryKey`. |
+| `queryHash` | `string` | Yes | The hashed key, typically `hashQueryKeyByOptions(queryKey, options)`. Stored on `this.queryHash`; used as the `QueryCache` map key. |
+| `options` | `QueryOptions` | No | Per-query options. Merged over `defaultOptions` via `setOptions()`. |
+| `defaultOptions` | `QueryOptions` | No | Options from `queryClient.setQueryDefaults(partialKey, ...)`, applied as the base layer underneath `options`. |
+| `state` | `QueryState<TData, TError>` | No | A pre-existing state to hydrate from (used by `dehydrate`/`hydrate` and by `QueryCache.build` when restoring). If omitted, `getDefaultState(options)` computes it. |
+
+The constructor never takes data or a `queryFn` argument directly — those live inside `options`.
+
+## Basic usage
+
+Low-level direct usage (bypassing `QueryClient`) is mostly useful in tests or when building an alternative client:
+
+```typescript
+import { QueryCache } from '@headlesskit/query-core';
+
+const queryCache = new QueryCache();
+
+const query = queryCache.build(queryClient, {
+  queryKey: ['todos'],
+  queryFn: () => fetch('/api/todos').then((r) => r.json()),
+  staleTime: 30_000,
+});
+
+await query.fetch();
+
+console.log(query.state.status);      // 'success'
+console.log(query.state.fetchStatus); // 'idle'
+console.log(query.state.data);
+```
+
+In real apps this whole dance happens for you inside `queryClient.fetchQuery(...)` / `QueryObserver` — see [Overview](./01-overview).
+
+## Advanced: cancelling a fetch mid-flight and observing the exact transitions
+
+`cancel()` doesn't synchronously flip query state — it delegates to the active `Retryer`, which rejects its internal `thenable` with a `CancelledError`. That rejection flows back through the `.then(..., onError)` handler installed in `fetch()`, which dispatches `{ type: 'error', error }`. The `'error'` reducer branch special-cases `AbortError` but **not** `CancelledError**, so a genuinely cancelled query still ends up `status: 'error'` unless the caller's own catch logic treats `CancelledError` specially (most consumers — `QueryObserver`, `fetchQuery` — check `error instanceof CancelledError` and suppress it before it reaches UI state).
+
+```typescript
+const promise = query.fetch(); // dispatches { type: 'fetch', ... } synchronously
+// state: { status: 'pending' | 'success' (if data existed), fetchStatus: 'fetching' }
+
+query.cancel(); // calls this.#retryer.cancel(), returns promise.then(noop).catch(noop)
+
+try {
+  await promise;
+} catch (error) {
+  console.log(error instanceof CancelledError); // true
+  console.log(query.state.fetchStatus);          // 'idle' — error reducer always resets fetchStatus to 'idle'
+  console.log(query.state.status);               // 'error' UNLESS the original promise had already started resolving
+}
+```
+
+Notes on the exact mechanics:
+
+- `cancel(options)` reads `this.#promise` **before** calling `this.#retryer?.cancel(options)`, then returns `promise.then(noop).catch(noop)` — i.e. `cancel()`'s own returned promise **never rejects**, even though the underlying fetch promise (`query.promise` / what `fetch()` returned) does reject with the `CancelledError`. Callers awaiting `query.cancel()` are insulated; callers awaiting the original `fetch()` promise are not.
+- If there is no `this.#promise` (nothing in flight), `cancel()` just calls `this.#retryer?.cancel(options)` (a no-op if there's no retryer either) and resolves immediately.
+- `options.revert` is forwarded to `CancelledError.revert` — `QueryObserver` and `removeObserver()` use this to decide whether to roll `state.data` back to a pre-fetch snapshot (`revertState`) versus leaving the (possibly stale) data in place.
+- `options.silent` suppresses the `onCancel` retryer callback's dispatch of `{ type: 'cancelled' }` — see `removeObserver()` below, which passes `{ silent: true }` precisely to avoid notifying observers that no longer exist.
+
+## Advanced: recovering from a network error via pause/continue
+
+When `fetchFn()` rejects and the `Retryer`'s internal retry policy says "yes, retry," the sequence of dispatches is:
+
+1. `{ type: 'failed', failureCount, error }` — bumps `state.fetchFailureCount` / `fetchFailureReason` (this is *not* the same as the terminal `'error'` action; it fires once per failed attempt while retries continue).
+2. The retryer sleeps `retryDelay(failureCount, error)`, then checks `canContinue()` (window focused **and** (`networkMode === 'always'` or `onlineManager.isOnline()`) **and** `canRun()`).
+3. If offline (or unfocused), the retryer calls `pause()`, which calls `Query`'s `onPause` callback → `this.dispatch({ type: 'pause' })`, setting `state.fetchStatus = 'paused'` — visible to `QueryObserver` as `result.fetchStatus === 'paused'` (no `isLoading`/`isFetching` spinner state needed, but data is still "in flight" conceptually).
+4. The retryer's `pause()` promise only resolves once something calls `retryer.continue()` — which `Query.onFocus()` and `Query.onOnline()` both do unconditionally (`this.#retryer?.continue()`), wired up by `FocusManager`/`OnlineManager` event listeners reaching every cached query.
+5. On resume, the retryer's `onContinue` callback fires → `this.dispatch({ type: 'continue' })`, setting `state.fetchStatus` back to `'fetching'`, and the retry loop (`run()`) re-invokes `fetchFn()`.
+6. Eventually either `'success'` (data arrives, `fetchFailureCount` reset to `0`) or `'error'` (retries exhausted or `shouldRetry` returned false) is dispatched.
+
+```typescript
+// query options: retry: 3, networkMode: 'online' (default)
+onlineManager.setOnline(false);
+
+const promise = query.fetch();
+// fetchFn rejects -> dispatch({ type: 'failed', failureCount: 1, error })
+// canContinue() is false (offline) -> dispatch({ type: 'pause' })
+console.log(query.state.fetchStatus); // 'paused'
+
+onlineManager.setOnline(true);
+queryCache.onOnline(); // QueryCache.onOnline() walks all queries and calls query.onOnline()
+// -> retryer.continue() -> dispatch({ type: 'continue' }) -> fetchStatus: 'fetching' -> run() retries
+
+await promise; // resolves once data arrives or retries are exhausted
+```
+
+## The `dispatch` reducer — every action and its exact transition
+
+`dispatch(action)` is `private`; it is only ever invoked from inside `Query` itself (`invalidate()`, `fetch()`'s retryer callbacks and promise handlers, `setState()`). The reducer is a pure function closed over `this.options` (needed for `canFetch(networkMode)` and `replaceData(..., options)`), applied to `this.state`, and after the new state is assigned, every observer is notified via `notifyManager.batch(...)`.
+
+| Action | Fields | State transition |
+|--------|--------|-------------------|
+| `'failed'` | `failureCount`, `error` | Sets `fetchFailureCount = action.failureCount`, `fetchFailureReason = action.error`. Nothing else changes — `status`/`fetchStatus` are untouched, so the query still reads as `fetching`/`pending` (or `success` with a background refetch) while retries continue. |
+| `'pause'` | — | Sets `fetchStatus: 'paused'`. Fired by the retryer's `onPause` when `canContinue()` is false (window unfocused, or offline under `networkMode: 'online'`/`'offlineFirst'`, or `canRun()` false). |
+| `'continue'` | — | Sets `fetchStatus: 'fetching'`. Fired by the retryer's `onContinue` after `pause()`'s promise resolves (focus regained / back online / `retryer.continue()` called). |
+| `'fetch'` | `meta: FetchMeta \| null` | Resets `fetchFailureCount: 0`, `fetchFailureReason: null`, sets `fetchMeta: action.meta ?? null`, `isInvalidated: false`. **`fetchStatus` is computed last and overwrites any earlier conditional value in the same object literal** — the final assignment is `fetchStatus: canFetch(this.options.networkMode) ? 'fetching' : 'paused'`, so a `fetch()` call issued while offline (under `networkMode: 'online'`) starts the query directly in `'paused'`, not `'fetching'`. `status` is left unchanged here — it's still `'pending'` on first fetch, or `'success'`/`'error'` on a refetch, until `'success'`/`'error'` lands. |
+| `'success'` | `data`, `dataUpdatedAt?`, `manual?` | `data: replaceData(state.data, action.data, this.options)` (structural-sharing — see [utils](./23-utils)), `dataUpdateCount += 1`, `dataUpdatedAt: action.dataUpdatedAt ?? Date.now()`, `error: null`, `isInvalidated: false`, `status: 'success'`, `fetchStatus: 'idle'`, and **also resets** `fetchFailureCount: 0`, `fetchFailureReason: null`, `fetchMeta: null`. |
+| `'error'` | `error` | **Special case:** if `error instanceof Error && error.name === 'AbortError'`, the reducer short-circuits and only sets `fetchStatus: 'idle'` — `status`, `error`, and failure counters are left exactly as they were. Otherwise: `error: action.error`, `errorUpdateCount += 1`, `errorUpdatedAt: Date.now()`, `fetchFailureCount += 1`, `fetchFailureReason: action.error`, `fetchMeta: null`, `fetchStatus: 'idle'`, `status: 'error'`. Note this means a `CancelledError` (which is **not** an `AbortError`) takes the normal error path and flips `status` to `'error'`. |
+| `'invalidate'` | — | Sets `isInvalidated: true`. Only dispatched by `invalidate()`, and only when `state.isInvalidated` is currently `false` (the public method short-circuits otherwise). |
+| `'setState'` | `state: Partial<QueryState>`, `setStateOptions?` | Shallow-merges `action.state` directly onto the current state (`{ ...state, ...action.state }`) — an escape hatch for arbitrary state overrides. `setStateOptions` is carried on the action but **not read anywhere inside the reducer itself**; it exists for `QueryCache`/`QueryClient`-level consumers (e.g. `setQueryData`'s options) to inspect via the cache's `'updated'` notification. |
+| *(default)* | — | Returns `state` unchanged. The `'cancelled'` type dispatched internally by the retryer's `onCancel` callback (`this.dispatch({ type: 'cancelled' as any })`) hits this branch — it is cast through `as any` because it isn't a member of the `QueryAction` union, and produces **no state change at all**; it exists purely so `notifyManager.batch(...)` still runs and observers/cache get an `'updated'` notification on cancellation. |
+
+After the switch, regardless of branch, `this.state = reducer(this.state)` runs, then:
+
+```typescript
+notifyManager.batch(() => {
+  this.#observers.forEach((observer) => observer.onQueryUpdate())
+  this.#cache.notify({ type: 'updated', query: this, action })
+})
+```
+
+— every dispatch, even a no-op `'cancelled'`, triggers a full observer/cache notification pass (batched so multiple synchronous dispatches still flush subscribers once).
+
+## Method-by-method breakdown
+
+### `constructor(config)`
+
+Initializes private fields, then computes `this.initialState`: if `config.state` was passed (hydration/rehydration path) it's used directly; otherwise `getDefaultState(this.setOptions(config.options))` builds state from options (handling `initialData`/`initialDataUpdatedAt`, including their function forms). `this.state` is set to the same object. Finally calls `this.scheduleGc()` (inherited from [`Removable`](./18-removable)) — a freshly constructed query with no observers is immediately eligible for garbage collection after `gcTime` elapses, which is why `QueryCache.build()` calling `this.add(query)` and an observer calling `addObserver()` (which calls `clearGcTimeout()`) both race to keep it alive.
+
+### `setOptions(options)` *(private)*
+
+`this.options = { ...this.#defaultOptions, ...options }`, then `this.updateGcTime(this.options.gcTime)` (from `Removable` — takes the **max** of the current `gcTime` and the new one, defaulting to `Infinity` on the server or `5 * 60 * 1000` in the browser when no `gcTime` is given). Returns the merged options. Not part of the public API surface (no consumer outside `Query` itself calls it), but every option update — including the one implicitly triggered by `fetch(options)` — flows through here.
+
+### `setDefaultOptions(options)`
+
+Replaces `this.#defaultOptions` directly, without re-running `setOptions()` or re-merging `this.options`. Used by `QueryClient` when `setQueryDefaults` changes the defaults for a key after the query already exists; the new defaults only actually take effect the next time `setOptions` runs (e.g. on the next `fetch()`).
+
+### `setInitialData(data, updatedAt?)`
+
+Mutates `this.#initialOptions` to inject `initialData`/`initialDataUpdatedAt`. This does **not** touch `this.state` — it only affects what a *future* fresh `getDefaultState` computation would produce; in practice this is a narrow internal hook, not a way to push data into a live query (use `setData`/`setState` for that).
+
+### `isActive()`
+
+`true` if **any** attached observer currently resolves `enabled` (a boolean or `(query) => boolean` function) to something other than `false`. An observer with `enabled: false` doesn't count.
+
+### `isDisabled()`
+
+`getObserversCount() > 0 && !this.isActive()` — meaning a query with **zero** observers is *not* considered disabled (it's just inactive/unobserved); "disabled" specifically describes a query that has observers, all of which have opted out via `enabled: false`.
+
+### `isStale()`
+
+`true` if `state.isInvalidated`. Otherwise, if there are observers, defers to whether **any** observer's `getCurrentResult().isStale` is true (each observer computes staleness against its own `staleTime`). With no observers, falls back to `state.data === undefined` — an unobserved query with no data is considered stale (since there's no observer-specific `staleTime` to check against).
+
+### `isStaleByTime(staleTime = 0)`
+
+A standalone time-based check independent of observers: `state.isInvalidated || state.data === undefined || !timeUntilStale(state.dataUpdatedAt, staleTime)`. `timeUntilStale` (see [utils](./23-utils)) returns `Math.max(dataUpdatedAt + staleTime - Date.now(), 0)` — `0` means already stale, hence the `!`.
+
+### `onFocus()`
+
+Finds the first observer whose `shouldFetchOnWindowFocus()` is true and calls `observer.refetch({ cancelRefetch: false })` (fire-and-forget — the return value isn't awaited or checked). Unconditionally also calls `this.#retryer?.continue()` — so even if no observer wants a fresh refetch on focus, any **paused** retry in flight is resumed.
+
+### `onOnline()`
+
+Identical structure to `onFocus()`, but checks `shouldFetchOnReconnect()` and is invoked by `QueryCache.onOnline()` (triggered by `OnlineManager` going back online).
+
+### `addObserver(observer)`
+
+No-ops if `observer` is already in `#observers`. Otherwise pushes it, calls `this.clearGcTimeout()` (an observed query is never garbage collected), and notifies the cache with `{ type: 'observerAdded', query, observer }`.
+
+### `removeObserver(observer)`
+
+No-ops if `observer` isn't currently registered. Otherwise filters it out of `#observers`, and **only when that was the last observer** (`!this.#observers.length`):
+
+- If there's an active retryer: when `this.#abortSignalConsumed` is true (the `queryFn` actually read `context.signal`, meaning it can genuinely respond to cancellation), calls `this.#retryer.cancel({ revert: this.options.cancelRefetches })` — fully cancelling the in-flight fetch and potentially reverting `state.data`. If the signal was never consumed, calls `this.#retryer.cancelRetry()` instead — this only stops *future retries* (sets the retryer's internal `isRetryCancelled` flag) without aborting the current attempt, since aborting a fetch whose `queryFn` never checked the signal would just orphan a promise that's still running.
+- Calls `this.scheduleGc()` — now that nothing observes the query, it becomes eligible for removal after `gcTime`.
+
+Either way, notifies the cache with `{ type: 'observerRemoved', query, observer }`.
+
+### `getObserversCount()`
+
+`this.#observers.length`.
+
+### `invalidate()`
+
+`if (!this.state.isInvalidated) this.dispatch({ type: 'invalidate' })` — guards against a redundant dispatch (and therefore a redundant notification batch) if already invalidated.
+
+### `fetch(options?, fetchOptions?)`
+
+The most involved method. Step by step:
+
+1. **Dedup/cancel-refetch guard.** If `state.fetchStatus !== 'idle'` (a fetch is already running or paused):
+   - If there's existing data **and** `fetchOptions?.cancelRefetch` is true, calls `this.cancel({ silent: true })` to abort the in-flight fetch before starting a new one (used by "refetch" calls that want to supersede a stale in-flight request).
+   - Otherwise, if `this.#promise` exists, calls `this.#retryer?.continueRetry()` (clears any `isRetryCancelled` flag a prior `cancelRetry()` may have set) and **returns the existing `#promise` directly** — concurrent `fetch()` calls against the same query share one underlying request rather than firing duplicate network calls.
+2. If `options` was passed, calls `this.setOptions(options)` — merging them in before this fetch uses them.
+3. If `this.options.queryFn` is still missing (e.g. fetched via `prefetchQuery` before any observer existed with a real `queryFn`), looks for an attached observer that has one and adopts its options wholesale via `setOptions`.
+4. **Dev-mode warning:** in non-production, logs a `console.error` if `this.options.queryKey` isn't an array (legacy string-key migration warning).
+5. Creates a fresh `AbortController` for this attempt, and wires `addConsumeAwareSignal` (see [utils](./23-utils)) onto the `queryFnContext` so that the **first** read of `context.signal` flips `this.#abortSignalConsumed = true` and attaches an `'abort'` listener — this consumed-flag is exactly what `removeObserver()` checks to decide `cancel()` vs `cancelRetry()`.
+6. Builds `fetchFn`, which resolves the actual `queryFn` via `ensureQueryFn` (see [utils](./23-utils); throws/warns if called while `queryFn` is `skipToken`), and — if `options.behavior?.onFetch` is set (used by infinite queries to wrap fetching with pagination logic) — delegates to it, reading the result back off `(state as any).__fetchFnResult` instead of calling the inner `queryFn` directly itself.
+7. Builds a [`Retryer`](./12-retryer) via `createRetryer`, wiring its `onCancel`/`onFail`/`onPause`/`onContinue` callbacks straight to `dispatch()` calls (`'cancelled'`, `'failed'`, `'pause'`, `'continue'` respectively) — `onCancel` additionally **bails out entirely** if `!this.#observers.length`, so a cancellation on an already-unobserved query produces no dispatch/notification at all. `retry`, `retryDelay`, and `networkMode` are forwarded straight from `this.options`; `canRun` is hardcoded to `() => true` (query-level fetches are always "runnable" — scope-based serialization like mutations have is not a `Query` concern).
+8. Calls `this.#retryer.start()`, chains `.then(success, error)` onto it to dispatch `'success'`/`'error'` and re-`throw error` on failure (so the returned promise still rejects for callers), and stores that chained promise as `this.#promise`.
+9. **Dispatches `{ type: 'fetch', meta: fetchOptions?.meta ?? null }` synchronously**, *after* `#promise` is already assigned but *before* `fetch()` returns — so by the time any observer's `onQueryUpdate()` fires from this dispatch, `query.promise` is already populated.
+10. Returns `this.#promise`.
+
+### `cancel(options?)`
+
+See the [cancellation walkthrough](#advanced-cancelling-a-fetch-mid-flight-and-observing-the-exact-transitions) above. Captures `this.#promise` into a local first, calls `this.#retryer?.cancel(options)` (no-op if no retryer exists), then returns `promise ? promise.then(noop).catch(noop) : Promise.resolve()` — meaning `cancel()`'s own promise **always resolves**, never rejects, regardless of what happens to the underlying fetch.
+
+### `setState(state, setStateOptions?)`
+
+Thin wrapper: `this.dispatch({ type: 'setState', state, setStateOptions })`. This is what `queryClient.setQueryData` ultimately rides on top of for direct cache writes (after computing the new data via the updater function).
+
+### `getObservers()`
+
+Returns the live `#observers` array reference (not a copy) — callers should treat it as read-only.
+
+### Inherited from `Removable` ([Removable](./18-removable))
+
+- **`destroy()`** — clears the pending GC timeout. `Query` does not override this; a destroyed query simply stops its scheduled removal (used when `QueryCache.clear()` tears down all queries directly rather than waiting for GC).
+- **`scheduleGc()`** *(protected)* — clears any existing GC timer, then if `isValidTimeout(this.gcTime)` (a finite, non-negative number — explicitly excludes `Infinity`), schedules `this.optionalRemove()` to run after `gcTime` ms.
+- **`optionalRemove()`** *(protected override)* — `Query`'s implementation: `if (!this.#observers.length && this.state.fetchStatus === 'idle') this.#cache.remove(this)`. Note both conditions: a query with zero observers but a fetch still in flight (`fetchStatus !== 'idle'`, e.g. `'fetching'` or `'paused'`) is **not** removed even after its GC timer fires — it survives until that fetch settles, at which point nothing re-triggers GC automatically unless `scheduleGc()` is called again (which happens in `removeObserver()`, not after a fetch completes with no observers — see pitfalls).
+- **`updateGcTime(newGcTime)`** *(protected)* — `this.gcTime = Math.max(this.gcTime || 0, newGcTime ?? (server ? Infinity : 5 * 60_000))`. Because it's a `Math.max`, gcTime can only ever grow across repeated `setOptions` calls on the same query instance, never shrink — a later `useQuery` with a smaller `gcTime` than an earlier one for the same key does not reduce the effective cache lifetime.
+
+## Cross-references
+
+- [Overview](./01-overview) — high-level architecture and the `status`/`fetchStatus` state table.
+- [QueryCache](./03-query-cache) — owns the `Query` registry, calls `build()`, dispatches `onFocus`/`onOnline` to every cached query.
+- [Retryer](./12-retryer) — the retry/pause/resume engine that `fetch()` constructs and drives via `dispatch()` callbacks.
+- [Removable](./18-removable) — the GC base class (`scheduleGc`/`clearGcTimeout`/`updateGcTime`/`optionalRemove`).
+- [utils](./23-utils) — `replaceData` (structural sharing), `timeUntilStale`, `resolveStaleTime`, `ensureQueryFn`, `addConsumeAwareSignal`, `hashQueryKeyByOptions`.
+
+## Common pitfalls
+
+- **`cancel()` never rejects, but the promise returned by `fetch()` does.** Awaiting `query.cancel()` directly will never throw; awaiting the promise you got back from `fetch()` (or `query.promise`) will reject with a `CancelledError` once cancellation lands. Mixing these up is a common source of "why isn't my catch block running" confusion.
+- **A `CancelledError` is not an `AbortError`.** The `'error'` reducer branch only special-cases `error.name === 'AbortError'` (skipping the `status: 'error'` transition). A query cancelled via `query.cancel()` goes through the *normal* error path and ends up `status: 'error'`, `error: CancelledError` — callers must explicitly check `error instanceof CancelledError` (or `isCancelledError`, deprecated) to distinguish "the user navigated away" from "the request genuinely failed."
+- **Concurrent `fetch()` calls dedupe onto the same promise — but only while `fetchStatus !== 'idle'` and `#promise` is set.** If you want to force a *new* request that supersedes an in-flight one, you need `fetchOptions.cancelRefetch: true`; otherwise the second `fetch()` call quietly returns the first call's still-pending promise (and `continueRetry()`s it if a retry was in the process of being cancelled).
+- **`removeObserver()`'s `cancel` vs `cancelRetry` branching depends on whether the `queryFn` ever read `context.signal`.** A `queryFn` that ignores `signal` entirely will, on last-observer removal, only have its *future retries* cancelled (`cancelRetry()`) — the in-flight request keeps running to completion in the background, its result simply discarded once it resolves (since by then there may be no observers to notify, though the cache `'updated'` event still fires).
+- **GC only fires for idle queries.** `optionalRemove()` requires both zero observers *and* `fetchStatus === 'idle'`. A query that loses its last observer mid-fetch schedules a GC timer via `removeObserver()`, but if that timer fires while still fetching, nothing happens — and nothing re-arms the timer afterward except a future `addObserver()`/`removeObserver()` call. In practice this is rarely observed because most fetches settle well within the default 5-minute `gcTime`, but it means a query stuck on a hung/paused (e.g. offline) fetch with no observers can outlive its configured `gcTime` indefinitely.
+- **`gcTime` only ever grows, never shrinks, for an existing `Query` instance.** Because `updateGcTime` takes a `Math.max`, passing a smaller `gcTime` in a later `setOptions` call (e.g. a second `useQuery` call for the same key with different options) has no effect on how long the query survives without observers.
+- **`setOptions`/`setDefaultOptions` don't retroactively touch `state`.** Changing options (including `initialData`) on a query that already has state does not replay `getDefaultState` — those new option values only matter for future operations (the next `fetch()`'s retry/networkMode/structuralSharing behavior, etc.), not for rewriting existing cached data.

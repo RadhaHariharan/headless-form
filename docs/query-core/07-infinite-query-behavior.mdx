@@ -1,0 +1,196 @@
+# infiniteQueryBehavior
+
+**File:** `src/infiniteQueryBehavior.ts`
+
+A `QueryBehavior` factory that gets plugged into a `Query`'s fetch pipeline whenever the query was created through [InfiniteQueryObserver](./01-overview#infinitequeryobserver) (or `queryClient.fetchInfiniteQuery` / `prefetchInfiniteQuery`). It doesn't fetch anything itself — it rewrites `context.fetchFn`, the function `Query` actually calls, so that a "fetch" for an infinite query means "fetch the right page(s) and reassemble the `InfiniteData` shape," instead of a single plain request.
+
+You never call this directly in application code. It's wired in internally wherever infinite-query options are normalized, then invoked by [Query](./04-query) as part of `Query#fetch`'s `behavior.onFetch(context, query)` call.
+
+```typescript
+import { infiniteQueryBehavior } from '@headlesskit/query-core'
+
+// internal wiring (illustrative — not something you call yourself)
+const behavior = infiniteQueryBehavior<PostsPage, Error, PostsPage, number>(options.maxPages)
+queryOptions.behavior = behavior
+```
+
+## Signature
+
+```typescript
+function infiniteQueryBehavior<TQueryFnData, TError, TData, TPageParam, TQueryKey extends QueryKey = QueryKey>(
+  maxPages?: number,
+): QueryBehavior<TQueryFnData, TError, InfiniteData<TData, TPageParam>, TQueryKey>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `maxPages` | `number \| undefined` | Maximum number of pages to retain. `undefined`/`0` means unlimited — see [Page eviction](#page-eviction-maxpages) below. |
+
+**Returns:** a `QueryBehavior` object — `{ onFetch(context, query) }`. `onFetch` mutates `context.fetchFn` in place; it returns nothing.
+
+### `FetchContext` (relevant fields read/written)
+
+| Field | Used as |
+|-------|---------|
+| `context.options` | Cast to `InfiniteQueryPageParamsOptions` — reads `getNextPageParam`, `getPreviousPageParam`, `initialPageParam`, `meta` |
+| `context.fetchOptions?.meta?.fetchMore?.direction` | `'forward' \| 'backward' \| undefined` — selects which of the three fetch strategies below runs |
+| `context.state.data` | Read as the existing `InfiniteData` — source of `oldPages` / `oldPageParams` |
+| `context.fetchFn` | **Overwritten** — this is the actual output of the behavior |
+| `context.signal`, `context.queryKey` | Forwarded into each page's `queryFn` call |
+
+## Basic usage
+
+End consumers interact with this through `InfiniteQueryObserver`, never the behavior directly:
+
+```typescript
+import { InfiniteQueryObserver } from '@headlesskit/query-core'
+
+const observer = new InfiniteQueryObserver(queryClient, {
+  queryKey: ['posts', 'infinite'],
+  queryFn: ({ pageParam }) => fetch(`/api/posts?cursor=${pageParam}`).then(r => r.json()),
+  initialPageParam: 0,
+  getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+})
+
+// First call (or any refetch with no `direction` set) fetches pages 0..N
+// using the "refetch all pages" branch described below.
+await observer.refetch()
+
+// Fetch one more page forward
+await observer.fetchNextPage()
+```
+
+## The three fetch strategies
+
+`onFetch` inspects `context.fetchOptions?.meta?.fetchMore?.direction` exactly once and installs one of three different `context.fetchFn` implementations. There is no other branching — direction fully determines the strategy.
+
+### 1. `direction === 'forward'` — fetch one new page at the end
+
+Used by `fetchNextPage()`. The next page param is derived by calling:
+
+```typescript
+options.getNextPageParam(
+  oldPages[oldPages.length - 1],   // lastPage
+  oldPages,                         // allPages
+  oldPageParams[oldPageParams.length - 1], // lastPageParam
+  oldPageParams,                    // allPageParams
+)
+```
+
+The single new page is fetched with `{ pageParam: nextPageParam, direction: 'forward', signal, meta }`, then merged in via `buildNewPages(..., isFetchingNextPage: true)`, which calls `addToEnd(pages, page, maxPages)` and `addToEnd(params, param, maxPages)` — the new page is appended to the **end** of both arrays.
+
+### 2. `direction === 'backward'` — fetch one new page at the start
+
+Used by `fetchPreviousPage()`. Mirrors the forward case but reads the **first** page/param:
+
+```typescript
+options.getPreviousPageParam?.(
+  oldPages[0],          // firstPage
+  oldPages,              // allPages
+  oldPageParams[0],      // firstPageParam
+  oldPageParams,         // allPageParams
+)
+```
+
+If `getPreviousPageParam` is not provided, this resolves to `undefined` and the fetch proceeds with `pageParam: undefined` — there is no guard that throws or skips the fetch. The new page is merged via `buildNewPages(..., isFetchingNextPage: false)`, i.e. `addToStart(pages, page, maxPages)` — prepended to the **start** of both arrays.
+
+### 3. No direction — refetch all pages from scratch
+
+Used for the initial fetch and any plain `refetch()`/`invalidateQueries()` with no `fetchMore` meta. This is the most involved branch:
+
+```typescript
+const pagesLength = oldPages.length || 1
+const pagesMaxLength = maxPages ? Math.min(pagesLength, maxPages) : pagesLength
+
+while (currentPage < pagesMaxLength) {
+  const param =
+    currentPage === 0
+      ? options.initialPageParam
+      : options.getNextPageParam(pages[currentPage - 1], pages, pageParams[currentPage - 1], pageParams) ?? undefined
+
+  if (param == null && currentPage > 0) break   // stop early if there's no next page
+
+  const fetchedPage = await fetchFn({ queryKey, pageParam: param, direction: 'forward', signal, meta })
+  pages[currentPage] = fetchedPage
+  pageParams[currentPage] = param
+  currentPage++
+}
+
+return { pages, pageParams }
+```
+
+Key details:
+- **How many pages to refetch** is decided by `pagesMaxLength = min(existing page count, maxPages)` (or just the existing page count if `maxPages` is unset). On the very first fetch ever (no existing data), `oldPages.length` is `0`, so `pagesLength` falls back to `1` — exactly one page is fetched.
+- **Page params are recomputed from scratch**, page by page, by re-running `getNextPageParam` against the **newly fetched** pages array (`pages`), not the old cached one. This means a refetch that changes earlier pages' content can change every subsequent page's param too.
+- **Early termination**: if `getNextPageParam` returns `null`/`undefined` for any page after the first, the loop `break`s immediately — you can end up with fewer pages than `pagesMaxLength` if pagination has been exhausted.
+- All pages here are fetched sequentially (`await` inside the `while` loop), not in parallel.
+- This branch ignores `context.fetchOptions?.meta?.fetchMore?.pageIndex` — it's read into `refetchPages` but that variable is unused in the current implementation.
+
+## Page eviction (`maxPages`)
+
+`maxPages` is enforced only inside `buildNewPages` (forward/backward single-page fetches), via `addToEnd`/`addToStart` from `./utils`:
+
+```typescript
+function addToEnd<T>(items: Array<T>, item: T, max = 0): Array<T> {
+  const newItems = [...items, item]
+  return max && newItems.length > max ? newItems.slice(1) : newItems
+}
+
+function addToStart<T>(items: Array<T>, item: T, max = 0): Array<T> {
+  const newItems = [item, ...items]
+  return max && newItems.length > max ? newItems.slice(0, -1) : newItems
+}
+```
+
+- **Fetching forward** (`addToEnd`) appends the new page, and if the result exceeds `maxPages`, **drops the oldest page from the front** (`.slice(1)`) — the window slides forward.
+- **Fetching backward** (`addToStart`) prepends the new page, and if the result exceeds `maxPages`, **drops the newest page from the back** (`.slice(0, -1)`) — the window slides backward.
+- In the no-direction (refetch-all) branch, `maxPages` instead caps *how many pages get refetched at all* (`pagesMaxLength`), rather than trimming an array after the fact.
+- `maxPages` of `0` or `undefined` is treated as "no limit" (`max &&` short-circuits).
+
+## Advanced: bidirectional infinite list with `maxPages` eviction
+
+A chat-style window that loads more messages in both directions but only keeps 3 pages in memory at once:
+
+```typescript
+const observer = new InfiniteQueryObserver(queryClient, {
+  queryKey: ['messages', roomId],
+  queryFn: ({ pageParam, direction }) =>
+    fetchMessages({ cursor: pageParam, direction }),
+  initialPageParam: 0,
+  getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+  getPreviousPageParam: (firstPage) => firstPage.prevCursor ?? undefined,
+  maxPages: 3,
+})
+
+// Start: pages = [P0], pageParams = [0]
+await observer.refetch()
+
+await observer.fetchNextPage();      // pages = [P0, P1]
+await observer.fetchNextPage();      // pages = [P0, P1, P2]   (at the maxPages limit)
+
+await observer.fetchNextPage();
+// addToEnd appends P3 -> [P0, P1, P2, P3] (length 4 > maxPages 3)
+// .slice(1) drops P0 (the OLDEST / front page)
+// Result: pages = [P1, P2, P3]
+
+await observer.fetchPreviousPage();
+// getPreviousPageParam reads pages[0] === P1's prevCursor
+// addToStart prepends P0b -> [P0b, P1, P2, P3] (length 4 > maxPages 3)
+// .slice(0, -1) drops P3 (the NEWEST / back page)
+// Result: pages = [P0b, P1, P2]
+```
+
+Note the asymmetry: which page gets evicted depends only on which direction you just fetched in, not on "least recently used" — a `fetchNextPage()` always evicts from the front, a `fetchPreviousPage()` always evicts from the back, regardless of how the window got into its current state.
+
+## Common pitfalls
+
+- **`getPreviousPageParam` is optional but unguarded.** If you call `fetchPreviousPage()` without providing `getPreviousPageParam`, the behavior happily calls `undefined?.(...)`, resolves `prevPageParam` to `undefined`, and fetches a page with `pageParam: undefined` anyway — there's no error, just a likely-wrong request to your `queryFn`.
+- **Refetching recomputes every page param from the newly fetched pages, not the cached ones.** If your backend's pagination cursors are derived from page content, a refetch that returns different first-page content can cascade into different params (and therefore different pages) for every subsequent page in the window — this is by design, not a bug, but easy to be surprised by.
+- **`maxPages` behaves differently depending on which fetch path you're on.** During `fetchNextPage`/`fetchPreviousPage` it trims the page array after appending. During a full refetch it instead limits how many pages get re-fetched in the first place (`Math.min(existing length, maxPages)`) — it will never *grow* the page count back up on a plain refetch, even if more pages were available, because `pagesLength` is capped by what was already cached.
+- **The unused `refetchPages` / `pageIndex` meta field.** `context.fetchOptions?.meta?.fetchMore?.pageIndex` is read but never used in the no-direction branch — don't rely on it to target a specific page index for a partial refetch; it currently has no effect.
+- **Sequential, not parallel, page fetches on refetch-all.** Each page in the `while` loop is awaited before the next request starts — a `maxPages`-less infinite query with many cached pages will refetch them one at a time, not concurrently.
+
+## See also
+
+- [01-overview](./01-overview) — `InfiniteQueryObserver`, `InfiniteData` shape, `InfiniteQueryObserverOptions`
+- [04-query](./04-query) — how `Query#fetch` invokes `behavior.onFetch` and consumes `context.fetchFn`

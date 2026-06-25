@@ -1,0 +1,157 @@
+# QueriesObserver
+
+**File:** `src/queriesObserver.ts` (240 lines)
+
+`QueriesObserver` manages a *dynamic array* of [`QueryObserver`](./05-query-observer) instances — the engine behind a `useQueries`-style hook that takes an array of query configs and returns an array of results. Its core responsibility, beyond fanning subscriptions out to N observers, is **diffing**: when the array of query configs changes between calls to `setQueries`, it must decide which existing `QueryObserver` instances can be reused (to avoid losing in-flight fetches/cached results) versus which need to be created or destroyed.
+
+```typescript
+import { QueriesObserver } from '@headlesskit/query-core';
+
+const observer = new QueriesObserver(queryClient, [
+  { queryKey: ['user', 1], queryFn: () => fetchUser(1) },
+  { queryKey: ['user', 2], queryFn: () => fetchUser(2) },
+]);
+```
+
+## Signature
+
+```typescript
+new QueriesObserver<TCombinedResult = Array<QueryObserverResult>>(
+  client: QueryClient,
+  queries: Array<QueryObserverOptions>,
+  options?: QueriesObserverOptions<TCombinedResult>,
+)
+```
+
+| Parameter | Type | Description |
+|---|---|---|
+| `client` | `QueryClient` | Used to resolve defaulted options for each query (`client.defaultQueryOptions`) and to construct new `QueryObserver`s. |
+| `queries` | `Array<QueryObserverOptions>` | The list of query configs to observe. Forwarded straight into `setQueries` by the constructor. |
+| `options.combine` | `(result: Array<QueryObserverResult>) => TCombinedResult` | Optional transform applied to the raw per-query result array before notifying listeners (e.g. derive a single aggregate object instead of handing back N separate results). |
+
+## Basic usage
+
+```typescript
+const observer = new QueriesObserver(queryClient, [
+  { queryKey: ['user', 1], queryFn: () => fetchUser(1) },
+  { queryKey: ['user', 2], queryFn: () => fetchUser(2) },
+]);
+
+const unsubscribe = observer.subscribe((results) => {
+  results.forEach((r) => console.log(r.status, r.data));
+});
+
+unsubscribe();
+```
+
+## Advanced: dynamically changing the list of queries at runtime
+
+A common real pattern: the list of ids to fetch comes from elsewhere in your state (e.g. a multi-select) and changes between renders. `setQueries` is built so that calling it repeatedly with a *different-length or differently-keyed* array reuses observers wherever query identity (queryHash) is unchanged, rather than tearing everything down and refetching:
+
+```typescript
+const observer = new QueriesObserver(queryClient, [
+  { queryKey: ['user', 1], queryFn: () => fetchUser(1) },
+  { queryKey: ['user', 2], queryFn: () => fetchUser(2) },
+]);
+
+// Later, the selection grew to include user 3 and dropped user 1:
+observer.setQueries([
+  { queryKey: ['user', 2], queryFn: () => fetchUser(2) },
+  { queryKey: ['user', 3], queryFn: () => fetchUser(3) },
+]);
+// The observer watching user 2 is reused as-is (no refetch, no flicker).
+// The observer watching user 1 is destroyed.
+// A brand-new observer is created for user 3.
+```
+
+The exact matching algorithm is in `#findMatchingObservers` (see below) — it matches by `queryHash`, not array position, so reordering the input array does not cause spurious destroy/create churn as long as the same set of hashes is present.
+
+## Method-by-method
+
+### `onSubscribe()` (protected)
+
+Only runs its body when `this.listeners.size === 1` (first subscriber). At that point it calls `observer.subscribe(...)` on **every** observer currently in `#observers`, wiring each one's individual updates into `#onUpdate`. Note: observers are only actually subscribed (and therefore actively fetching/timer-driving per [`QueryObserver.onSubscribe`](./05-query-observer#onsubscribe-onunsubscribe-protected)) once the `QueriesObserver` itself has at least one listener — constructing a `QueriesObserver` and calling `setQueries` without ever calling `.subscribe()` builds the underlying `QueryObserver`s but never activates them.
+
+### `onUnsubscribe()` (protected)
+
+Calls `this.destroy()` only when `!this.hasListeners()` (last subscriber just unsubscribed).
+
+### `destroy()`
+
+Resets `this.listeners` to a new empty `Set`, then calls `.destroy()` on every observer in `#observers` — tearing down every underlying `QueryObserver` (clearing its timers and removing it from its `Query`).
+
+### `setQueries(queries, options?, notifyOptions?)`
+
+The central method — called by the constructor and any time the caller wants to change the set of queries being observed. Wrapped entirely in `notifyManager.batch(...)` so any resulting notifications coalesce into one flush. Steps:
+
+1. Stores `this.#queries = queries` and `this.#options = options`.
+2. Computes `newObserverMatches = #findMatchingObservers(queries)` — the diffing step (see below).
+3. For every match, calls `match.observer.setOptions(match.defaultedQueryOptions, notifyOptions)` — **this runs even for brand-new observers** (whose `setOptions` was already called once by their own constructor) and even for unchanged matches, so every observer's options are always kept in sync with the latest defaulted config on every `setQueries` call.
+4. Builds `newObservers` (just the observer references) and `newResult` (`observer.getCurrentResult()` for each).
+5. **Early-exit check:** if `prevObservers.length === newObservers.length` and there is no index-wise identity change (`!hasIndexChange`, computed by comparing `newObservers[i] !== prevObservers[i]` for every index), the method returns immediately *without* updating `#observers`/`#result` or notifying — i.e. if the diff produced exactly the same observers in exactly the same order, nothing further happens (the `setOptions` calls in step 3 may still have triggered the observers' own internal notifications, but `QueriesObserver` itself does not re-notify or even re-snapshot `#result` in this case).
+6. Otherwise, commits `this.#observers = newObservers` and `this.#result = newResult`.
+7. If `!this.hasListeners()`, returns here — no subscription wiring or notification happens while nobody is listening to the `QueriesObserver` itself.
+8. Otherwise: every observer present in `prevObservers` but absent from `newObservers` (`difference(prevObservers, newObservers)`) is `.destroy()`'d. Every observer present in `newObservers` but absent from `prevObservers` (`difference(newObservers, prevObservers)`) is freshly `.subscribe()`'d (wired into `#onUpdate`). Reused observers (present in both) are left subscribed as-is — no resubscribe churn.
+9. Finally calls `this.#notify()`.
+
+### `#findMatchingObservers(queries)` (private)
+
+The diffing algorithm, run fresh on every `setQueries` call:
+
+1. Computes `defaultedQueryOptions = queries.map(q => client.defaultQueryOptions(q))`.
+2. Starts with `unmatchedObservers = prevObservers.slice()` (a mutable working copy) and an empty `matchingObservers` `Map`.
+3. For each defaulted option (in input order), does `unmatchedObservers.findIndex(o => o.options.queryHash === defaultedOptions.queryHash)`. If found, records the pairing in `matchingObservers` and **splices that observer out of `unmatchedObservers`** — so each previous observer can be matched at most once, even if multiple input queries happen to share a hash (the first one claims it; later duplicates fall through to recycling/creation).
+4. Whatever remains in `unmatchedObservers` after that pass becomes `outstandingObservers` — previous observers that didn't match any *hash* in the new query list, available to be recycled.
+5. Builds the final result by mapping over `defaultedQueryOptions` again: for each, it re-finds a matching observer by hash (now checking membership in the `matchingObservers` map) — if found, pairs them. If not, **recycles** the next `outstandingObservers.shift()` (an arbitrary previous observer not matched by hash) and pairs it with this option (its `setOptions` call in step 3 of `setQueries` will retarget it to the new query/hash). If there are no outstanding observers left either, constructs a brand-new `QueryObserver`.
+
+This three-tier strategy — exact hash match, then recycle-by-position, then create — means: changing only the order of an unchanged query list produces an exact hash match for every entry (no recycling needed); shrinking the list to fewer queries with at least one shared hash recycles the right observer for the kept hash and discards the rest later in `setQueries`; growing the list reuses as many `QueryObserver` *instances* as possible (cheaper than tearing down and reconstructing) even though the recycled instance's underlying query changes.
+
+### `#onUpdate(observer, result)` (private)
+
+Looks up `index = this.#observers.indexOf(observer)`. If found (`!== -1`), replaces that index in `#result` via `replaceAt` (an immutable copy-and-splice, not a mutation) and calls `this.#notify()`. If the observer is no longer present (e.g. it was just destroyed mid-flight), the update is silently dropped.
+
+### `#notify()` (private)
+
+```typescript
+const combinedResult = this.#combineResult(this.#result)
+if (!replaceEqualDeep(this.#combinedResult, combinedResult)) {
+  return
+}
+this.#combinedResult = combinedResult
+notifyManager.batch(() => {
+  this.listeners.forEach((listener) => listener(this.#result))
+})
+```
+
+Note the exact semantics of `replaceEqualDeep` here (see [`utils.ts`](./01-overview)): it returns the **first** argument unchanged if the two are deeply equal, otherwise it returns the **second** argument (a freshly merged copy, with as much structural sharing as possible). It only returns a falsy value if `combinedResult` itself happens to be falsy (e.g. your `combine` function returns `undefined`/`null`/`false`/`0`). In other words, this early-return is **not** a "skip notification if results are deeply equal" optimization — `replaceEqualDeep`'s return value is truthy in the equal case too (it returns the old, still-truthy, reference). The guard only protects against notifying with a degenerate falsy combined result. `this.#combinedResult` is still reassigned to the (possibly structurally-shared) `combinedResult` on every call that doesn't hit that guard, and listeners are always handed the raw `this.#result` array (not the combined value) — `combine` only affects what's cached in `#combinedResult`, not what subscribers receive directly.
+
+### `#combineResult(result)` (private)
+
+Returns `this.#options?.combine?.(result) ?? result` (as `TCombinedResult`) — if no `combine` was configured, the identity array is returned, cast to `TCombinedResult`.
+
+### `getOptimisticResult(queries)`
+
+```typescript
+getOptimisticResult(queries): [
+  rawResult: Array<QueryObserverResult>,
+  combineResult: (r?) => TCombinedResult,
+  trackResult: () => Array<QueryObserverResult>,
+]
+```
+
+Used by framework adapters needing a synchronous result without going through `setQueries`/subscription. Runs `#findMatchingObservers(queries)` (reusing the same diffing logic, but without committing it to `this.#observers`), then calls `observer.getOptimisticResult(defaultedQueryOptions)` per match to build a raw result array. Returns a 3-tuple:
+- `result` — the raw array.
+- a `combineResult` closure that applies `#combineResult` to either a passed-in array or the captured `result`.
+- a `trackResult` closure that, for each match, calls `observer.trackResult(result[i], onPropTracked)` where `onPropTracked` itself calls `observer.trackProp(accessedProp)` — wiring each individual `QueryObserver`'s own tracked-properties mechanism (see [`QueryObserver`](./05-query-observer#advanced-minimizing-re-renders-with-notifyonchangeprops-and-tracked-properties)) into this batched optimistic-result path.
+
+### `getCurrentResult()`
+
+Returns `this.#result` directly — the last committed raw per-query result array (not the combined value).
+
+## Common pitfalls
+
+- **`setQueries`'s early-exit skips re-snapshotting `#result` and notifying, but each observer's own `setOptions` call still runs every time.** If you call `setQueries` with structurally-identical configs every render, you avoid `QueriesObserver`-level notification churn, but you don't avoid the per-observer `setOptions` overhead — that always runs in step 3, even though step 5's early exit then discards any consequence of it at this layer (the underlying `QueryObserver`s may still notify their *own* listeners independently).
+- **Hash matching ignores array position.** Reordering your `queries` array does not destroy/recreate observers — but if two entries in your array happen to produce the *same* `queryHash` (e.g. duplicate keys), only the first is matched by hash; the second falls through to recycling or creation, which can silently produce two separate `QueryObserver` instances pointed at the same underlying `Query`.
+- **`replaceEqualDeep` in `#notify` is not a dedup-by-value gate** — don't expect identical combined results to suppress notification. It only short-circuits when `combine` returns something falsy. If you need to suppress duplicate notifications based on your combined value, do that inside your own `combine` function or in the consumer.
+- **Observers are not actively subscribed (no fetching, no timers) until the `QueriesObserver` itself has a listener.** Calling `setQueries` on an unobserved `QueriesObserver` updates `#observers`/`#result` bookkeeping but does not call `.subscribe()` on the underlying `QueryObserver`s (`onSubscribe`'s `observer.subscribe(...)` loop only runs from the `QueriesObserver`'s own `onSubscribe`, when its first listener arrives) — so nothing actually fetches until you call `.subscribe()` on the `QueriesObserver` itself.
+- **`destroy()` tears down every observer unconditionally**, including ones you might want to keep alive elsewhere (e.g. if you constructed an observer externally and handed it to `QueriesObserver`) — there's no "detach without destroying" option.

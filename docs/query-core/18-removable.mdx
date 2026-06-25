@@ -1,0 +1,138 @@
+# Removable
+
+**File:** `src/removable.ts`
+
+`Removable` is the abstract base class for cache entries that need garbage-collection. Both [Query](./04-query) and [Mutation](./09-mutation) extend it to get `gcTime`-based automatic eviction from their respective caches. It is not meant to be imported and used standalone — you configure its behavior indirectly through the `gcTime` option on queries and mutations.
+
+```typescript
+import { Removable } from '@headlesskit/query-core';
+```
+
+## Signature
+
+```typescript
+abstract class Removable {
+  gcTime: number;
+  destroy(): void;
+  protected scheduleGc(): void;
+  protected updateGcTime(newGcTime: number | undefined): void;
+  protected clearGcTimeout(): void;
+  protected abstract optionalRemove(): void;
+}
+```
+
+| Member | Type | Description |
+|--------|------|--------------|
+| `gcTime` | `number` | Milliseconds to wait, after becoming unused, before eviction. Set via `updateGcTime`. |
+| `destroy()` | `() => void` | Public — clears any pending GC timeout. Called when a `Query`/`Mutation` is removed from its cache. |
+| `scheduleGc()` | `protected () => void` | Clears any existing timeout, then (if `gcTime` is a valid timeout) schedules `optionalRemove()` to run after `gcTime` ms |
+| `updateGcTime(newGcTime)` | `protected (number \| undefined) => void` | Recomputes `gcTime`, taking the **max** of the current value and the new default/override |
+| `clearGcTimeout()` | `protected () => void` | Clears the pending timeout (via [timeoutManager](./22-timeout-manager)) if one exists |
+| `optionalRemove()` | `protected abstract () => void` | Must be implemented by subclasses — decides whether/how to actually remove itself from the cache |
+
+## Basic usage
+
+`Removable` is abstract, so direct usage means subclassing it and implementing `optionalRemove`:
+
+```typescript
+import { Removable } from '@headlesskit/query-core';
+
+class CacheEntry extends Removable {
+  constructor(private cache: Map<string, CacheEntry>, private key: string) {
+    super();
+    this.updateGcTime(undefined); // apply the default gcTime
+    this.scheduleGc();
+  }
+
+  protected optionalRemove() {
+    // Only remove if nobody is actively using this entry
+    this.cache.delete(this.key);
+  }
+}
+```
+
+Calling `new CacheEntry(cache, 'foo')` immediately schedules a GC timeout (default 5 minutes, see below) that, left untouched, will delete the entry from `cache`.
+
+## Advanced: how Query and Mutation drive scheduleGc/clearGcTimeout
+
+`Removable` provides the *mechanism*; [Query](./04-query) and [Mutation](./09-mutation) provide the *policy* by calling `scheduleGc()`/`clearGcTimeout()` at the right lifecycle moments:
+
+- **On construction**, both call `this.updateGcTime(this.options.gcTime)` to set the initial `gcTime` from query/mutation options.
+- **`Query`** calls `this.scheduleGc()` whenever its last observer unsubscribes (no one is watching this query anymore — start the eviction clock), and calls `this.clearGcTimeout()` as soon as a new observer subscribes (someone's watching again — cancel the pending eviction).
+- Both implement `optionalRemove()` by checking "do I still have observers / am I still pending a mutation," and only then telling their cache (`QueryCache`/`MutationCache`) to actually remove themselves — `optionalRemove` is a *candidate* for removal, not a guarantee.
+
+This is the mechanism behind `gcTime` in [QueryObserverOptions](./01-overview#queryobserveroptions): an unobserved query's data isn't deleted immediately — it lingers for `gcTime` ms (so a remount within that window is an instant cache hit), then is evicted via this exact `scheduleGc` → `timeoutManager.setTimeout` → `optionalRemove` chain.
+
+## Method-by-method breakdown
+
+### `destroy()`
+
+```typescript
+destroy(): void {
+  this.clearGcTimeout()
+}
+```
+
+Public entry point. Simply clears any pending GC timeout. Called when a `Query`/`Mutation` instance is being torn down entirely (e.g. `queryCache.clear()`), so a stale timer doesn't fire against an already-destroyed object.
+
+### `scheduleGc()`
+
+```typescript
+protected scheduleGc(): void {
+  this.clearGcTimeout()
+  if (isValidTimeout(this.gcTime)) {
+    this.#gcTimeout = timeoutManager.setTimeout(() => {
+      this.optionalRemove()
+    }, this.gcTime)
+  }
+}
+```
+
+Always clears any existing timeout first (so repeated calls don't stack timers), then — only `if (isValidTimeout(this.gcTime))` — schedules a new one via the shared [`timeoutManager`](./22-timeout-manager). `isValidTimeout` (from `./utils`) guards against `Infinity`/`NaN`/negative values, which is exactly what `gcTime: Infinity` (the SSR default, see below) relies on to mean "never garbage collect."
+
+### `updateGcTime(newGcTime)`
+
+```typescript
+protected updateGcTime(newGcTime: number | undefined): void {
+  this.gcTime = Math.max(
+    this.gcTime || 0,
+    newGcTime ?? (environmentManager.isServer() ? Infinity : 5 * 60 * 1000),
+  )
+}
+```
+
+The exact default-resolution logic:
+1. If `newGcTime` is provided (not `undefined`), use it.
+2. Otherwise, default to `Infinity` if [`environmentManager.isServer()`](./19-environment-manager) is `true` (so server-rendered queries are never silently evicted before they can be dehydrated), or `5 * 60 * 1000` (5 minutes) in a normal browser/client environment.
+3. **Critically, the final value is `Math.max(this.gcTime || 0, ...)`** — `gcTime` only ever increases, never decreases, across repeated calls. If a query is observed by two components with different `gcTime` options, the *longer* one always wins, regardless of call order. `this.gcTime || 0` treats an unset (`undefined`) initial `gcTime` as `0` for the comparison.
+
+### `clearGcTimeout()`
+
+```typescript
+protected clearGcTimeout() {
+  if (this.#gcTimeout !== undefined) {
+    timeoutManager.clearTimeout(this.#gcTimeout)
+    this.#gcTimeout = undefined
+  }
+}
+```
+
+Guards against clearing an already-cleared/never-set timeout, then delegates to `timeoutManager.clearTimeout` and resets the private `#gcTimeout` field to `undefined`.
+
+### `optionalRemove()` (abstract)
+
+Not implemented in `Removable` itself — every subclass must provide it. The name signals intent: removal is *optional*, conditional on subclass-specific state (e.g. "do I have zero observers AND zero in-flight fetches").
+
+## Common pitfalls
+
+- **Assuming `gcTime` can be shortened at runtime.** `updateGcTime` takes a `Math.max`, so passing a smaller `gcTime` than what's already set has no effect until the larger value's timer fires and a fresh value is set. This is intentional — it prevents one observer's short `gcTime` from evicting data another observer still expects to be cached.
+- **Forgetting that `Infinity` is the SSR default.** Any code path constructing a `Query`/`Mutation` while `environmentManager.isServer()` returns `true` gets `gcTime: Infinity` (i.e., effectively no GC) unless an explicit `gcTime` option is passed — entries will never be evicted server-side.
+- **Calling `optionalRemove` directly.** It's meant to be invoked only via the `scheduleGc` timer callback; calling it manually bypasses the timer-clearing logic in `scheduleGc`/`clearGcTimeout` and can leave a stale `#gcTimeout` reference if not paired with `clearGcTimeout()`.
+
+## See also
+
+- [Query Core overview](./01-overview)
+- [Query](./04-query)
+- [Mutation](./09-mutation)
+- [environmentManager](./19-environment-manager)
+- [timeoutManager](./22-timeout-manager)

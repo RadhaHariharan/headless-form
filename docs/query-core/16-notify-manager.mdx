@@ -1,0 +1,163 @@
+# notifyManager
+
+**File:** `src/notifyManager.ts` (82 lines)
+
+Batches subscriber notifications from multiple synchronous cache writes into a single flush, so that e.g. three `setQueryData` calls in a row notify observers once instead of three times. Used internally by `QueryCache`/`MutationCache` for every state transition.
+
+```typescript
+import { notifyManager, createNotifyManager } from '@headlesskit/query-core';
+```
+
+## Signature
+
+`notifyManager` is the singleton returned by `createNotifyManager()`:
+
+```typescript
+function createNotifyManager(): {
+  batch: <T>(callback: () => T) => T
+  batchCalls: <T extends Array<unknown>>(callback: (...args: T) => void) => (...args: T) => void
+  schedule: (callback: () => void) => void
+  setNotifyFunction: (fn: (callback: () => void) => void) => void
+  setBatchNotifyFunction: (fn: (callback: () => void) => void) => void
+  setScheduler: (fn: (callback: () => void) => void) => void
+}
+```
+
+| Member | Description |
+|--------|-------------|
+| `batch(callback)` | Runs `callback` synchronously, deferring any `schedule`d notifications triggered inside it until the outermost `batch` call completes |
+| `batchCalls(callback)` | Wraps a callback (e.g. a single listener) so each invocation is routed through `schedule` instead of firing immediately |
+| `schedule(callback)` | Either queues `callback` (if inside a `batch`) or hands it to `scheduleFn` immediately |
+| `setNotifyFunction(fn)` | Overrides how each individual queued callback is invoked during a flush — default is a plain synchronous call |
+| `setBatchNotifyFunction(fn)` | Overrides how the whole flushed batch is wrapped — default is a plain synchronous call |
+| `setScheduler(fn)` | Overrides the scheduling primitive used to defer flushes — default is `systemSetTimeoutZero` (`setTimeout(cb, 0)`) |
+
+## Basic usage
+
+```typescript
+import { notifyManager } from '@headlesskit/query-core';
+
+notifyManager.batch(() => {
+  queryClient.setQueryData(['users', 1], updatedUser);
+  queryClient.setQueryData(['users', 2], otherUser);
+  // both writes queue their cache notifications; neither has fired yet here
+});
+// after batch() returns synchronously, the queued notifications are
+// scheduled (via setTimeout(..., 0) by default) — they have NOT fired yet,
+// they fire on the next macrotask
+```
+
+## Advanced: batching writes and exactly when listeners fire
+
+This is the part that trips people up: **`notifyManager.batch()` does not make notifications synchronous, and it does not make them fire "right after" the batch.** It only ensures that everything queued *during* the batch gets flushed together, on whatever the configured `scheduleFn` ends up being (a macrotask via `setTimeout(fn, 0)` by default).
+
+```typescript
+let notified = 0;
+const unsubscribe = queryClient.getQueryCache().subscribe(() => notified++);
+
+notifyManager.batch(() => {
+  queryClient.setQueryData(['a'], 1);
+  queryClient.setQueryData(['b'], 2);
+  queryClient.setQueryData(['c'], 3);
+  console.log(notified); // 0 — nothing has fired yet, even though we're "in" the batch
+});
+
+console.log(notified); // still 0 — batch() returned synchronously, but flush()
+                        // itself calls scheduleFn (setTimeout 0 by default),
+                        // so the actual notify happens on the next tick
+
+setTimeout(() => {
+  console.log(notified); // 1 (or however many distinct cache subscribers exist) —
+                          // notified once per subscriber per flush, not once per setQueryData call
+}, 0);
+```
+
+Internally: `batch()` increments a `transactions` counter, runs your callback, then decrements it in a `finally`. Only when `transactions` returns to `0` does it call `flush()`. Anything that calls `schedule(cb)` while `transactions > 0` (i.e. anywhere inside a `batch`, including nested batches) just pushes `cb` onto the shared `queue` array rather than scheduling it immediately. `flush()` swaps out the queue, and if it had entries, calls `scheduleFn(() => batchNotifyFn(() => originalQueue.forEach(cb => notifyFn(cb))))` — so the entire flushed batch goes through one `scheduleFn` call, one `batchNotifyFn` wrapper, and then every individual callback through `notifyFn`.
+
+**Synchronous testing override** — many test suites flip the scheduler to run inline so assertions don't need a `setTimeout`/`await` dance:
+
+```typescript
+notifyManager.setScheduler((fn) => fn()); // run flush synchronously
+// now batch() callers see notifications fire before batch() returns
+```
+
+## Method-by-method breakdown
+
+### `batch(callback)`
+
+```typescript
+transactions++
+try {
+  result = callback()
+} finally {
+  transactions--
+  if (!transactions) flush()
+}
+return result
+```
+
+Reentrant/nestable: calling `batch()` inside another `batch()` just increments/decrements the same counter — only the outermost call's `finally` block sees `transactions` reach `0` and triggers `flush()`. The `try/finally` guarantees the counter is decremented even if `callback` throws; in that case `flush()` still runs (if outermost) but `batch()` itself re-throws after the `finally` (the `finally` block doesn't swallow the exception, and `result` is simply never assigned/returned in the throw path).
+
+### `batchCalls(callback)`
+
+```typescript
+return (...args) => {
+  schedule(() => callback(...args))
+}
+```
+
+Returns a new function with the same signature as `callback`; every call to the wrapper enqueues a closure (capturing that call's `args`) via `schedule` rather than invoking `callback` immediately. This is how individual cache listeners get deferred/batched — `QueryCache`/`MutationCache` wrap each listener through `batchCalls` so multiple notifications targeting the same listener within one `batch()` still each get their own queued entry (no deduping of *distinct calls*, only deduping of *flush timing*).
+
+### `schedule(callback)`
+
+```typescript
+if (transactions) {
+  queue.push(callback)
+} else {
+  scheduleFn(() => notifyFn(callback))
+}
+```
+
+If currently inside a `batch` (`transactions > 0`), just appends to the shared queue (no scheduling yet — that happens once at `flush()` time). If not inside a batch, schedules immediately via `scheduleFn`, wrapping the single callback through `notifyFn`. This means a `schedule` call made entirely outside of any `batch()` still goes through `scheduleFn` (default: `setTimeout(fn, 0)`) — it is **never** purely synchronous unless you've called `setScheduler` to make it so.
+
+### `flush()`
+
+```typescript
+const originalQueue = queue
+queue = []
+if (originalQueue.length) {
+  scheduleFn(() => {
+    batchNotifyFn(() => {
+      originalQueue.forEach((cb) => notifyFn(cb))
+    })
+  })
+}
+```
+
+Swaps the queue out immediately (so any *new* `schedule` calls made while this flush's `scheduleFn` callback is pending go into a fresh queue, not the one being flushed) and is a no-op if the queue was empty. The one `scheduleFn` call wraps one `batchNotifyFn` call wrapping N `notifyFn` calls — so overriding `setScheduler`/`setBatchNotifyFunction` affects the whole flushed group at once, while `setNotifyFunction` affects each individual queued callback.
+
+### `setNotifyFunction(fn)` / `setBatchNotifyFunction(fn)` / `setScheduler(fn)`
+
+Each simply reassigns the corresponding closure variable (`notifyFn`, `batchNotifyFn`, `scheduleFn`). Defaults:
+
+```typescript
+notifyFn = (callback) => { callback() }
+batchNotifyFn = (callback) => { callback() }
+scheduleFn = defaultScheduler // = systemSetTimeoutZero = (cb) => setTimeout(cb, 0)
+```
+
+All three default implementations are plain pass-throughs/`setTimeout(fn, 0)` — the actual deferral in stock behavior comes entirely from `scheduleFn`'s `setTimeout(cb, 0)`, not from `notifyFn`/`batchNotifyFn`, which exist as override points (e.g. for React's `flushSync`/`unstable_batchedUpdates`, or libraries needing `act()`-wrapped notifications in tests).
+
+## Cross-links
+
+- [Overview — NotifyManager section](./01-overview)
+- [hydration (dehydrate/hydrate)](./13-hydration) — `query.setState`/`mutation.setState` calls during `hydrate` ultimately route through this batching layer via the cache's internal notify wiring
+- [Subscribable](./17-subscribable) — the lower-level subscription primitive that `QueryCache`/`MutationCache` build on top of, independent of `notifyManager`'s batching
+
+## Common pitfalls
+
+- **`batch()` returning does not mean listeners have fired.** The default `scheduleFn` defers via `setTimeout(fn, 0)`, so code immediately after a `batch()` call that expects to read post-notification side effects (e.g. a DOM update driven by a subscriber) needs to wait a tick, not just exit the batch callback.
+- **Listeners are notified once per flush, not once per `schedule` call within unrelated batches** — but multiple distinct `setQueryData` calls *do* each enqueue their own listener invocation; batching collapses flush *timing*, not the *count* of individual notifications, unless your subscriber itself dedupes.
+- **Nested `batch()` calls don't each trigger their own flush** — only when the outermost call's `transactions` counter returns to `0` does `flush()` run; an inner `batch()` finishing early does not prematurely notify.
+- **Changing `setScheduler` globally affects every consumer of `notifyManager`,** including any internal `QueryCache`/`MutationCache` notifications — a test that calls `setScheduler(fn => fn())` for synchronous assertions but forgets to restore the original scheduler afterward will leak that synchronous behavior into subsequent tests/files that don't expect it.
+- **A thrown error inside `batch(callback)` still decrements `transactions` and still flushes** (the `finally` runs the flush check) — but the throw itself propagates out of `batch()` after that, so don't assume a try/catch around `batch()` is bypassing the queued notifications; they're flushed regardless of whether the callback threw.

@@ -1,0 +1,89 @@
+# environmentManager
+
+**File:** `src/environmentManager.ts`
+
+`environmentManager` is a tiny singleton that answers one question — "are we running on the server?" — and lets that answer be overridden. It backs the SSR-aware default in [Removable.updateGcTime](./18-removable) (`gcTime: Infinity` on the server) and is consulted anywhere query-core needs to branch on server vs. client behavior.
+
+```typescript
+import { environmentManager } from '@headlesskit/query-core';
+```
+
+## Signature
+
+```typescript
+type IsServerValue = () => boolean;
+
+const environmentManager: {
+  isServer(): boolean;
+  setIsServer(isServerValue: IsServerValue): void;
+};
+```
+
+| Member | Type | Description |
+|--------|------|--------------|
+| `isServer()` | `() => boolean` | Returns whether the current environment is treated as a server. Defaults to the module-level `isServer` constant from `./utils`. |
+| `setIsServer(fn)` | `(fn: IsServerValue) => void` | Replaces the function `isServer()` delegates to |
+
+## Basic usage
+
+By default, `environmentManager.isServer()` reflects query-core's own `isServer` detection (typically `typeof window === 'undefined'`, from `./utils`):
+
+```typescript
+import { environmentManager } from '@headlesskit/query-core';
+
+if (environmentManager.isServer()) {
+  // running during SSR / in a non-browser environment
+}
+```
+
+## Advanced: overriding detection for non-standard environments
+
+Some runtimes don't fit the simple `typeof window === 'undefined'` heuristic — e.g. a React Native app, a Worker, an Electron renderer process, or a test environment that wants to force one behavior or the other deterministically. `setIsServer` lets you swap in your own detection function entirely:
+
+```typescript
+import { environmentManager } from '@headlesskit/query-core';
+
+// Force "server" behavior in a Node-based test environment
+// to verify Infinity gcTime defaults without mocking globals
+environmentManager.setIsServer(() => true);
+
+// Or wire up a custom check for a non-browser, non-Node runtime
+environmentManager.setIsServer(() => process.env['RUNTIME'] === 'edge');
+```
+
+Because [`Removable.updateGcTime`](./18-removable) calls `environmentManager.isServer()` at construction time for every [Query](./04-query) and [Mutation](./09-mutation) that doesn't specify an explicit `gcTime`, overriding this function changes the *default* GC behavior for every subsequently-created query/mutation — call it once, early, before any queries are created (e.g. at app/test bootstrap), not per-query.
+
+## Method-by-method breakdown
+
+### `isServer()`
+
+```typescript
+isServer(): boolean {
+  return isServerFn()
+}
+```
+
+Delegates to the closed-over `isServerFn`, which starts out as `() => isServer` (the static `isServer` value imported from `./utils`). Every call re-invokes the function — so if you supply a dynamic function via `setIsServer`, the result can change between calls (e.g. reflecting a runtime feature flag), unlike a value that's captured once.
+
+### `setIsServer(isServerValue)`
+
+```typescript
+setIsServer(isServerValue: IsServerValue): void {
+  isServerFn = isServerValue
+}
+```
+
+Reassigns the private `isServerFn` closure variable. There is no validation and no way to "reset" back to the original detection short of calling `setIsServer` again with the original logic — `environmentManager` does not expose the default function separately.
+
+## Common pitfalls
+
+- **Setting it after queries already exist.** `isServer()` is read once per `Removable` at construction (inside `updateGcTime`) to compute the default `gcTime`. Calling `setIsServer` after queries/mutations are already created does not retroactively change their already-resolved `gcTime` values.
+- **Returning inconsistent values across calls.** Because `isServerFn` is invoked fresh every time `isServer()` is called, a function with side effects or non-deterministic output (e.g. reading a mutable global that flips mid-session) can cause different `Query`/`Mutation` instances to get different GC defaults depending on exactly when they're constructed.
+- **Forgetting this only affects the *default*.** Explicitly passing `gcTime` in query/mutation options always wins — `environmentManager.isServer()` is only consulted as the fallback when `newGcTime` is `undefined` in `updateGcTime`.
+
+## See also
+
+- [Query Core overview](./01-overview)
+- [Removable](./18-removable)
+- [Query](./04-query)
+- [Mutation](./09-mutation)

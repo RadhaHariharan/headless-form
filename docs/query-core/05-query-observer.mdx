@@ -1,0 +1,221 @@
+# QueryObserver
+
+**File:** `src/queryObserver.ts` (623 lines)
+
+`QueryObserver` is the engine behind every `useQuery`-style hook. It subscribes to a single cached [`Query`](./04-query) instance, computes a derived `QueryObserverResult` on every state change, decides — using `notifyOnChangeProps` and a tracked-properties mechanism — whether that change is worth re-rendering for, and owns the timers that drive `staleTime` expiry and `refetchInterval` polling. Everything described here is the low-level mechanism; see [Query Core overview](./01-overview) for the high-level shape of `QueryObserverOptions` and `QueryObserverResult`.
+
+```typescript
+import { QueryObserver } from '@headlesskit/query-core';
+
+const observer = new QueryObserver(queryClient, {
+  queryKey: ['user', 1],
+  queryFn: () => fetchUser(1),
+  staleTime: 30_000,
+});
+```
+
+## Signature
+
+```typescript
+new QueryObserver<TQueryFnData, TError, TData, TQueryData, TQueryKey>(
+  client: QueryClient,
+  options: QueryObserverOptions<TQueryFnData, TError, TData, TQueryData, TQueryKey>,
+)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `client` | `QueryClient` | Used to resolve default options and to `build`/look up the underlying `Query` in the [`QueryCache`](./01-overview). |
+| `options` | `QueryObserverOptions` | Passed straight to `setOptions` in the constructor — same options accepted by `queryClient.fetchQuery` and framework `useQuery` hooks. |
+
+The constructor calls `bindMethods()` (binds `refetch`), initializes an empty `#trackedProps` `Set`, stores `options` on the public `this.options` field, then calls `this.setOptions(options)` — so all the side effects described under [`setOptions`](#setoptions) also happen during construction.
+
+## Basic usage
+
+```typescript
+const observer = new QueryObserver(queryClient, {
+  queryKey: ['posts'],
+  queryFn: () => fetch('/api/posts').then((r) => r.json()),
+  staleTime: 10_000,
+});
+
+const unsubscribe = observer.subscribe((result) => {
+  console.log(result.status, result.data, result.error);
+});
+
+await observer.refetch();
+
+unsubscribe(); // last listener removed → observer.destroy() runs automatically
+```
+
+`subscribe` comes from the base `Subscribable` class. The first call to `subscribe` triggers `onSubscribe()`, which — only when `this.listeners.size === 1` (i.e. this is the very first subscriber) — calls `this.#currentQuery.addObserver(this)`, decides whether to fetch immediately (see [`shouldFetchOnMount`](#internal-fetch-decision-helpers)), and starts the stale/refetch-interval timers via `#updateTimers()`.
+
+## Advanced: minimizing re-renders with `notifyOnChangeProps` and tracked properties
+
+By default, if you never read a particular result property, the observer still notifies you whenever *anything* in the result object changes (`shallowEqualObjects` is the only gate). Two independent mechanisms narrow that down:
+
+**1. Explicit `notifyOnChangeProps`.** Pass an array (or a function returning one) of result keys you actually care about:
+
+```typescript
+const observer = new QueryObserver(queryClient, {
+  queryKey: ['user', 1],
+  queryFn: () => fetchUser(1),
+  notifyOnChangeProps: ['data', 'isError'], // ignore isFetching churn, etc.
+});
+```
+
+**2. Automatic tracking via `trackResult`.** Framework adapters call `observer.trackResult(result)` instead of handing the raw result to components. The returned object defines a property-level `get` trap for every key; the moment a component (render function) actually reads `result.data`, the trap calls `this.trackProp('data')`, which adds `'data'` to the internal `#trackedProps` Set. From then on, *even with no explicit `notifyOnChangeProps`*, only the properties the component has actually touched are watched for changes.
+
+Inside `updateResult`'s `shouldNotifyListeners()`:
+
+```typescript
+if (
+  notifyOnChangePropsValue === 'all' ||
+  (!notifyOnChangePropsValue && !this.#trackedProps.size)
+) {
+  return true
+}
+const includedProps = new Set(notifyOnChangePropsValue ?? this.#trackedProps)
+if (this.options.throwOnError) includedProps.add('error')
+return Object.keys(this.#currentResult).some((key) =>
+  includedProps.has(key) && this.#currentResult[key] !== prevResult[key],
+)
+```
+
+So the exact precedence is: `'all'` always notifies; with no `notifyOnChangeProps` and an empty `#trackedProps` set (nothing tracked yet) it also always notifies (fail open, since there's nothing to narrow by); otherwise the watched set is `notifyOnChangePropsValue` if provided, else `#trackedProps`; and if `throwOnError` is set, `'error'` is always added to the watched set regardless (so an error-boundary consumer is never silently skipped). Notification only fires if at least one watched key's value changed by reference (`!==`) between `#currentResult` and `prevResult`.
+
+## Method-by-method
+
+### `onSubscribe` / `onUnsubscribe` (protected)
+
+`onSubscribe` only runs its body when this is the *first* listener (`listeners.size === 1`) — subsequent subscribers piggy-back on the same query/timers. It registers the observer with the query (`addObserver`), then either executes a fetch (`#executeFetch()`) if `shouldFetchOnMount` says so, or just calls `updateResult()` to compute a result from existing cache state, then always calls `#updateTimers()`.
+
+`onUnsubscribe` calls `this.destroy()` only when `!this.hasListeners()` — i.e. the last subscriber just left.
+
+### `shouldFetchOnReconnect()` / `shouldFetchOnWindowFocus()`
+
+Both delegate to the internal `shouldFetchOn(query, options, field)` helper with `options.refetchOnReconnect` / `options.refetchOnWindowFocus` respectively. That helper: if `resolveQueryBoolean(options.enabled, query) === false`, returns `false` immediately (disabled queries never auto-refetch). Otherwise it resolves `field` (calling it with `query` if it's a function), and returns `true` if the resolved value is `'always'`, or if it's not `false` **and** `query.isStale()` is true. So `'always'` ignores staleness entirely; any other truthy value still requires the query to actually be stale.
+
+### `destroy()`
+
+Resets `this.listeners` to a fresh empty `Set`, clears both timers (`#clearStaleTimeout`, `#clearRefetchInterval`), and calls `this.#currentQuery.removeObserver(this)` — which (per [`Query`](./04-query)) cancels any in-flight retry/fetch tied to this being the last observer and schedules garbage collection.
+
+### `setOptions(options, notifyOptions?)`
+
+The most consequential method — called by the constructor and every time options change (e.g. a hook re-renders with new args). Step by step:
+
+1. Snapshots `prevOptions = this.options` and `prevQuery = this.#currentQuery`.
+2. Computes `this.options = this.#client.defaultQueryOptions(options)` (merges client-level defaults).
+3. In non-production builds, warns if the deprecated `isDataEqual` option is present.
+4. Calls `#updateQuery()` (see below) — this may swap `#currentQuery` to a different `Query` instance if the queryKey/hash changed.
+5. Calls `this.#currentQuery.setDefaultOptions(this.#client.getQueryDefaults(...))` to push per-key defaults onto the query itself.
+6. Computes `mounted = this.hasListeners()`. If mounted **and** `shouldFetchOptionally(currentQuery, prevQuery, options, prevOptions)` returns true, triggers `#executeFetch()` immediately.
+7. Calls `this.updateResult(notifyOptions)` to recompute and possibly notify.
+8. If mounted, conditionally restarts timers: the stale timeout is recreated (`#updateStaleTimeout()`) only if the query changed, `enabled` changed, or the resolved `staleTime` changed. The refetch interval is recreated (`#updateRefetchInterval(currentRefetchInterval)`) only if the query changed, `enabled` changed, or the freshly computed interval differs from `#currentRefetchInterval`. Both checks avoid clearing/rescheduling timers on every unrelated option change.
+
+`shouldFetchOptionally` returns true only if `(query !== prevQuery || prevOptions.enabled resolved to false)` **and** `shouldFetchOn(query, options, options.refetchOnMount)` — i.e. a fetch is triggered on `setOptions` specifically when the query identity changed (new key) or the query just became enabled, and the `refetchOnMount` policy agrees.
+
+### `getOptimisticResult(options)`
+
+Used by frameworks needing a result *before* subscribing (e.g. to render synchronously without waiting for a subscription side effect). Builds (or reuses) the underlying query via `client.getQueryCache().build(client, options)`, computes a result via `createResult`, and — only if `shouldAssignObserverCurrentProperties` says the new result differs from `getCurrentResult()` (via `!shallowEqualObjects`) — eagerly assigns `#currentResult`/`#currentResultOptions`/`#currentResultState` as a side effect, even though this method doesn't formally "update" the observer. This lets a freshly-constructed but not-yet-subscribed observer's first real `updateResult()` diff against something meaningful instead of `undefined`.
+
+### `getCurrentResult()`
+
+Returns `#currentResult` as-is — the last result computed by `createResult`/`updateResult`/`getOptimisticResult`.
+
+### `trackResult(result, onPropTracked?)`
+
+Returns a new object with the same keys as `result`, where every key is a `get` accessor that calls `this.trackProp(key)` (and the optional `onPropTracked` callback) before returning the underlying value. This is the mechanism described under [Advanced](#advanced-minimizing-re-renders-with-notifyonchangeprops-and-tracked-properties) — it lets the observer learn, purely from how a consumer *reads* the result, which properties matter for re-render decisions.
+
+### `trackProp(key)`
+
+Simply `this.#trackedProps.add(key)`. There is no corresponding "untrack" — once a property has been read once, it stays in the watched set for the observer's lifetime (it is never reset except implicitly by `setOptions`/`updateResult` re-running with `notifyOnChangeProps` overriding it).
+
+### `getCurrentQuery()`
+
+Returns `#currentQuery` directly — the live `Query` instance currently being observed.
+
+### `refetch(options?)`
+
+```typescript
+refetch({ ...options }: RefetchOptions = {}): Promise<QueryObserverResult<TData, TError>>
+```
+
+Thin wrapper that calls the protected `fetch(options)`. This is the function exposed on every `QueryObserverResult.refetch` (bound in the constructor via `bindMethods`).
+
+### `fetchOptimistic(options)`
+
+Builds a query from `defaultedOptions` via the cache, marks `query.isFetchingOptimistic = true`, calls `query.fetch()` directly (bypassing this observer's own `#currentQuery`), and on completion returns `createResult(query, defaultedOptions)`. Useful for previewing what a result *would* look like for a different set of options without mutating this observer's own subscription/state.
+
+### `fetch(options)` (protected)
+
+```typescript
+protected fetch(options: ObserverFetchOptions): Promise<QueryObserverResult<TData, TError>>
+```
+
+Calls `#executeFetch({ ...options, cancelRefetch: options.cancelRefetch ?? true })` — note the default `cancelRefetch: true`, meaning a manual `refetch()`/`fetchNextPage()` cancels any in-flight fetch and starts a new one unless the caller explicitly passes `cancelRefetch: false`. After the fetch settles, calls `this.updateResult()` and resolves with `this.#currentResult`.
+
+### `#executeFetch(fetchOptions?)` (private)
+
+Calls `#updateQuery()` first (in case the query identity needs refreshing), then `this.#currentQuery.fetch(this.options, fetchOptions)`. If `fetchOptions?.throwOnError` is not set, the returned promise is `.catch(noop)`'d — errors are swallowed at this layer (the *result* will still reflect `isError`/`error`; only the promise rejection is suppressed) unless the caller explicitly opts into propagation.
+
+### `#updateStaleTimeout()` (private)
+
+Clears any existing stale timeout, computes `staleTime = resolveStaleTime(options.staleTime, query)`. Bails out (no timer scheduled) if running on the server (`isServer`), if `#currentResult.isStale` is already `true`, or if `staleTime` isn't a valid timeout (`isValidTimeout` — must be a non-negative finite number). Otherwise schedules a `setTimeout` for `timeUntilStale(dataUpdatedAt, staleTime) + 1` ms; when it fires, it calls `updateResult()` **only if** `!this.#currentResult.isStale` at that moment (avoids a redundant notify if something else already flipped staleness in the meantime).
+
+### `#computeRefetchInterval()` (private)
+
+```typescript
+(typeof options.refetchInterval === 'function'
+  ? options.refetchInterval(currentQuery)
+  : options.refetchInterval) ?? false
+```
+
+A function-valued `refetchInterval` is invoked with the current query on every recomputation (e.g. you can return a shorter interval while `query.state.status === 'pending'` and `false` once data has settled — a common "poll until ready" pattern).
+
+### `#updateRefetchInterval(nextInterval)` (private)
+
+Clears any existing interval, stores `nextInterval` in `#currentRefetchInterval`. Bails out (no interval scheduled) if `isServer`, if `resolveQueryBoolean(options.enabled, query) === false`, if `nextInterval` isn't a valid timeout, or if `nextInterval === 0`. Otherwise schedules a `setInterval(..., nextInterval)` whose tick calls `#executeFetch()` — but **only** if `options.refetchIntervalInBackground` is true **or** `focusManager.isFocused()` — so by default, polling pauses while the window/app is unfocused unless you explicitly opt into background polling.
+
+### `#updateTimers()` (private)
+
+Calls `#updateStaleTimeout()` then `#updateRefetchInterval(#computeRefetchInterval())`. Called from `onSubscribe` and `onQueryUpdate`.
+
+### `#clearStaleTimeout()` / `#clearRefetchInterval()` (private)
+
+Standard guarded `clearTimeout`/`clearInterval`, resetting the corresponding id field to `undefined` so repeated calls are no-ops.
+
+### `createResult(query, options)` (protected)
+
+The core result-computation function — re-derives a full `QueryObserverResult` from a `Query`'s current `state` plus `options`, without mutating any observer fields itself (`updateResult` is responsible for committing the output). Key internal logic:
+
+- **`select` memoization.** If `options.select` is set and `state.data !== undefined`: reuses `prevResult.data` verbatim (skipping `select` entirely) when *all* of: a previous result exists, `state.data === prevResultState.data` (same reference — i.e. the underlying cache data object didn't change), `options.select === prevResultOptions.select` (same function reference), and `!prevResult.isPlaceholderData`. Otherwise it calls `options.select(state.data)` fresh. If `select` throws, the thrown value becomes `error`, `errorUpdatedAt = Date.now()`, `status` flips to `'error'`, `isError = true`, `isPending = false` — a `select` exception is treated exactly like a query failure for the purposes of the result.
+- **`placeholderData`.** Only considered while `isPending` is still true and `options.placeholderData !== undefined`. Reuses `prevResult.data` if `prevResult.isPlaceholderData` and `options.placeholderData === prevResultOptions.placeholderData` (same reference); otherwise calls it as a function (passing `prevResult?.data` and the previous query) if it's a function, or uses it as a static value. If the resolved placeholder is not `undefined`, it's run back through `options.select` (if present) and the result has `status: 'success'`, `isPlaceholderData: true`, `isPending: false`, `isError: false` forced — placeholder data is reported with a success-shaped result even though no real fetch has completed.
+- **`isStale`.** If `data !== undefined` and a resolved `staleTime` exists, uses `query.isStaleByTime(staleTime)`; otherwise falls back to `query.isStale()` (see [`Query`](./04-query) — `isStaleByTime` checks `isInvalidated`/`data === undefined`/`timeUntilStale`, while `isStale()` without observers checks `data === undefined`, and with observers delegates to whether any observer's own current result is stale).
+- **`isLoadingError`** is `isError && !data`; **`isRefetchError`** is `isError && data !== undefined` — mutually exclusive based on whether data was already present when the error occurred.
+- `refetch` on the result is always `this.refetch` (the bound instance method) and `promise` is `query.promise` (the query's live/last fetch promise — what Suspense integrations `await`).
+
+### `updateResult(notifyOptions?)`
+
+Computes `nextResult = createResult(currentQuery, options)`, updates `#currentResultState`/`#currentResultOptions` to the query's current state/this observer's options, then **returns early without notifying anything** if `shallowEqualObjects(nextResult, prevResult)` — a full shallow (one level, reference-equality-per-key) comparison across every key of the result object. Only past that guard does it assign `this.#currentResult = nextResult` and decide whether to notify listeners via `shouldNotifyListeners()` (see [Advanced](#advanced-minimizing-re-renders-with-notifyonchangeprops-and-tracked-properties)). Note: `notifyOptions?.listeners === false` short-circuits notification regardless of what `shouldNotifyListeners()` would have said.
+
+### `#updateQuery()` (private)
+
+Builds/looks-up the query for `this.options` via `client.getQueryCache().build(client, options)`. If it's identical (`===`) to `#currentQuery`, does nothing. Otherwise swaps `#currentQuery` to the new instance, snapshots `#currentQueryInitialState = query.state` (used by `createResult` for `isFetchedAfterMount`), and — only if this observer currently `hasListeners()` — calls `prevQuery?.removeObserver(this)` and `query.addObserver(this)`, migrating the live subscription to the new query.
+
+### `onQueryUpdate()`
+
+Called by the `Query`/cache machinery whenever the underlying query's state changes. Calls `updateResult()`, and if still `hasListeners()`, also calls `#updateTimers()` (e.g. a fresh `dataUpdatedAt` needs a fresh stale-timeout deadline).
+
+### `#notify(notifyOptions)` (private)
+
+Wraps everything in `notifyManager.batch(...)` (see [NotifyManager](./16-notify-manager) if documented, otherwise [overview](./01-overview)). If `notifyOptions.listeners` is truthy, calls every subscriber in `this.listeners` with `this.#currentResult`. Always also calls `client.getQueryCache().notify({ query: currentQuery, type: 'observerResultsUpdated' })` — this fires regardless of whether `listeners` was notified, so cache-level subscribers (e.g. devtools) always learn about a recomputed result even if no component-level listener needed to re-render.
+
+## Common pitfalls
+
+- **Reading `result.data` outside the tracked accessor breaks the optimization.** If a framework adapter hands you the raw object from `getCurrentResult()` instead of the `trackResult`-wrapped proxy, `#trackedProps` never grows, and the empty-set fast path in `shouldNotifyListeners()` (`!notifyOnChangePropsValue && !this.#trackedProps.size`) means you get notified on *every* change — exactly the over-notification tracking was meant to prevent.
+- **`structuralSharing`/`select` reuse depends on reference equality, not deep equality, at the gate.** `createResult`'s select-memoization checks `state.data === prevResultState?.data` — if `replaceData`'s structural sharing (in [`utils.ts`](./01-overview)) produces a new top-level object reference even though nested fields are unchanged, `select` re-runs. This is usually fine since structural sharing already returns the *same* reference when deeply equal, but a custom `structuralSharing` function that always returns a new object will defeat select memoization on every update.
+- **`refetchInterval` ticks are suppressed while unfocused by default.** If polling silently "stops" when you alt-tab away, that's expected — only `refetchIntervalInBackground: true` keeps `#updateRefetchInterval`'s interval callback executing `#executeFetch()` when `focusManager.isFocused()` is `false`.
+- **`cancelRefetch` defaults to `true` for manual `fetch`/`refetch`/`fetchNextPage` calls**, but not for the initial mount fetch or interval-driven fetches (those go through `#executeFetch` directly without that default). Don't assume a background poll cancels a user-initiated refetch or vice versa without checking which code path triggered it.
+- **`destroy()` nukes `this.listeners` outright** (`new Set()`), not just clearing subscriptions one by one — any code holding a stale reference to the old listeners set will not see it mutate further, but `hasListeners()` afterwards is unconditionally `false`.
+- **A `select` that throws permanently looks like a query error** until the next state change recomputes the result — `createResult` has no special recovery path; the only way out is another `updateResult()` call (e.g. triggered by a refetch or option change) where `select` succeeds.

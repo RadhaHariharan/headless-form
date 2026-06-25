@@ -1,0 +1,139 @@
+# defaultRetry / defaultRetryDelay / RetryConfig
+
+**File:** `src/retryStrategies.ts`
+
+A pair of small, framework-agnostic retry helpers and the `RetryConfig` shape they implement. These are general-purpose retry predicate/delay functions — the same shape query-core's own `retry`/`retryDelay` query options expect — made available here for persistence-related retry scenarios (e.g. retrying a failed `persistClient`/`restoreClient` call against flaky storage).
+
+```typescript
+import { defaultRetry, defaultRetryDelay } from '@headlesskit/query-persist-client-core';
+import type { RetryConfig } from '@headlesskit/query-persist-client-core';
+```
+
+## Signature
+
+```typescript
+interface RetryConfig {
+  retries?: number
+  retryDelay?: number | ((retryAttempt: number, error: Error) => number)
+}
+
+function defaultRetry(failureCount: number, error: Error): boolean
+function defaultRetryDelay(failureCount: number): number
+```
+
+| Export | Type | Description |
+|--------|------|-------------|
+| `RetryConfig` | interface | `{ retries?: number; retryDelay?: number \| ((retryAttempt, error) => number) }` — a config shape, not consumed internally by anything else in this file |
+| `defaultRetry` | `(failureCount: number, error: Error) => boolean` | Retry predicate |
+| `defaultRetryDelay` | `(failureCount: number) => number` | Backoff delay calculator |
+
+## Internals: what each function actually does
+
+### defaultRetry
+
+```typescript
+export function defaultRetry(failureCount: number, error: Error): boolean {
+  return failureCount < 3
+}
+```
+
+This is the entire implementation: it returns `true` (meaning "retry again") for any `failureCount` strictly less than `3`, and `false` from the 3rd failure onward. **The `error` parameter is accepted but never inspected** — every error is treated identically. There is no special-casing of, for example, 4xx-style "non-retryable" errors; any error, including ones that will never succeed on retry, gets exactly 3 retry attempts before `defaultRetry` gives up.
+
+Concretely, calling `defaultRetry(0, err)`, `defaultRetry(1, err)`, `defaultRetry(2, err)` all return `true`; `defaultRetry(3, err)` and beyond return `false` — so a caller looping on this predicate gets up to 3 retries (4 total attempts: the original plus 3 retries), assuming the caller increments `failureCount` once per failed attempt before calling again.
+
+### defaultRetryDelay
+
+```typescript
+export function defaultRetryDelay(failureCount: number): number {
+  return Math.min(1000 * 2 ** failureCount, 30000)
+}
+```
+
+Exponential backoff, capped at 30 seconds:
+
+| `failureCount` | `1000 * 2 ** failureCount` | Returned delay |
+|---|---|---|
+| `0` | 1000 | 1000 ms |
+| `1` | 2000 | 2000 ms |
+| `2` | 4000 | 4000 ms |
+| `3` | 8000 | 8000 ms |
+| `4` | 16000 | 16000 ms |
+| `5` | 32000 | **30000 ms** (capped) |
+| `6+` | 64000+ | **30000 ms** (capped) |
+
+The cap is a hard `Math.min`, so delay growth is strictly bounded — there's no jitter/randomization added, so many clients failing at the same time (e.g. a shared backend outage affecting persisted-cache-restore retries across many app instances) will all retry on the same schedule.
+
+### RetryConfig
+
+`RetryConfig` is just a type — declaring `{ retries?, retryDelay? }` shape compatible with what `defaultRetry`/`defaultRetryDelay` produce — but note neither `defaultRetry` nor `defaultRetryDelay` actually reads a `RetryConfig` object; they take their own explicit `(failureCount, error)` / `(failureCount)` arguments instead. `RetryConfig` exists as a typing convenience for code that wants to store "the policy" as data (e.g. `{ retries: 5, retryDelay: defaultRetryDelay }`) and apply it manually.
+
+## Basic usage
+
+```typescript
+import { defaultRetry, defaultRetryDelay } from '@headlesskit/query-persist-client-core';
+
+let failureCount = 0;
+
+async function persistWithRetry(persister: Persister, client: PersistedClient) {
+  while (true) {
+    try {
+      await persister.persistClient(client);
+      return;
+    } catch (error) {
+      if (!defaultRetry(failureCount, error as Error)) {
+        throw error; // exhausted retries — give up
+      }
+      const delay = defaultRetryDelay(failureCount);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      failureCount += 1;
+    }
+  }
+}
+```
+
+## Advanced: retrying a failed restore by removing the oldest queries
+
+A realistic scenario this package's own restore path doesn't handle automatically: a persisted snapshot is too large for the storage quota, or `hydrate` throws partway through because one cached query's data is corrupt. Rather than discarding the *entire* cache (which is what [persistQueryClientRestore](./03-persist) does on any error), you can build a strategy on top of `defaultRetry`/`defaultRetryDelay` that prunes the dehydrated state incrementally — dropping the oldest queries one at a time — and retries hydration with what remains:
+
+```typescript
+import { defaultRetry, defaultRetryDelay } from '@headlesskit/query-persist-client-core';
+import { hydrate } from '@headlesskit/query-core';
+import type { DehydratedState } from '@headlesskit/query-core';
+
+async function hydrateWithPruning(
+  queryClient: QueryClient,
+  clientState: DehydratedState,
+) {
+  // Oldest first, by dataUpdatedAt — assumes clientState.queries[].state.dataUpdatedAt
+  const queries = [...clientState.queries].sort(
+    (a, b) => a.state.dataUpdatedAt - b.state.dataUpdatedAt,
+  );
+
+  let failureCount = 0;
+  let remaining = queries;
+
+  while (remaining.length > 0) {
+    try {
+      hydrate(queryClient, { ...clientState, queries: remaining });
+      return;
+    } catch (error) {
+      if (!defaultRetry(failureCount, error as Error)) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, defaultRetryDelay(failureCount)));
+      failureCount += 1;
+      // Drop the single oldest remaining query and retry hydration with the rest
+      remaining = remaining.slice(1);
+    }
+  }
+}
+```
+
+Each retry removes exactly one query (the oldest, by `dataUpdatedAt`) before calling `hydrate` again, so a single corrupt or oversized entry is eventually excluded rather than sacrificing the whole cache — `defaultRetry`'s 3-attempt ceiling bounds how many queries you'll drop before giving up and propagating the error.
+
+## Common pitfalls
+
+- **`defaultRetry` ignores the `error` it's given.** It cannot distinguish a transient storage failure (worth retrying) from a permanent one like a serialization `TypeError` (retrying will never help) — both get exactly 3 attempts. If you need 4xx-style short-circuiting, write your own predicate; don't assume `defaultRetry` does this.
+- **No jitter in `defaultRetryDelay`.** The delay is purely a function of `failureCount`, identical across every caller. If many independent clients hit the same retry condition simultaneously (e.g. a shared backend blip during restore), they will all retry in lockstep at 1s, 2s, 4s, 8s, 16s, then every 30s — consider adding randomized jitter yourself if thundering-herd retries are a concern.
+- **These functions are not wired into `persist.ts` or `createPersister.ts` automatically.** Nothing in this package calls `defaultRetry`/`defaultRetryDelay` internally on a failed `persistClient`/`restoreClient`/`removeClient` call — [persistQueryClientRestore](./03-persist) simply catches the error once and calls `removeClient()`, with no retry loop at all. You must wire `defaultRetry`/`defaultRetryDelay` into your own retry loop, as shown above, if you want persistence operations to be retried before falling back.
+- **`RetryConfig` is a plain type with no runtime behavior.** Don't expect passing a `RetryConfig` object anywhere in this package to do anything — neither `defaultRetry` nor `defaultRetryDelay` accepts or reads one; they take positional arguments instead.

@@ -693,7 +693,7 @@ body {
   #toc-panel { display: none; }
 }
 
-@media (max-width: 900px) {
+@media (max-width: 640px) {
   #sidebar { transform: translateX(-100%); }
   #sidebar.open { transform: translateX(0); }
   #overlay.visible { display: block; }

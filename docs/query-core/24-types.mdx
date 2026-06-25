@@ -1,0 +1,758 @@
+# Types Reference
+
+**File:** `src/types.ts`
+
+A comprehensive reference of every type and interface exported from `src/types.ts` (some related filter/result types live alongside their consumers in `src/utils.ts` and `src/mutation.ts`; those are noted as such below, not omitted). This page documents shape and intent, not behavior — see [`./01-overview`](./01-overview) for narrative option tables and [`./23-utils`](./23-utils) for the runtime helpers that operate on these types. Generics default to `unknown`/[`DefaultError`](#defaulterror-and-register) unless noted.
+
+---
+
+## Query keys, functions, and context
+
+### `QueryKey`
+
+```typescript
+type QueryKey = ReadonlyArray<unknown>
+```
+
+The base type for every query key — a readonly array of arbitrary values. Consumed everywhere: `QueryOptions.queryKey`, `Query`, `QueryCache`, [`QueryFilters`](#queryfilters-and-mutationfilters). See hashing/matching semantics in [`./23-utils`](./23-utils#query-key-hashing-and-matching).
+
+### `QueryFunction<T, TQueryKey, TPageParam>`
+
+```typescript
+type QueryFunction<T = unknown, TQueryKey extends QueryKey = QueryKey, TPageParam = never> =
+  [TPageParam] extends [never]
+    ? (context: QueryFunctionContext<TQueryKey>) => T | Promise<T>
+    : (context: QueryFunctionContext<TQueryKey, TPageParam>) => T | Promise<T>
+```
+
+The shape of `queryFn`. Conditionally typed on `TPageParam`: when no page-param type is supplied (`never`, the default), the context omits the strict page-param fields; when an infinite query supplies `TPageParam`, the context requires `pageParam`/`direction`. Consumed by [`QueryOptions.queryFn`](#queryoptions) and [`ensureQueryFn`](./23-utils#ensurequeryfn-options-fetchoptions).
+
+### `QueryFunctionContext<TQueryKey, TPageParam>`
+
+```typescript
+// non-infinite shape ([TPageParam] extends [never]):
+{
+  queryKey: TQueryKey
+  signal: AbortSignal
+  meta: QueryMeta | undefined
+  pageParam?: unknown
+  direction?: unknown
+  client?: unknown
+}
+
+// infinite shape:
+{
+  queryKey: TQueryKey
+  signal: AbortSignal
+  pageParam: TPageParam
+  direction: 'forward' | 'backward'
+  meta: QueryMeta | undefined
+  client?: unknown
+}
+```
+
+The single argument passed to every `queryFn`. `signal` is produced lazily via [`addConsumeAwareSignal`](./23-utils#addconsumeawaresignal-object-getsignal-oncancelled). Consumed by [`./04-query`](./04-query) when invoking the fetch.
+
+### `QueryMeta`
+
+```typescript
+type QueryMeta = Record<string, unknown>
+```
+
+Arbitrary, untyped bag attached via `QueryOptions.meta`, forwarded into `QueryFunctionContext.meta` and to cache-level callbacks (`QueryCache`'s `onError`/`onSuccess`/`onSettled` receive the owning `Query`, which exposes `.meta`). Useful for tagging queries with app-specific metadata (e.g. error-toast suppression flags) without widening `TData`/`TError`.
+
+### `QueryKeyHashFunction<TQueryKey>`
+
+```typescript
+type QueryKeyHashFunction<TQueryKey extends QueryKey> = (queryKey: TQueryKey) => string
+```
+
+The shape required by [`QueryOptions.queryKeyHashFn`](#queryoptions). Default implementation is [`hashKey`](./23-utils#hashkey-querykey); see [Advanced: a custom queryKeyHashFn](./23-utils#advanced-a-custom-queryKeyHashFn).
+
+### `Updater<TInput, TOutput>`
+
+*(declared in `src/utils.ts`, documented here as it's a cross-cutting type)*
+
+```typescript
+type Updater<TInput, TOutput> = TOutput | ((input: TInput) => TOutput)
+```
+
+The "value or function-of-previous-value" pattern used by `queryClient.setQueryData`. Resolved at runtime by [`functionalUpdate`](./23-utils#functionalupdate-updater-input).
+
+---
+
+## Query filters
+
+### `QueryFilters<TQueryKey>`
+
+*(declared in `src/utils.ts`)*
+
+```typescript
+interface QueryFilters<TQueryKey extends QueryKey = QueryKey> {
+  type?: QueryTypeFilter
+  exact?: boolean
+  predicate?: (query: Query) => boolean
+  queryKey?: TQueryKey | TuplePrefixes<TQueryKey>
+  stale?: boolean
+  fetchStatus?: FetchStatus
+}
+
+type QueryTypeFilter = 'all' | 'active' | 'inactive'
+```
+
+Consumed by `QueryCache.find`/`findAll` and `QueryClient.invalidateQueries`/`refetchQueries`/`cancelQueries`/`removeQueries`/`resetQueries` (see [`./02-query-client`](./02-query-client), [`./03-query-cache`](./03-query-cache)). Matching logic lives in [`matchQuery`](./23-utils#matchquery-filters-query-and-matchmutation-filters-mutation). Note `queryKey` is typed as `TQueryKey | TuplePrefixes<TQueryKey>` — a conditional-type that allows passing any *prefix tuple* of the full key when not using `exact`.
+
+### `MutationFilters<TData, TError, TVariables, TOnMutateResult>`
+
+*(declared in `src/utils.ts`)*
+
+```typescript
+interface MutationFilters<TData = unknown, TError = DefaultError, TVariables = unknown, TOnMutateResult = unknown> {
+  exact?: boolean
+  predicate?: (mutation: Mutation<TData, TError, TVariables, TOnMutateResult>) => boolean
+  mutationKey?: TuplePrefixes<MutationKey>
+  status?: MutationStatus
+}
+```
+
+The mutation analogue, consumed by `MutationCache.find`/`findAll` and `QueryClient.isMutating` (see [`./09-mutation`](./09-mutation)). Matching logic in [`matchMutation`](./23-utils#matchquery-filters-query-and-matchmutation-filters-mutation).
+
+---
+
+## Query options
+
+### `QueryOptions<TQueryFnData, TError, TData, TQueryKey, TPageParam>`
+
+```typescript
+interface QueryOptions<
+  TQueryFnData = unknown, TError = DefaultError, TData = TQueryFnData,
+  TQueryKey extends QueryKey = QueryKey, TPageParam = never,
+> {
+  retry?: RetryValue<TError>
+  retryDelay?: RetryDelayValue<TError>
+  networkMode?: NetworkMode
+  gcTime?: number
+  queryFn?: QueryFunction<TQueryFnData, TQueryKey, TPageParam> | SkipToken
+  queryHash?: string
+  queryKey?: TQueryKey
+  queryKeyHashFn?: QueryKeyHashFunction<TQueryKey>
+  initialData?: TData | InitialDataFunction<TData>
+  initialDataUpdatedAt?: number | (() => number | undefined)
+  behavior?: QueryBehavior<TQueryFnData, TError, TData, TQueryKey>
+  structuralSharing?: boolean | ((oldData: TData | undefined, newData: TData) => TData)
+  getPreviousPageParam?: GetPreviousPageParamFunction<TPageParam, TQueryFnData>
+  getNextPageParam?: GetNextPageParamFunction<TPageParam, TQueryFnData>
+  _defaulted?: boolean
+  meta?: QueryMeta
+  maxPages?: number
+  staleTime?: StaleTimeFunction<TQueryFnData, TError, TData, TQueryKey>
+}
+```
+
+The base options interface every query-creating call ultimately accepts: `QueryClient.fetchQuery`/`prefetchQuery` (see [`./02-query-client`](./02-query-client)), and the base that [`QueryObserverOptions`](#queryobserveroptions) extends. `structuralSharing` is consumed by [`replaceData`](./23-utils#replacedata-prevdata-data-options). `_defaulted` is an internal marker set once `QueryClient` has merged in `defaultOptions`, preventing double-defaulting.
+
+### `StaleTime` / `StaleTimeFunction<...>`
+
+```typescript
+type StaleTime = number | ((query: Query) => number) | (((query: Query) => number) & number)
+type StaleTimeFunction<TQueryFnData = unknown, TError = DefaultError, TData = TQueryFnData, TQueryKey extends QueryKey = QueryKey> =
+  | number
+  | ((query: Query<TQueryFnData, TError, TData, TQueryKey>) => number)
+```
+
+`StaleTime` is the loosely-typed return/runtime shape (note the odd third union member — a function value that's *also* typed as intersecting `number`, used internally to let a resolved function result still type-check as a plain number downstream). `StaleTimeFunction` is the strongly-typed option shape consumers actually write. Resolved at runtime via [`resolveStaleTime`](./23-utils#resolvestaletime-staletime-query-and-resolvequeryboolean-option-query).
+
+### `QueryBooleanOption<...>`
+
+```typescript
+type QueryBooleanOption<TQueryFnData = unknown, TError = DefaultError, TData = TQueryFnData, TQueryKey extends QueryKey = QueryKey> =
+  | boolean
+  | ((query: Query<TQueryFnData, TError, TData, TQueryKey>) => boolean)
+```
+
+Backs `enabled` and similar boolean-or-function-of-query options on [`QueryObserverOptions`](#queryobserveroptions). Resolved via [`resolveQueryBoolean`](./23-utils#resolvestaletime-staletime-query-and-resolvequeryboolean-option-query).
+
+### `InitialDataFunction<T>`
+
+```typescript
+type InitialDataFunction<T> = () => T | undefined
+```
+
+Function form of `QueryOptions.initialData` — called with no arguments to lazily compute seed data (e.g. read from `localStorage` only when actually needed).
+
+### `PlaceholderDataFunction<...>` / `QueriesPlaceholderDataFunction<TQueryData>`
+
+```typescript
+type PlaceholderDataFunction<TQueryFnData = unknown, TError = DefaultError, TData = TQueryFnData, TQueryKey extends QueryKey = QueryKey> =
+  (previousData: TData | undefined, previousQuery: Query<TQueryFnData, TError, TData, TQueryKey> | undefined) => TData | undefined
+
+type QueriesPlaceholderDataFunction<TQueryData> =
+  (previousData: TQueryData | undefined, previousQuery: Query | undefined) => TQueryData | undefined
+```
+
+Backs `placeholderData` on [`QueryObserverOptions`](#queryobserveroptions). Receives the previous query's data/instance so you can implement "keep previous data while key changes" logic manually (or just pass [`keepPreviousData`](./23-utils#keeppreviousdata-previousdata) for the common case). The `Queries`-prefixed variant is the loosened shape used by multi-query hooks that don't carry full generic precision per query.
+
+### `NetworkMode`
+
+```typescript
+type NetworkMode = 'online' | 'always' | 'offlineFirst'
+```
+
+Controls fetch-vs-connectivity behavior on both `QueryOptions` and `MutationOptions`. See the behavior table in [`./01-overview`](./01-overview#networkmode) and [`./15-online-manager`](./15-online-manager).
+
+### `QueryBehavior<...>` / `FetchContext<...>`
+
+```typescript
+interface QueryBehavior<TQueryFnData = unknown, TError = DefaultError, TData = TQueryFnData, TQueryKey extends QueryKey = QueryKey> {
+  onFetch: (context: FetchContext<TQueryFnData, TError, TData, TQueryKey>, query: Query) => void
+}
+
+interface FetchContext<TQueryFnData = unknown, TError = DefaultError, TData = TQueryFnData, TQueryKey extends QueryKey = QueryKey> {
+  fetchFn: () => unknown | Promise<unknown>
+  fetchOptions?: FetchOptions
+  signal: AbortSignal
+  options: QueryOptions<TQueryFnData, TError, TData, TQueryKey>
+  queryKey: TQueryKey
+  state: QueryState<TData, TError>
+  client: QueryClientLike
+}
+```
+
+Internal extension point (`QueryOptions.behavior`) letting infinite queries hook into and rewrite the underlying fetch — see [`./07-infinite-query-behavior`](./07-infinite-query-behavior), which implements `QueryBehavior` to wrap `fetchFn` with page-fetching logic.
+
+### `QueryClientLike`
+
+```typescript
+interface QueryClientLike {
+  getQueryData(queryKey: QueryKey): unknown
+  setQueryData(queryKey: QueryKey, updater: unknown): unknown
+  getQueryCache(): QueryCache
+  getMutationCache(): MutationCache
+}
+```
+
+A minimal structural interface `FetchContext.client` is typed as — lets behavior code depend on "something `QueryClient`-shaped" without a circular import on the concrete class.
+
+### `QueryStore`
+
+```typescript
+interface QueryStore {
+  has: (queryHash: string) => boolean
+  set: (queryHash: string, query: Query) => void
+  get: (queryHash: string) => Query | undefined
+  delete: (queryHash: string) => void
+  values: () => IterableIterator<Query>
+}
+```
+
+The minimal `Map`-like contract `QueryCache` uses internally to store `Query` instances by hash — see [`./03-query-cache`](./03-query-cache).
+
+---
+
+## Query observer options and results
+
+### `QueryObserverOptions<TQueryFnData, TError, TData, TQueryData, TQueryKey, TPageParam>`
+
+```typescript
+interface QueryObserverOptions<
+  TQueryFnData = unknown, TError = DefaultError, TData = TQueryFnData,
+  TQueryData = TQueryFnData, TQueryKey extends QueryKey = QueryKey, TPageParam = never,
+> extends QueryOptions<TQueryFnData, TError, TQueryData, TQueryKey, TPageParam> {
+  enabled?: QueryBooleanOption<TQueryFnData, TError, TQueryData, TQueryKey>
+  staleTime?: StaleTimeFunction<TQueryFnData, TError, TQueryData, TQueryKey>
+  refetchInterval?: number | false | ((query: Query<TQueryFnData, TError, TQueryData, TQueryKey>) => number | false | undefined)
+  refetchIntervalInBackground?: boolean
+  refetchOnWindowFocus?: boolean | 'always' | ((query: Query) => boolean | 'always')
+  refetchOnReconnect?: boolean | 'always' | ((query: Query) => boolean | 'always')
+  refetchOnMount?: boolean | 'always' | ((query: Query) => boolean | 'always')
+  retryOnMount?: boolean
+  notifyOnChangeProps?: NotifyOnChangeProps
+  select?: (data: TQueryData) => TData
+  suspense?: boolean
+  placeholderData?: TQueryData | PlaceholderDataFunction<TQueryFnData, TError, TQueryData, TQueryKey>
+  subscribed?: boolean
+  throwOnError?: boolean | ((error: TError, query: Query) => boolean)
+}
+```
+
+The full options surface for [`./05-query-observer`](./05-query-observer) and what `useQuery`-style hooks accept. Note the five-generic shape: `TQueryData` is the type as stored in the cache (post-`queryFn`, pre-`select`), `TData` is the type after `select` is applied — this split is what makes `select` type-safe. Behavior-level docs for each option are in [`./01-overview`](./01-overview#queryobserveroptions).
+
+### `NotifyOnChangeProps`
+
+```typescript
+type NotifyOnChangeProps =
+  | Array<keyof InfiniteQueryObserverResult | 'data'>
+  | 'all'
+  | (() => Array<keyof InfiniteQueryObserverResult | 'data'> | 'all')
+```
+
+Controls which result-property changes trigger a re-notify to subscribers. Note it's typed against `InfiniteQueryObserverResult`'s keys even for non-infinite queries — a superset that covers both observer kinds' result shapes.
+
+### `QueryStatus` / `FetchStatus`
+
+```typescript
+type QueryStatus = 'pending' | 'error' | 'success'
+type FetchStatus = 'fetching' | 'paused' | 'idle'
+```
+
+The two independent state dimensions of every query — see the combined state table in [`./01-overview`](./01-overview#query-state-machine). `QueryStatus` is about data availability; `FetchStatus` is about whether a fetch is currently in flight/paused.
+
+### `QueryObserverBaseResult<TData, TError>`
+
+```typescript
+interface QueryObserverBaseResult<TData = unknown, TError = DefaultError> {
+  data: TData | undefined
+  dataUpdatedAt: number
+  error: TError | null
+  errorUpdatedAt: number
+  failureCount: number
+  failureReason: TError | null
+  errorUpdateCount: number
+  isError: boolean
+  isFetched: boolean
+  isFetchedAfterMount: boolean
+  isFetching: boolean
+  isLoading: boolean
+  isLoadingError: boolean
+  isPending: boolean
+  isPlaceholderData: boolean
+  isRefetchError: boolean
+  isRefetching: boolean
+  isStale: boolean
+  isSuccess: boolean
+  refetch: (options?: RefetchOptions) => Promise<QueryObserverResult<TData, TError>>
+  status: QueryStatus
+  fetchStatus: FetchStatus
+  promise: Promise<TData>
+}
+```
+
+The common fields shared by every member of the [`QueryObserverResult`](#queryobserverresult-discriminated-union) discriminated union. `promise` backs Suspense integration. See [`./05-query-observer`](./05-query-observer) for how each flag is derived.
+
+### `QueryObserverResult` discriminated union
+
+```typescript
+type QueryObserverResult<TData = unknown, TError = DefaultError> =
+  | QueryObserverPendingResult<TData, TError>
+  | QueryObserverLoadingErrorResult<TData, TError>
+  | QueryObserverRefetchErrorResult<TData, TError>
+  | QueryObserverSuccessResult<TData, TError>
+```
+
+Each member narrows `data`/`error`/`status` and the boolean flags to literal types for that specific state, so TypeScript narrows `result.data` to defined once `result.isSuccess` is checked:
+
+| Member | `status` | `data` | `error` | distinguishing flags |
+|---|---|---|---|---|
+| `QueryObserverPendingResult` | `'pending'` | `undefined` | `null` | `isPending: true`, `isSuccess/isError: false` |
+| `QueryObserverLoadingResult` | `'pending'` | `undefined` | `null` | adds `isLoading: true` (subset of pending — first fetch, no cached data) |
+| `QueryObserverLoadingErrorResult` | `'error'` | `undefined` | `TError` | `isLoadingError: true` (failed with no prior data) |
+| `QueryObserverRefetchErrorResult` | `'error'` | `TData` | `TError` | `isRefetchError: true` (failed but stale data remains) |
+| `QueryObserverSuccessResult` | `'success'` | `TData` | `null` | `isSuccess: true` |
+
+`QueryObserverLoadingResult` is a stricter variant of pending (not itself a member of the top-level union, but assignable to `QueryObserverPendingResult`) representing specifically "no data yet, first load."
+
+### `InfiniteQueryObserverOptions<...>` / `InfiniteQueryObserverBaseResult` / `InfiniteQueryObserverResult`
+
+```typescript
+interface InfiniteQueryObserverOptions<
+  TQueryFnData = unknown, TError = DefaultError, TData = InfiniteData<TQueryFnData>,
+  TQueryData = TQueryFnData, TQueryKey extends QueryKey = QueryKey, TPageParam = unknown,
+> extends QueryObserverOptions<TQueryFnData, TError, TData, InfiniteData<TQueryData, TPageParam>, TQueryKey, TPageParam> {
+  initialPageParam: TPageParam
+  getPreviousPageParam?: GetPreviousPageParamFunction<TPageParam, TQueryFnData>
+  getNextPageParam: GetNextPageParamFunction<TPageParam, TQueryFnData>
+  maxPages?: number
+}
+
+interface InfiniteQueryObserverBaseResult<TData = unknown, TError = DefaultError>
+  extends QueryObserverBaseResult<TData, TError> {
+  fetchNextPage: (options?: FetchNextPageOptions) => Promise<InfiniteQueryObserverResult<TData, TError>>
+  fetchPreviousPage: (options?: FetchPreviousPageOptions) => Promise<InfiniteQueryObserverResult<TData, TError>>
+  hasNextPage: boolean
+  hasPreviousPage: boolean
+  isFetchingNextPage: boolean
+  isFetchingPreviousPage: boolean
+}
+
+type InfiniteQueryObserverResult<TData = unknown, TError = DefaultError> = InfiniteQueryObserverBaseResult<TData, TError>
+```
+
+Note `InfiniteQueryObserverResult` is currently just an alias to the base (not its own discriminated union like `QueryObserverResult`) — narrowing for infinite results still comes from the shared `status`/`isSuccess` etc. fields. See [`./06-infinite-query-observer`](./06-infinite-query-observer) and [`./01-overview`](./01-overview#infinitequeryobserver).
+
+### `InfiniteData<TData, TPageParam>`
+
+```typescript
+interface InfiniteData<TData, TPageParam = unknown> {
+  pages: Array<TData>
+  pageParams: Array<TPageParam>
+}
+```
+
+The cached shape for infinite queries — parallel arrays where `pages[i]` was fetched using `pageParams[i]`. Built up via [`addToEnd`/`addToStart`](./23-utils#infinite-query-page-helpers).
+
+### `GetNextPageParamFunction<TPageParam, TQueryFnData>` / `GetPreviousPageParamFunction<...>`
+
+```typescript
+type GetNextPageParamFunction<TPageParam, TQueryFnData = unknown> = (
+  lastPage: TQueryFnData, allPages: Array<TQueryFnData>,
+  lastPageParam: TPageParam, allPageParams: Array<TPageParam>,
+) => TPageParam | undefined | null
+
+type GetPreviousPageParamFunction<TPageParam, TQueryFnData = unknown> = (
+  firstPage: TQueryFnData, allPages: Array<TQueryFnData>,
+  firstPageParam: TPageParam, allPageParams: Array<TPageParam>,
+) => TPageParam | undefined | null
+```
+
+Required (`getNextPageParam`) and optional (`getPreviousPageParam`) callbacks on [`InfiniteQueryObserverOptions`](#infinitequeryobserveroptions--infinitequeryobserverbaseresult--infinitequeryobserverresult). Returning `undefined` or `null` signals "no more pages in this direction," driving `hasNextPage`/`hasPreviousPage`.
+
+### `InitialPageParam<TPageParam>` / `InfiniteQueryPageParamsOptions<...>`
+
+```typescript
+interface InitialPageParam<TPageParam = unknown> {
+  initialPageParam: TPageParam
+}
+
+interface InfiniteQueryPageParamsOptions<TQueryFnData = unknown, TPageParam = unknown>
+  extends InitialPageParam<TPageParam> {
+  getPreviousPageParam?: GetPreviousPageParamFunction<TPageParam, TQueryFnData>
+  getNextPageParam: GetNextPageParamFunction<TPageParam, TQueryFnData>
+  maxPages?: number
+}
+```
+
+Smaller composable pieces factored out of the infinite-query option set; `InfiniteQueryPageParamsOptions` is the page-param-only subset (useful for typing helper functions that don't need the full observer-options surface).
+
+### `InfiniteQueryOptions<...>`
+
+```typescript
+interface InfiniteQueryOptions<
+  TQueryFnData = unknown, TError = DefaultError, TData = InfiniteData<TQueryFnData>,
+  TQueryData = TQueryFnData, TQueryKey extends QueryKey = QueryKey, TPageParam = unknown,
+> extends Omit<QueryOptions<TQueryFnData, TError, TData, TQueryKey, TPageParam>, 'queryFn'> {
+  queryFn?: QueryFunction<TQueryFnData, TQueryKey, TPageParam> | SkipToken
+  initialPageParam: TPageParam
+  getPreviousPageParam?: GetPreviousPageParamFunction<TPageParam, TQueryFnData>
+  getNextPageParam: GetNextPageParamFunction<TPageParam, TQueryFnData>
+  maxPages?: number
+}
+```
+
+The non-observer (imperative) counterpart used by `QueryClient.fetchInfiniteQuery`/`prefetchInfiniteQuery` (see [`./02-query-client`](./02-query-client)).
+
+### `RefetchOptions` / `FetchNextPageOptions` / `FetchPreviousPageOptions`
+
+```typescript
+interface RefetchOptions extends Pick<FetchOptions, 'cancelRefetch'> {
+  throwOnError?: boolean
+}
+interface FetchNextPageOptions extends RefetchOptions {
+  pages?: number
+}
+interface FetchPreviousPageOptions extends RefetchOptions {
+  pages?: number
+}
+```
+
+Per-call overrides for `refetch()`/`fetchNextPage()`/`fetchPreviousPage()`. `pages` lets you fetch more than one page in a single call.
+
+---
+
+## Mutation types
+
+### `MutationKey` / `MutationStatus` / `MutationFunction<TData, TVariables>`
+
+```typescript
+type MutationKey = ReadonlyArray<unknown>
+type MutationStatus = 'idle' | 'pending' | 'success' | 'error'
+type MutationFunction<TData = unknown, TVariables = void> = (variables: TVariables) => Promise<TData>
+```
+
+`MutationKey` mirrors `QueryKey` but for mutations (used for devtools grouping and `setMutationDefaults`, not cache identity in the same sense). `MutationStatus` adds `'idle'` versus `QueryStatus`'s three states, since a mutation that hasn't run yet is meaningfully different from one that's pending.
+
+### `MutationOptions<TData, TError, TVariables, TContext>`
+
+```typescript
+interface MutationOptions<TData = unknown, TError = DefaultError, TVariables = void, TContext = unknown> {
+  mutationFn?: MutationFunction<TData, TVariables>
+  mutationKey?: MutationKey
+  onMutate?: (variables: TVariables) => Promise<TContext | undefined> | TContext | undefined
+  onSuccess?: (data: TData, variables: TVariables, context: TContext) => Promise<unknown> | unknown
+  onError?: (error: TError, variables: TVariables, context: TContext | undefined) => Promise<unknown> | unknown
+  onSettled?: (data: TData | undefined, error: TError | null, variables: TVariables, context: TContext | undefined) => Promise<unknown> | unknown
+  retry?: RetryValue<TError>
+  retryDelay?: RetryDelayValue<TError>
+  networkMode?: NetworkMode
+  gcTime?: number
+  _defaulted?: boolean
+  meta?: MutationMeta
+  scope?: MutationScope
+  throwOnError?: boolean | ((error: TError) => boolean)
+}
+```
+
+The full mutation configuration, consumed by [`./09-mutation`](./09-mutation), [`./10-mutation-cache`](./10-mutation-cache), and `QueryClient.setMutationDefaults`. `TContext` is the type returned from `onMutate` and threaded through `onSuccess`/`onError`/`onSettled` — the standard "rollback context" pattern.
+
+### `MutationMeta`
+
+```typescript
+interface MutationMeta extends Record<string, unknown> {}
+```
+
+Mutation analogue of [`QueryMeta`](#querymeta) — note it's declared as an empty `interface extends` rather than a type alias (allowing future declaration-merging/augmentation, unlike `QueryMeta`'s plain type alias).
+
+### `MutationScope`
+
+```typescript
+interface MutationScope {
+  id: string
+}
+```
+
+Mutations sharing the same `scope.id` are serialized — only one such mutation runs at a time, queueing the rest. See `MutationCache` scope handling in [`./10-mutation-cache`](./10-mutation-cache).
+
+### `MutationObserverOptions<...>`
+
+```typescript
+interface MutationObserverOptions<TData = unknown, TError = DefaultError, TVariables = void, TContext = unknown>
+  extends MutationOptions<TData, TError, TVariables, TContext> {
+  throwOnError?: boolean | ((error: TError) => boolean)
+}
+```
+
+Adds nothing structurally new beyond re-declaring `throwOnError` (already on the base) — exists as the distinct type [`./11-mutation-observer`](./11-mutation-observer) and hook layers type against, separate from the cache-level `MutationOptions`.
+
+### `MutationObserverResult<...>`
+
+```typescript
+type MutationObserverResult<TData = unknown, TError = DefaultError, TVariables = void, TContext = unknown> =
+  MutationState<TData, TError, TVariables, TContext> & {
+    isIdle: boolean
+    isPending: boolean
+    isSuccess: boolean
+    isError: boolean
+    mutate: MutateFunction<TData, TError, TVariables, TContext>
+    reset: () => void
+  }
+```
+
+Combines `MutationState` (declared in `src/mutation.ts` — covers `status`, `data`, `error`, `variables`, `context`, `failureCount`, `failureReason`, `isPaused`, `submittedAt`) with derived booleans and the imperative `mutate`/`reset` handles. This is the result type `MutationObserver.subscribe` callbacks receive.
+
+### `MutateFunction<...>` / `MutateOptions<...>`
+
+```typescript
+type MutateFunction<TData = unknown, TError = DefaultError, TVariables = void, TContext = unknown> = (
+  variables: TVariables,
+  options?: MutateOptions<TData, TError, TVariables, TContext>,
+) => void
+
+interface MutateOptions<TData = unknown, TError = DefaultError, TVariables = void, TContext = unknown> {
+  onSuccess?: (data: TData, variables: TVariables, context: TContext) => Promise<unknown> | unknown
+  onError?: (error: TError, variables: TVariables, context: TContext | undefined) => Promise<unknown> | unknown
+  onSettled?: (data: TData | undefined, error: TError | null, variables: TVariables, context: TContext | undefined) => Promise<unknown> | unknown
+}
+```
+
+`MutateFunction` is the type of `.mutate(...)` — note it's `void`-returning (fire-and-forget; awaiting completion is done via the observer's result stream or `mutateAsync`, not the return value). `MutateOptions` lets you pass one-off `onSuccess`/`onError`/`onSettled` callbacks per call, layered on top of the mutation's own option-level callbacks.
+
+### `DehydratedMutationState` / `DehydratedMutation`
+
+```typescript
+type DehydratedMutationState = Pick<MutationState,
+  'context' | 'data' | 'error' | 'failureCount' | 'failureReason' | 'isPaused' | 'status' | 'variables' | 'submittedAt'
+>
+
+interface DehydratedMutation {
+  mutationKey?: MutationKey
+  state: DehydratedMutationState
+  meta?: MutationMeta
+  scope?: MutationScope
+}
+```
+
+The serializable subset of mutation state used by [`dehydrate`/`hydrate`](#hydration-types) — see [`./01-overview`](./01-overview#hydration--ssr).
+
+---
+
+## Retry and network types
+
+### `RetryValue<TError>` / `RetryDelayValue<TError>`
+
+*(declared in `src/retryer.ts`, referenced throughout `types.ts`)*
+
+These are imported into `types.ts` (`import type { RetryDelayValue, RetryValue } from './retryer'`) and used on both `QueryOptions.retry`/`retryDelay` and `MutationOptions.retry`/`retryDelay`. See [`./08-retryer`](./08-retryer) for their exact shapes (boolean/number/predicate-function for `retry`; number-or-function-of-attempt-and-error for `retryDelay`) and the retry-loop behavior that consumes them.
+
+### `NetworkMode`
+
+Already covered under [Query options](#networkmode) — shared verbatim by `MutationOptions.networkMode`.
+
+---
+
+## Generic error plumbing
+
+### `DefaultError` and `Register`
+
+```typescript
+type DefaultError = Error
+
+interface Register {
+  // defaultError: Error
+}
+
+type RegisteredError = Register extends { defaultError: infer TError } ? TError : Error
+```
+
+This is the package's global error-type override mechanism. `DefaultError` is the plain fallback (`Error`). `Register` is an intentionally near-empty interface (the `defaultError` field is commented out in source) meant for **declaration merging** from consumer code:
+
+```typescript
+declare module '@headlesskit/query-core' {
+  interface Register {
+    defaultError: MyApiError
+  }
+}
+```
+
+`RegisteredError` is a conditional type that resolves to whatever `Register['defaultError']` was augmented to, or `Error` if untouched. However — note carefully — most option/result interfaces in this file (`QueryOptions`, `MutationOptions`, `QueryObserverResult`, etc.) default their `TError` generic to **`DefaultError`** directly, not `RegisteredError`. Cross-reference [`./01-overview`](./01-overview#custom-error-type) for how the `Register` pattern is intended to flow through framework-adapter call sites.
+
+---
+
+## Client config and cross-cutting option plumbing
+
+### `QueryClientConfig`
+
+```typescript
+interface QueryClientConfig {
+  queryCache?: QueryCache
+  mutationCache?: MutationCache
+  defaultOptions?: DefaultOptions
+}
+```
+
+Constructor argument for `QueryClient` — see [`./02-query-client`](./02-query-client) and the constructor-options table in [`./01-overview`](./01-overview#constructor-options).
+
+### `DefaultOptions<TError>`
+
+```typescript
+interface DefaultOptions<TError = DefaultError> {
+  queries?: OmitKeyof<QueryObserverOptions<unknown, TError>, 'suspense'>
+  mutations?: MutationObserverOptions<unknown, TError, unknown, unknown>
+  dehydrate?: DehydrateOptions
+  hydrate?: HydrateOptions
+}
+```
+
+Note `queries` explicitly omits `'suspense'` via [`OmitKeyof`](#omitkeyof-and-override) — `suspense` cannot be set as a blanket default and must be specified per-observer.
+
+### `CancelOptions`
+
+```typescript
+interface CancelOptions {
+  revert?: boolean
+  silent?: boolean
+}
+```
+
+Passed to `Query.cancel()`/`QueryClient.cancelQueries()`. `revert: true` rolls the query's state back to what it was before the canceled fetch started; `silent: true` suppresses the usual cancellation side-effects (e.g. notifying observers).
+
+### `SetDataOptions`
+
+```typescript
+interface SetDataOptions {
+  updatedAt?: number
+}
+```
+
+Passed to `queryClient.setQueryData(key, data, options)` — lets you backdate/override the `dataUpdatedAt` timestamp that would otherwise be set to "now," useful when manually seeding cache from data with its own known timestamp.
+
+### `OmitKeyof<T, K, E>` and `Override<A, B>`
+
+```typescript
+type OmitKeyof<T, K extends keyof T | (string & {}), E extends 'safely' | 'strictly' = 'strictly'> =
+  E extends 'strictly' ? Omit<T, K & keyof T> : Omit<T, K extends keyof T ? K : never>
+
+type Override<A, B> = {
+  [K in keyof A]: K extends keyof B ? B[K] : A[K]
+}
+```
+
+Internal type-level utilities. `OmitKeyof` is a stricter `Omit` that (in `'strictly'` mode, the default) requires `K` to actually be a key of `T` — catches typos that plain `Omit` would silently swallow. `Override` replaces matching keys of `A` with `B`'s versions, used for variance/relaxation tweaks across overlapping option interfaces.
+
+---
+
+## Query state
+
+### `QueryState<TData, TError>`
+
+*(declared in `src/query.ts`, central to consumers of this file)*
+
+Not redeclared in `types.ts` itself but imported (`import type { FetchOptions, Query, QueryState } from './query'`) and referenced throughout (`FetchContext.state`, `DehydratedQuery.state`). See [`./04-query`](./04-query) for its exact fields (`data`, `dataUpdatedAt`, `error`, `errorUpdatedAt`, `fetchFailureCount`, `fetchFailureReason`, `fetchStatus`, `status`, etc.) — `QueryStatus`/`FetchStatus` (documented [above](#querystatus--fetchstatus)) are the two enum fields driving it.
+
+### `FetchOptions<TData>`
+
+*(declared in `src/query.ts`)*
+
+Imported into `types.ts` for `FetchContext.fetchOptions` and [`RefetchOptions`](#refetchoptions--fetchnextpageoptions--fetchpreviouspageoptions)'s `Pick<FetchOptions, 'cancelRefetch'>`. See [`./04-query`](./04-query) for the full shape (`cancelRefetch`, `meta`, `initialPromise`).
+
+---
+
+## Hydration types
+
+### `DehydratedQuery` / `DehydratedState`
+
+```typescript
+interface DehydratedQuery {
+  queryHash: string
+  queryKey: QueryKey
+  state: QueryState
+  promise?: Promise<unknown>
+  meta?: QueryMeta
+}
+
+interface DehydratedState {
+  mutations: Array<DehydratedMutation>
+  queries: Array<DehydratedQuery>
+}
+```
+
+The full serializable snapshot returned by `dehydrate(queryClient)` and consumed by `hydrate(queryClient, state)`. See [`./01-overview`](./01-overview#hydration--ssr) and [`./16-hydration`](./16-hydration).
+
+### `DehydrateOptions`
+
+```typescript
+interface DehydrateOptions {
+  shouldDehydrateMutation?: (mutation: import('./mutation').Mutation) => boolean
+  shouldDehydrateQuery?: (query: Query) => boolean
+  shouldRedactErrors?: (error: unknown) => boolean
+  serializeData?: (data: unknown) => unknown
+}
+```
+
+Note `shouldDehydrateMutation`'s parameter type uses an inline `import('./mutation').Mutation` type-only import rather than a top-level import — avoids a circular import at the value level while still getting full typing.
+
+### `HydrateOptions`
+
+```typescript
+interface HydrateOptions {
+  defaultOptions?: {
+    queries?: QueryOptions
+    mutations?: MutationOptions<unknown, DefaultError, unknown, unknown>
+    dehydratedMutationToMutationOptions?: (dehydratedMutation: DehydratedMutation) => MutationOptions<unknown, DefaultError, unknown, unknown> | undefined
+    dehydratedQueryToQueryOptions?: (dehydratedQuery: DehydratedQuery) => QueryOptions | undefined
+  }
+  deserializeData?: (data: unknown) => unknown
+}
+```
+
+The `dehydratedQueryToQueryOptions`/`dehydratedMutationToMutationOptions` hooks let you intercept and customize how a dehydrated entry is turned back into live options during rehydration (e.g. re-attach a `queryFn` that obviously can't survive serialization).
+
+---
+
+## Common pitfalls
+
+- **`DefaultError` vs `RegisteredError`.** Augmenting `Register['defaultError']` via declaration merging does not automatically change what `TError` defaults to on every interface — most interfaces in this file hardcode `TError = DefaultError` (i.e. `Error`), not `RegisteredError`. If your framework adapter doesn't explicitly thread `RegisteredError` through its own generic defaults, a `Register` augmentation can silently have no effect at given call sites. Verify the specific adapter layer you're using actually surfaces `RegisteredError`.
+- **Five generics on `QueryObserverOptions`, easy to mix up.** `TQueryFnData` (raw fetch result) → `TQueryData` (post-cache, pre-`select`) → `TData` (post-`select`) is a three-step pipeline; supplying `select` without distinguishing `TQueryData`/`TData` in your own wrapper types is a common source of `data` typing as the wrong stage.
+- **`InfiniteQueryObserverResult` is a plain alias, not a discriminated union** like `QueryObserverResult` — narrowing on `isSuccess`/`status` still works at the field level, but you don't get the same automatic exhaustiveness-checking across distinct named result interfaces.
+- **`MutationMeta` is an empty `interface extends Record<string, unknown>`** (augmentable), while `QueryMeta` is a plain `type` alias (not augmentable via declaration merging) — if you need consumers of your library to be able to extend metadata typing via module augmentation, only the mutation side currently supports that pattern as written.
+- **`OmitKeyof` defaults to `'strictly'`**, meaning passing a key that isn't actually on `T` is a type error — this is a deliberate typo-guard, but can surprise you if you expected `Omit`'s normally-permissive behavior when refactoring a field name.
+
+See [`./23-utils`](./23-utils) for the runtime functions (`hashKey`, `resolveStaleTime`, `replaceData`, etc.) that operate on many of these types, and [`./01-overview`](./01-overview) for behavior-level walkthroughs of the most commonly used options.

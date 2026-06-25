@@ -1,0 +1,214 @@
+# QueryCache
+
+**File:** `src/queryCache.ts`
+
+`QueryCache` is the in-memory store of every [`Query`](./04-query) instance the [`QueryClient`](./02-query-client) has ever built. It extends `Subscribable` (see [`16-notify-manager`](./16-notify-manager) for how notifications are batched/scheduled) so you can subscribe globally to every cache event — added, removed, updated, observer-added, observer-removed, observer-results-updated — across all queries, which is exactly what devtools-style inspectors and global error/success handlers are built on.
+
+```typescript
+import { QueryCache } from '@headlesskit/query-core';
+
+const queryCache = new QueryCache({
+  onError: (error, query) => console.error(`Query ${String(query.queryKey)} failed:`, error),
+  onSuccess: (data, query) => console.log(`Query ${String(query.queryKey)} succeeded`),
+  onSettled: (data, error, query) => trackMetric(query.queryKey),
+});
+```
+
+## Signature
+
+```typescript
+new QueryCache(config?: QueryCacheConfig)
+```
+
+| Constructor option | Type | Description |
+|---|---|---|
+| `onError` | `(error: unknown, query: Query) => void` | Read by the underlying `Query` machinery (not invoked directly inside this file) after a fetch fails — a single place to handle every query error in the app, in addition to any per-query `onError`. |
+| `onSuccess` | `(data: unknown, query: Query) => void` | Fires after any query's fetch succeeds. |
+| `onSettled` | `(data, error, query) => void` | Fires after any query's fetch settles (success or error) regardless of outcome. |
+
+The constructor calls `super()` (initializing the inherited `Subscribable` — a `Set<QueryCacheListener>` of listeners), stores `config || {}` into `#config`, and initializes `#queries` as `new Map<string, Query>()`. `#queryClient` starts `undefined` and is only populated once `setQueryClient` is called (which `QueryClient`'s constructor does immediately upon creating/receiving a `QueryCache`).
+
+## Basic usage
+
+```typescript
+const query = queryClient.getQueryCache().find({ queryKey: ['posts'], exact: true });
+console.log(query?.state.status, query?.state.data);
+
+const allPostQueries = queryClient.getQueryCache().findAll({ queryKey: ['posts'] });
+console.log(allPostQueries.length);
+```
+
+## Advanced: a devtools-style global cache inspector
+
+Because every state transition, add, and removal funnels through `notify()`, you can build a live inspector panel by subscribing once at the cache level instead of per-query:
+
+```typescript
+interface CacheSnapshot {
+  queryHash: string;
+  queryKey: readonly unknown[];
+  status: string;
+  fetchStatus: string;
+  observerCount: number;
+}
+
+function createCacheInspector(queryClient: QueryClient) {
+  const cache = queryClient.getQueryCache();
+  const snapshot = new Map<string, CacheSnapshot>();
+
+  const sync = () => {
+    snapshot.clear();
+    cache.getAll().forEach((query) => {
+      snapshot.set(query.queryHash, {
+        queryHash: query.queryHash,
+        queryKey: query.queryKey,
+        status: query.state.status,
+        fetchStatus: query.state.fetchStatus,
+        observerCount: query.getObserversCount?.() ?? 0,
+      });
+    });
+  };
+
+  sync(); // seed with whatever's already cached
+
+  const unsubscribe = cache.subscribe((event) => {
+    // 'added'/'removed'/'updated' all carry `event.query`; re-sync is cheap
+    // because getAll() is just `[...this.#queries.values()]`.
+    sync();
+    render(snapshot, event.type);
+  });
+
+  return unsubscribe;
+}
+```
+
+Because `QueryCache.notify` wraps every dispatch in `notifyManager.batch()`, multiple state changes triggered synchronously (e.g. a `setQueriesData` call touching ten queries) collapse into far fewer inspector re-renders than there are individual cache mutations.
+
+## Advanced: cache-aware cleanup on logout
+
+A common real pattern: on logout, you want to drop all user-scoped queries without nuking globally-shared ones (e.g. feature flags, config). `findAll` with a `predicate` plus `remove` gives precise control beyond `clear()`:
+
+```typescript
+function clearUserData(queryClient: QueryClient) {
+  const cache = queryClient.getQueryCache();
+  const userScoped = cache.findAll({
+    predicate: (query) => query.queryKey[0] !== 'config' && query.queryKey[0] !== 'featureFlags',
+  });
+  userScoped.forEach((query) => cache.remove(query));
+}
+```
+
+Each `remove()` call calls `query.destroy()` before deleting it from the internal map and firing a `'removed'` event per query — so any subscriber-side cleanup (timers, abort controllers) tied to `destroy()` on the `Query`/`Removable` base runs deterministically as part of this loop.
+
+## Method-by-method reference
+
+### `getQueryClient()` / `setQueryClient(queryClient)`
+
+Plain getter/setter for the private `#queryClient` reference. `QueryClient`'s constructor calls `setQueryClient(this)` right after constructing or receiving a `QueryCache`, which is how `build()` (below) is able to call back into `client.defaultQueryOptions(...)` and `client.getQueryDefaults(...)` even though those are conceptually "client" concerns.
+
+### `build(client, options, state?)`
+
+```typescript
+build<TQueryFnData, TError, TData, TQueryKey>(
+  client: QueryClient,
+  options: QueryOptions<...>,
+  state?: QueryState<TData, TError>,
+): Query<...>
+```
+
+The get-or-create entry point used by `QueryClient.fetchQuery` (and therefore `ensureQueryData`, `prefetchQuery`, `fetchInfiniteQuery`):
+
+1. Reads `queryKey = options.queryKey!`.
+2. Computes `queryHash = options.queryHash ?? hashQueryKeyByOptions(queryKey, options)` — prefers an already-set hash (e.g. from `QueryClient.defaultQueryOptions`) over recomputing.
+3. Looks up `query = this.get(queryHash)`.
+4. **Only if not found**, constructs `new Query({ cache: this, queryKey, queryHash, options: client.defaultQueryOptions(options), state, defaultOptions: client.getQueryDefaults(queryKey) })` and calls `this.add(query)`. Note `options` is re-defaulted here via `client.defaultQueryOptions(options)` even though callers like `fetchQuery` already defaulted it once — `defaultQueryOptions` is idempotent (short-circuits on `_defaulted`), so this is safe but means the `Query` always receives a freshly-defaulted options object, not necessarily the exact object reference passed in.
+5. If an existing query is found, the passed-in `options`/`state` are **ignored entirely** — `build` never updates an existing `Query`'s options on a cache hit; that's the observer's job at fetch time.
+6. Returns the (possibly newly built) `query`.
+
+### `add(query)`
+
+```typescript
+add(query: Query): void
+```
+
+Only inserts if `!this.#queries.has(query.queryHash)` — adding a query whose hash is already present is a silent no-op (this is what makes `build`'s "construct-then-add" sequence safe even under re-entrancy). On a real insert, sets `#queries.set(query.queryHash, query)` then calls `this.notify({ type: 'added', query })`.
+
+### `remove(query)`
+
+```typescript
+remove(query: Query): void
+```
+
+Looks up `queryInMap = this.#queries.get(query.queryHash)`. **If nothing is found at that hash, the entire method is a no-op** — no `destroy()` call, no notification — even if you pass in a live `Query` object that simply isn't tracked under that hash. If found: always calls `query.destroy()` (regardless of whether `queryInMap === query`), then deletes the map entry only `if (queryInMap === query)` — guarding against removing a *different* query that happens to now occupy the same hash (e.g. a stale reference to an old query object that's since been replaced in the map). Finally calls `this.notify({ type: 'removed', query })` unconditionally once the `if (queryInMap)` branch is entered, even in the edge case where `queryInMap !== query` and the map entry was therefore not actually deleted.
+
+### `clear()`
+
+```typescript
+clear(): void
+```
+
+`notifyManager.batch(() => this.getAll().forEach((query) => this.remove(query)))` — snapshots all current queries via `getAll()` (a fresh array, so mutation of `#queries` during the loop is safe) and calls `remove` on each, batching notifications.
+
+### `get(queryHash)`
+
+```typescript
+get<TQueryFnData, TError, TData, TQueryKey>(queryHash: string): Query | undefined
+```
+
+Direct `#queries.get(queryHash)` — O(1) lookup by exact hash string. This is the method `QueryClient.getQueryData`/`setQueryData`/`getQueryState` all funnel through after computing the hash themselves.
+
+### `getAll()`
+
+```typescript
+getAll(): Array<Query>
+```
+
+`[...this.#queries.values()]` — returns a new array snapshot each call, safe to mutate/iterate while the cache changes underneath.
+
+### `find(filters)`
+
+```typescript
+find<TQueryFnData, TError, TData>(filters: QueryFilters & { queryKey: QueryKey }): Query | undefined
+```
+
+Defaults `exact: true` onto the filters (`{ exact: true, ...filters }` — so passing `exact: false` explicitly does still override the default since it comes after in the spread), then `getAll().find((query) => matchQuery(defaultedFilters, query))` — returns the **first** match in insertion order, not necessarily the most relevant one if multiple match.
+
+### `findAll(filters?)`
+
+```typescript
+findAll(filters: QueryFilters = {}): Array<Query>
+```
+
+If `Object.keys(filters).length > 0`, filters `getAll()` through `matchQuery(filters, query)` for every query; **if `filters` is empty (default), skips matching entirely and returns `getAll()` unfiltered** — meaning `findAll()` with no arguments is just an alias for `getAll()`, including no `exact`-default behavior (unlike `find`).
+
+### `notify(event)`
+
+```typescript
+notify(event: QueryCacheNotifyEvent): void
+```
+
+`notifyManager.batch(() => this.listeners.forEach((listener) => listener(event)))` — iterates the inherited `Subscribable.listeners` `Set` directly (not via any wrapper), batching delivery. This is the single choke point all six event types (`added`, `removed`, `updated`, `observerAdded`, `observerRemoved`, `observerResultsUpdated`) pass through — `'updated'` and the `observer*` events are dispatched from `Query`/`QueryObserver` code (not shown in this file) calling back into `cache.notify(...)`, while `'added'`/`'removed'` are dispatched directly by `add`/`remove` above.
+
+### `onFocus()`
+
+```typescript
+onFocus(): void
+```
+
+`notifyManager.batch(() => this.getAll().forEach((query) => query.onFocus()))` — delegates window-focus handling to every single cached query unconditionally; each `Query.onFocus()` independently decides (via its own observers' `shouldFetchOnWindowFocus()`) whether to actually refetch, and unconditionally resumes any paused retryer. This is called by `QueryClient.mount()`'s focus-manager subscription, after `resumePausedMutations()`.
+
+### `onOnline()`
+
+```typescript
+onOnline(): void
+```
+
+Identical structure to `onFocus()`, calling `query.onOnline()` on every cached query — each query's own `shouldFetchOnReconnect()` logic decides whether to refetch, and a paused retryer is resumed regardless.
+
+## Common pitfalls
+
+- **`remove(query)` is a silent no-op if the hash isn't tracked.** Holding onto a stale `Query` reference (e.g. captured in a closure before a `clear()` or a prior `remove()`) and calling `cache.remove(query)` again does nothing — no error, no event. Always re-fetch the current `Query` via `get(queryHash)`/`find()` if you're not sure it's still live.
+- **`findAll()` called with no arguments returns *every* query, not none** — an easy mistake when building a "remove some queries" helper: `findAll({})` and `findAll()` both behave as `getAll()`, since the `Object.keys(filters).length > 0` check skips filtering entirely for an empty object.
+- **`find()` defaults to `exact: true` but `findAll()` has no such default** — partial key matching is `findAll`'s default behavior (via `matchQuery`'s `partialMatchKey` fallback when `exact` isn't set), so `findAll({ queryKey: ['users'] })` matches `['users', 1]` too, while `find({ queryKey: ['users'] })` will only match a query whose key is exactly `['users']`.
+- **`build()` never updates an already-cached query's options on a cache hit.** If you call `queryClient.fetchQuery({ queryKey: ['x'], queryFn: newFn })` against an already-built query, the `newFn`/other options you passed are discarded by `build` — the existing `Query`'s options stand until something else (typically an active observer) re-applies new options.
+- **`remove()`'s notify fires even when the map delete didn't happen** — in the rare case where `queryInMap !== query` (a different object now occupies that hash), `destroy()` is still called on the *passed-in* query and a `'removed'` event still fires for it, even though the cache's map entry for that hash is untouched. Don't assume a `'removed'` event implies the hash is now absent from `getAll()`.
+- **`onFocus()`/`onOnline()` iterate every cached query, including ones with zero active observers** — there's no `isActive()` pre-filter at the cache level; each `Query` decides for itself whether any observer wants a refetch. With a very large cache this is an O(n) walk on every focus/reconnect event.

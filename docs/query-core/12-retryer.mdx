@@ -1,0 +1,245 @@
+# createRetryer
+
+**File:** `src/retryer.ts` (214 lines)
+
+The shared retry/cancel/pause/resume engine used by both `Query.fetch()` and [Mutation](./09-mutation)`.execute()`. Neither queries nor mutations implement their own retry loop — both build a `Retryer` via `createRetryer(config)` and delegate all backoff, network-awareness, and cancellation logic to it. This is the lowest-level piece of async control flow in `@headlesskit/query-core`; everything above it (`Query`, `Mutation`, observers) is bookkeeping around what this file produces.
+
+```typescript
+import { createRetryer, canFetch, CancelledError, isCancelledError } from '@headlesskit/query-core';
+```
+
+(`createRetryer` and friends are typically consumed internally rather than imported directly in application code — documented here for completeness and because its exact backoff/pause semantics directly govern observable behavior of queries and mutations.)
+
+## Signature
+
+```typescript
+function createRetryer<TData = unknown, TError = DefaultError>(
+  config: RetryerConfig<TData, TError>,
+): Retryer<TData>
+```
+
+### `RetryerConfig`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `fn` | `() => TData \| Promise<TData>` | The function to run (and re-run on retry). |
+| `initialPromise` | `Promise<TData>` (optional) | If provided, used **instead of** calling `fn()` on the very first attempt only (`failureCount === 0`) — subsequent retries always call `fn()`. |
+| `onCancel` | `(error: TError) => void` (optional) | Called synchronously inside `cancel()`, after the retryer's promise has been rejected with a `CancelledError`. |
+| `onFail` | `(failureCount: number, error: TError) => void` (optional) | Called each time an attempt fails and a retry *will* be scheduled (not called on the final, non-retried failure). |
+| `onPause` | `() => void` (optional) | Called when the retryer is about to await a pause (network offline / window unfocused / `canRun()` false). |
+| `onContinue` | `() => void` (optional) | Called when a pause ends and execution is about to resume — only if the retryer wasn't already resolved when the pause ended. |
+| `retry` | `boolean \| number \| (failureCount, error) => boolean` (optional) | Retry policy. Defaults to `environmentManager.isServer() ? 0 : 3` if omitted. |
+| `retryDelay` | `number \| (failureCount, error) => number` (optional) | Delay before each retry. Defaults to `defaultRetryDelay` (see formula below) if omitted. |
+| `networkMode` | `NetworkMode \| undefined` | `'online'` (default when `undefined`), `'always'`, or `'offlineFirst'` — governs `canFetch`/`canStart`/`canContinue`. |
+| `canRun` | `() => boolean` | Extra gate beyond network state — e.g. `Mutation.execute()` wires this to `mutationCache.canRun(this)` for scope-based serialization (see [MutationCache](./10-mutation-cache)). For queries this is effectively always `true`. |
+
+### Returned `Retryer<TData>`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `promise` | `Promise<TData>` | Resolves/rejects with the final outcome. |
+| `status()` | `() => 'pending' \| 'resolved' \| 'rejected'` | Current status of the internal thenable. |
+| `cancel(cancelOptions?)` | `(opts?: CancelOptions) => void` | Rejects the retryer (if not already settled) with a `CancelledError`. |
+| `continue()` | `() => Promise<unknown>` | Resumes a paused retryer; returns the same underlying `promise`. |
+| `cancelRetry()` | `() => void` | Sets a flag so the *next* scheduled retry is skipped — the in-flight attempt still runs to completion, but if it fails, it rejects instead of retrying. |
+| `continueRetry()` | `() => void` | Clears the `cancelRetry` flag. |
+| `canStart()` | `() => boolean` | `canFetch(networkMode) && config.canRun()` — whether the retryer could begin running right now. |
+| `start()` | `() => Promise<TData>` | Kicks off execution: runs immediately if `canStart()`, otherwise pauses first and runs once unpaused. |
+
+## Basic usage
+
+```typescript
+const retryer = createRetryer({
+  fn: () => fetch('/api/data').then((r) => r.json()),
+  retry: 3,
+  networkMode: 'online',
+  canRun: () => true,
+});
+
+const data = await retryer.start();
+```
+
+## Advanced: custom retry/backoff for a flaky API, cancellation, and network pause/resume
+
+### Exact default backoff formula (verified from source)
+
+```typescript
+function defaultRetryDelay(failureCount: number) {
+  return Math.min(1000 * 2 ** failureCount, 30000)
+}
+```
+
+This is used whenever `retryDelay` is not supplied. With `failureCount` starting at `0` and incrementing *after* each failed attempt (`failureCount++` happens right before `onFail` is invoked, and the delay for that attempt's retry is computed from the failure count *before* the increment — i.e. the first retry delay uses `failureCount = 0` → `1000 * 2**0 = 1000ms`, the second retry uses `failureCount = 1` → `2000ms`, then `4000ms`, `8000ms`, `16000ms`, and `30000ms` (capped) from the 5th retry onward.
+
+A custom strategy for a flaky API — say, retry up to 5 times with jittered exponential backoff, but stop retrying immediately on a 4xx:
+
+```typescript
+const retryer = createRetryer({
+  fn: () => fetch('/api/flaky').then((r) => {
+    if (!r.ok) throw new HttpError(r.status);
+    return r.json();
+  }),
+  retry: (failureCount, error) => {
+    if (error instanceof HttpError && error.status >= 400 && error.status < 500) {
+      return false; // don't retry client errors
+    }
+    return failureCount < 5;
+  },
+  retryDelay: (failureCount) => {
+    const base = Math.min(1000 * 2 ** failureCount, 30000);
+    return base + Math.random() * 300; // add jitter
+  },
+  networkMode: 'online',
+  canRun: () => true,
+});
+```
+
+### Exact retry decision logic
+
+On every rejection from `fn()` (or `initialPromise`), inside the `.catch` handler in `run()`:
+
+```typescript
+const retry = config.retry ?? (environmentManager.isServer() ? 0 : 3)
+const retryDelay = config.retryDelay ?? defaultRetryDelay
+const delay = typeof retryDelay === 'function' ? retryDelay(failureCount, error) : retryDelay
+const shouldRetry =
+  retry === true ||
+  (typeof retry === 'number' && failureCount < retry) ||
+  (typeof retry === 'function' && retry(failureCount, error))
+
+if (isRetryCancelled || !shouldRetry) {
+  reject(error)
+  return
+}
+
+failureCount++
+config.onFail?.(failureCount, error)
+```
+
+So: `retry: true` retries forever; `retry: <number>` retries while `failureCount < retry` (i.e. `retry: 3` allows 3 retries — 4 total attempts); `retry: false` (falls through all three boolean/number/function branches as falsy) never retries; a function gets full control per-attempt. If `isRetryCancelled` is `true` (set via `cancelRetry()`), the pending failure is rejected immediately regardless of `shouldRetry`.
+
+### Exact cancel-mid-fetch semantics
+
+```typescript
+const cancel = (cancelOptions?: CancelOptions): void => {
+  if (!isResolved()) {
+    const error = new CancelledError(cancelOptions) as TError
+    reject(error)
+    config.onCancel?.(error)
+  }
+}
+```
+
+`cancel()` only has an effect if the retryer's internal thenable hasn't already settled (`isResolved()` checks `thenable.status !== 'pending'`). It **immediately rejects** the retryer's promise with a `CancelledError` — it does **not** abort the underlying `fn()` call itself (there's no `AbortController` wiring in this file); if `fn()` is a `fetch()` that ignores cancellation, the network request keeps running in the background, it's just that the retryer's `promise` has already settled, so nothing downstream awaits its result anymore. `CancelledError` carries `revert` and `silent` flags from `CancelOptions`, used by `Query`/`Mutation` to decide whether to roll back optimistic state and whether to suppress error UI. `reject()` itself also calls `continueFn?.()` first if the retryer happened to be paused at cancel-time, so a paused-and-then-cancelled retryer doesn't hang forever waiting on its pause promise.
+
+`isCancelledError(value)` (deprecated in favor of `value instanceof CancelledError`) is a type-guard re-export for checking whether a caught error is a cancellation rather than a real failure.
+
+### Exact pause/resume interaction with `focusManager` / `onlineManager`
+
+Two distinct gates exist:
+
+```typescript
+const canContinue = () =>
+  focusManager.isFocused() &&
+  (config.networkMode === 'always' || onlineManager.isOnline()) &&
+  config.canRun()
+
+const canStart = () => canFetch(config.networkMode) && config.canRun()
+```
+
+```typescript
+export function canFetch(networkMode: NetworkMode | undefined): boolean {
+  return (networkMode ?? 'online') === 'online'
+    ? onlineManager.isOnline()
+    : true
+}
+```
+
+- **`canStart()`** (used by `start()` to decide whether to run immediately) only checks network mode via `canFetch` (online-ness) plus `config.canRun()` — it does **not** check `focusManager`. So a retryer can *start* even if the window is unfocused.
+- **`canContinue()`** (used after a retry's delay has elapsed, to decide whether to actually re-run `fn()` or pause first) additionally requires `focusManager.isFocused()` to be `true`. This means a retryer that is mid-retry-backoff will pause if the window loses focus, even though `networkMode` and connectivity haven't changed — focus state only gates *retries*, not the *initial* attempt.
+- For `networkMode: 'online'` (the default), both gates require `onlineManager.isOnline()`. For `'always'`, network state is ignored entirely (`canContinue`'s middle clause is short-circuited true by `config.networkMode === 'always'`; `canFetch` returns `true` unconditionally for any mode other than `'online'`). `'offlineFirst'` behaves like `'always'` for these specific checks — the offline-first distinction (try once even when offline, then fall back to pause-on-failure) is realized through this same `canFetch`/`canContinue` pair returning `true` for non-`'online'` modes, combined with the retry/backoff loop naturally pausing once the *first* attempt fails while offline.
+
+The actual pause mechanism:
+
+```typescript
+const pause = () => {
+  return new Promise((continueResolve) => {
+    continueFn = (value) => {
+      if (isResolved() || canContinue()) {
+        continueResolve(value)
+      }
+    }
+    config.onPause?.()
+  }).then(() => {
+    continueFn = undefined
+    if (!isResolved()) {
+      config.onContinue?.()
+    }
+  })
+}
+```
+
+`pause()` returns a promise that only resolves once `continueFn` is invoked **and** (`isResolved()` or `canContinue()`) is true. `continueFn` is invoked from the public `continue()` method on the returned `Retryer` (`continue: () => { continueFn?.(); return thenable }`) — this is exactly what `MutationCache.resumePausedMutations()` and `MutationCache.runNext()` call. **Critically, calling `continue()` does not unconditionally resume** — if `canContinue()` is still false (e.g. still offline), `continueResolve` is never called and the pause promise just keeps waiting; `continue()` only "wakes up" the pause check, it doesn't force resumption. There is no automatic subscription to `onlineManager`'s `online` event inside `retryer.ts` itself — resumption-on-reconnect is wired up one layer up (by whatever calls `.continue()` in response to an `online` event, e.g. `queryClient.resumePausedMutations()` triggered by a focus/online manager subscription elsewhere in the codebase), not by `createRetryer` automatically listening for it.
+
+The retry loop calls `pause()` only when `canContinue()` is false after the backoff `sleep(delay)` completes:
+
+```typescript
+sleep(delay)
+  .then(() => (canContinue() ? undefined : pause()))
+  .then(() => {
+    if (isRetryCancelled) {
+      reject(error)
+    } else {
+      run()
+    }
+  })
+```
+
+And `start()` itself pauses up front if `canStart()` is false before ever calling `run()`:
+
+```typescript
+start: () => {
+  if (canStart()) {
+    run()
+  } else {
+    pause().then(run)
+  }
+  return thenable
+}
+```
+
+## Method-by-method breakdown
+
+### `start()`
+
+Entry point. If `canStart()` is true, calls `run()` synchronously (within the same tick); otherwise calls `pause().then(run)` — the very first attempt is deferred until the pause condition clears. Always returns `thenable` (the same object as `.promise`) regardless of path.
+
+### `run()` (internal)
+
+No-ops if already resolved. Computes `promiseOrValue` from `config.initialPromise` (only on the very first call, `failureCount === 0`) or `config.fn()`, wrapping a synchronous throw from `fn()` into a rejected promise. On success, calls `resolve(value)`. On failure, runs the retry-decision logic described above; if retrying, increments `failureCount`, calls `onFail`, then `sleep(delay)` → conditionally `pause()` → re-invoke `run()` (or `reject(error)` if `isRetryCancelled` became true during the wait).
+
+### `resolve(value)` / `reject(value)` (internal)
+
+Both guard on `!isResolved()`. Both call `continueFn?.()` first (releasing any pending pause wait) before settling the `thenable` via `.resolve()`/`.reject()`. This ordering matters: a retryer that's paused and then resolved/rejected from outside (e.g. cancelled while paused) won't leave its pause promise dangling.
+
+### `cancelRetry()` / `continueRetry()`
+
+Toggle the `isRetryCancelled` boolean. Used by `Query`/`Mutation` to stop *future* retries (e.g. when a component unmounts) without necessarily cancelling the currently in-flight attempt the way `cancel()` does.
+
+### `canStart()` / `status()`
+
+Pure read-only checks — `canStart()` re-evaluates network/`canRun` state fresh on each call (not cached), `status()` returns the live `thenable.status`.
+
+## Common pitfalls
+
+- **`cancel()` does not abort the underlying request.** If `fn()` wraps a `fetch()` without an `AbortController`/`signal`, cancelling the retryer only stops *consumers* from seeing the result — the network call still completes server-side and the response is simply discarded. Wire your own `AbortSignal` into `fn()` if you need true request cancellation.
+- **Focus loss only pauses retries, not the initial attempt or already-in-flight `fn()` calls.** `canContinue()`'s `focusManager.isFocused()` check is consulted only between a failed attempt's backoff delay and the next attempt — don't expect a retryer to pause mid-execution of a single `fn()` call just because focus was lost.
+- **`continue()` doesn't force resumption if the underlying gate (`canContinue()`) is still false.** Calling `retryer.continue()` while still offline is a no-op from the pause's perspective — it relies on the calling code (e.g. an `online` event handler) to call `continue()` again once conditions have actually changed; the retryer itself does not poll or re-check after the first failed `continue()` invocation.
+- **The default `retry` count differs between server and browser environments** — `environmentManager.isServer() ? 0 : 3` — code that works (retries 3 times) in the browser will retry **zero** times during SSR unless `retry` is explicitly set, which can mask flaky-API issues in development (client-side) that then surface as hard failures during server rendering.
+- **`failureCount` is shared state across the whole retryer instance, not reset between pause/resume cycles** — a mutation that's paused-and-resumed several times due to flapping connectivity keeps accumulating `failureCount`, so its backoff delay (and the `retry: <number>` cutoff) keeps climbing across the whole session, not just within one offline episode.
+
+## See also
+
+- [MutationCache](./10-mutation-cache) — scope-based serialization (`canRun`) feeding into `Retryer`'s `start()`/`canStart()`.
+- [MutationObserver](./11-mutation-observer) — builds the `Mutation` whose `execute()` creates a `Retryer`.
+- [Overview](./01-overview) — `NetworkMode` table and high-level retry/pause options surface.

@@ -1,0 +1,151 @@
+# asyncThrottle
+
+**File:** `src/asyncThrottle.ts`
+
+A throttle for async functions: at most one in-flight call to `func`, and at most one scheduled call per `interval`. [`createAsyncStoragePersister`](02-create-async-storage-persister) uses it internally to rate-limit `storage.setItem` calls, but it's exported standalone for any "don't write more than once every N ms, but never lose the latest write" use case.
+
+```typescript
+import { asyncThrottle } from '@headlesskit/query-async-storage-persister';
+```
+
+## Signature
+
+```typescript
+function asyncThrottle<TArgs extends Array<unknown>>(
+  func: (...args: TArgs) => Promise<void>,
+  options?: { interval?: number; onError?: (error: unknown) => void },
+): (...args: TArgs) => void
+```
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `func` | `(...args: TArgs) => Promise<void>` | Yes | — | The async work to throttle. Must be a function — see [Validation](#validation). |
+| `options.interval` | `number` | No | `1000` | Minimum milliseconds between the start of one execution and the next being scheduled. |
+| `options.onError` | `(error: unknown) => void` | No | — | Called if `func` rejects. If omitted, rejections are silently discarded. |
+
+**Returns:** a function with the same parameter list as `func`, but returning `void` — it never gives you a promise or any way to know when (or whether) a particular call actually executed.
+
+## The bug this exists to prevent
+
+A naive throttle built on `setTimeout` alone breaks down for **async** work because it doesn't know when the previous call actually *finishes* — only when it was *started*. If `func` is slow (a flaky `AsyncStorage.setItem`, a network PUT), a timer-only throttle can fire a second call while the first is still pending, so two writes race and whichever resolves last "wins" unpredictably.
+
+`asyncThrottle` closes that gap with a `running` flag in addition to the timer:
+
+```typescript
+let running = false
+let lastArgs: TArgs | undefined
+
+const execute = async (...args: TArgs) => {
+  running = true
+  try {
+    await func(...args)
+  } catch (error) {
+    onError?.(error)
+  } finally {
+    running = false
+  }
+}
+
+let timeout: ReturnType<typeof setTimeout> | undefined
+
+return (...args: TArgs) => {
+  lastArgs = args
+
+  if (!running) {
+    if (timeout) {
+      clearTimeout(timeout)
+      timeout = undefined
+    }
+    timeout = setTimeout(() => {
+      timeout = undefined
+      if (lastArgs !== undefined) {
+        execute(...lastArgs)
+        lastArgs = undefined
+      }
+    }, interval)
+  }
+}
+```
+
+Walking through what actually happens on repeated calls:
+
+1. **Every call** updates `lastArgs` to the newest arguments, regardless of throttle state — the most recent call's arguments are always what eventually executes, never an older one.
+2. **If `running` is `true`** (an execution is currently awaiting `func`), the call does *nothing else* — no new timer is scheduled. The in-flight execution's `finally` block flips `running` back to `false`, but note: nothing re-triggers scheduling from there. A burst of calls that all arrive while `running === true` effectively wait for the *next* call after `running` goes false to kick off a new timer.
+3. **If `running` is `false`**, any existing pending `timeout` is cleared and a fresh one is scheduled for `interval` ms out — so rapid-fire calls keep pushing the execution further into the future (debounce-like behavior) as long as nothing is currently running.
+4. **When the timer fires**, it executes with whatever `lastArgs` is *at that moment* — not the arguments from the call that originally scheduled the timer — then clears `lastArgs`.
+5. **`execute` sets `running = true` before `await func(...)`** and resets it to `false` in a `finally`, so it flips back even if `func` throws/rejects.
+
+### Validation
+
+```typescript
+if (typeof func !== 'function') {
+  throw new TypeError('argument is not function')
+}
+```
+
+This check runs synchronously when `asyncThrottle(...)` is called (not when the returned function is invoked). Passing anything other than a function — `undefined`, a promise, an object — throws `TypeError: argument is not function` immediately at setup time.
+
+## Basic usage
+
+```typescript
+import { asyncThrottle } from '@headlesskit/query-async-storage-persister';
+
+const throttledSave = asyncThrottle(
+  async (data: unknown) => {
+    await expensiveAsyncWrite(data);
+  },
+  { interval: 2000 },
+);
+
+throttledSave({ id: 1 });
+throttledSave({ id: 2 }); // supersedes the first — only { id: 2 } will be written
+// ~2s later: expensiveAsyncWrite({ id: 2 }) runs; { id: 1 } is never written
+```
+
+## Advanced: observing failures, and why the persister doesn't
+
+`onError` is the only way to learn that `func` rejected — there is no other signal, since the wrapper returns `void`:
+
+```typescript
+const throttledPersist = asyncThrottle(
+  async (snapshot: unknown) => {
+    await storage.setItem('cache', JSON.stringify(snapshot));
+  },
+  {
+    interval: 1000,
+    onError: (error) => {
+      // createAsyncStoragePersister does NOT pass onError — failures there
+      // are silently swallowed. Roll your own asyncThrottle call if you
+      // need to observe storage write failures.
+      reportToCrashlytics(error);
+    },
+  },
+);
+```
+
+This is precisely the gap noted in [createAsyncStoragePersister](02-create-async-storage-persister#common-pitfalls): because that package builds its internal `asyncThrottle` without an `onError`, storage write errors disappear. If you need visibility into write failures for persistence, don't rely on `createAsyncStoragePersister` — call `asyncThrottle` yourself with `onError` wired up, and build a custom `Persister` around it.
+
+## Advanced: throttling a high-frequency event stream
+
+```typescript
+const throttledLog = asyncThrottle(
+  async (event: AnalyticsEvent) => {
+    await fetch('/api/events', { method: 'POST', body: JSON.stringify(event) });
+  },
+  { interval: 5000, onError: (e) => console.warn('event flush failed', e) },
+);
+
+window.addEventListener('scroll', () => {
+  throttledLog({ type: 'scroll', y: window.scrollY, at: Date.now() });
+});
+// At most one POST every 5s, always carrying the latest scroll position
+// at the moment the timer fires — not the position when scrolling started.
+```
+
+## Common pitfalls
+
+- **The returned function gives you no way to await or inspect a specific call.** It returns `void`, not a promise. You cannot `await throttledFn(...)` to know when *that* call's work finished — only `onError` (if provided) tells you anything about outcomes, and even then it doesn't tell you which call's arguments failed if multiple calls were collapsed.
+- **Calls that arrive while an execution is `running` don't get their own timer.** Per the logic above, a call during `running === true` only updates `lastArgs`; no `setTimeout` is scheduled by that call. Scheduling resumes only when some *subsequent* call arrives after `running` flips back to `false`. In a pathological case (work takes longer than `interval` and nothing calls the throttled function again right after it finishes), the last set of arguments before the gap can sit unexecuted indefinitely — there's no self-resuming timer.
+- **Only the most recent call's arguments ever run.** This is by design (it's a throttle, not a queue), but it means intermediate calls are not just delayed — they're discarded entirely. Don't use `asyncThrottle` where every call's side effect matters (e.g. an audit log of every event); use it only when "latest state wins" is correct, which is true for full-cache persistence but not for arbitrary event streams.
+- **Errors are silent by default.** Omitting `onError` means a permanently failing `func` (e.g. storage quota exceeded) fails the same way every time, forever, with zero observable signal anywhere in your application.
+- **Passing a non-function throws immediately, not lazily.** `asyncThrottle(maybeUndefinedFn)` throws `TypeError: argument is not function` at the call site where you construct the throttle — guard against `undefined`/`null` handlers before calling `asyncThrottle`, not after.

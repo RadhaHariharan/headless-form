@@ -1,0 +1,139 @@
+# MutationObserver
+
+**File:** `src/mutationObserver.ts` (132 lines)
+
+Observes a single logical mutation across its full lifecycle (`idle` → `pending` → `success`/`error`). Framework adapters (`useMutation` in React, etc.) wrap a `MutationObserver` instance and re-render whenever it notifies. Unlike [QueryObserver](./04-query), which watches a long-lived `Query` keyed by `queryKey`, `MutationObserver` does **not** look anything up by key — each call to `mutate()` builds a brand-new [Mutation](./09-mutation) instance via the [MutationCache](./10-mutation-cache).
+
+```typescript
+import { MutationObserver } from '@headlesskit/query-core';
+
+const observer = new MutationObserver(queryClient, {
+  mutationFn: (newPost: NewPost) =>
+    fetch('/api/posts', { method: 'POST', body: JSON.stringify(newPost) }).then((r) => r.json()),
+  onSuccess: () => queryClient.invalidateQueries({ queryKey: ['posts'] }),
+  onError: (error) => console.error(error),
+});
+
+const unsubscribe = observer.subscribe((result) => {
+  console.log(result.status); // 'idle' | 'pending' | 'success' | 'error'
+});
+
+await observer.mutate({ title: 'New post', body: '...' });
+
+observer.reset();
+unsubscribe();
+```
+
+## Signature
+
+```typescript
+new MutationObserver<TData, TError, TVariables, TContext>(
+  client: QueryClient,
+  options: MutationObserverOptions<TData, TError, TVariables, TContext>,
+)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `client` | `QueryClient` | Used to read `defaultMutationOptions`, and to reach `client.getMutationCache()` for `build()`. |
+| `options` | `MutationObserverOptions` | Same shape as [MutationOptions](./01-overview#mutationoptions) (`mutationFn`, `mutationKey`, `onMutate`, `onSuccess`, `onError`, `onSettled`, `retry`, `retryDelay`, `networkMode`, `gcTime`, `scope`, `meta`, `throwOnError`) — these become the **constructor-time** callbacks, distinct from the per-call options accepted by `mutate()` (see [Advanced](#advanced-call-time-vs-constructor-time-callbacks) below). |
+
+The constructor immediately calls `this.setOptions(options)`, `this.bindMethods()` (binds `mutate` and `reset` so they can be passed around as bare references, e.g. `<button onClick={observer.mutate}>`), and `this.#updateResult()` to compute an initial idle `MutationObserverResult` synchronously — there is no async setup, so `getCurrentResult()` is valid immediately after construction.
+
+## Basic usage
+
+```typescript
+const observer = new MutationObserver(queryClient, {
+  mutationFn: (id: string) => api.deletePost(id),
+});
+
+observer.subscribe((result) => {
+  if (result.isSuccess) console.log('deleted');
+  if (result.isError) console.log('failed:', result.error);
+});
+
+await observer.mutate('post-123');
+```
+
+## Advanced: call-time vs constructor-time callbacks
+
+`mutate(variables, options?)` accepts a second argument — `MutateOptions<TData, TError, TVariables, TContext>` (`onSuccess`, `onError`, `onSettled` only; **no** `onMutate`) — that's stored on `this.#mutateOptions` for that specific call. This is how a generic, reusable mutation (constructor-level callbacks doing cross-cutting concerns like cache invalidation) can be combined with call-site-specific behavior (e.g. closing a modal only for *this* particular submit):
+
+```typescript
+const observer = new MutationObserver(queryClient, {
+  mutationFn: (post: NewPost) => api.createPost(post),
+  // constructor-time: generic, always runs
+  onSuccess: () => queryClient.invalidateQueries({ queryKey: ['posts'] }),
+  onError: (error) => logToSentry(error),
+});
+
+// call-time: specific to this particular submission
+await observer.mutate(formValues, {
+  onSuccess: (data) => {
+    closeModal();
+    router.push(`/posts/${data.id}`);
+  },
+  onError: () => setFormError('Could not save — try again.'),
+});
+```
+
+**Important nuance verified against source:** `mutate()` only assigns `this.#mutateOptions = options` — it does **not** itself invoke either the call-time or constructor-time callbacks. Looking at `Mutation.execute()` (in `mutation.ts`), the callbacks that actually run, and their order, are: `mutationCache.config.onSuccess` → `mutation.options.onSuccess` (the constructor-time one, since `this.options` on `Mutation` is sourced from what `MutationObserver` passed into `cache.build(client, this.options)`) → `mutationCache.config.onSettled` is *not* what's called — re-reading the exact source: it is `this.options.onSuccess` then `this.options.onSettled` then the cache-level `onSettled`. **The call-time `#mutateOptions` passed to `mutate()` are stored on the observer but `Mutation.execute()` has no reference to them at all** — `cache.build(this.#client, this.options)` only forwards `this.options` (the constructor-time options), not `#mutateOptions`. Framework-adapter wrappers (e.g. `useMutation`) are expected to read `#mutateOptions` themselves via `onMutationUpdate`/result callbacks rather than relying on `Mutation` to invoke them — check your framework adapter's source for exactly where call-time callbacks are actually fired before assuming standard TanStack Query "mutate callbacks always run after mutationFn settles" semantics apply unchanged here.
+
+## Method-by-method breakdown
+
+### `setOptions(options)`
+
+```typescript
+setOptions(options: MutationObserverOptions<TData, TError, TVariables, TContext>): void
+```
+
+Resolves defaults via `this.#client.defaultMutationOptions(options)` and assigns to `this.options`. If the new options are **not** shallow-equal (`shallowEqualObjects`) to the previous ones, fires an `'observerAdded'` event on the mutation cache (reusing that event type rather than a dedicated "options changed" event — note this references `this.#currentMutation!` with a non-null assertion, so calling `setOptions` with changed options *before* any mutation has ever been built will pass `undefined` through that assertion). Also forwards the new options onto the currently-attached mutation, if any, via `this.#currentMutation?.setOptions(this.options)` — so changing options on the observer updates an in-flight mutation's options too (e.g. changing `retry` mid-flight before a retry fires).
+
+### `mutate(variables, options?)`
+
+```typescript
+mutate(variables: TVariables, options?: MutateOptions<TData, TError, TVariables, TContext>): Promise<TData>
+```
+
+1. Stores `options` on `this.#mutateOptions`.
+2. Detaches the observer from any previous mutation: `this.#currentMutation?.removeObserver(this)`.
+3. Builds a **new** `Mutation` via `this.#client.getMutationCache().build(this.#client, this.options)` and assigns it to `this.#currentMutation`.
+4. Attaches the observer to the new mutation: `this.#currentMutation.addObserver(this)`.
+5. Calls and returns `this.#currentMutation.execute(variables)`.
+
+Every `mutate()` call — even repeated calls on the same observer — discards the old `Mutation` (detaching this observer from it, which may make it eligible for cache GC if it has no other observers) and creates a fresh one. There is no built-in "ignore this call if one is already pending" guard at the observer level; that's left to the caller (or to scope-based serialization at the [MutationCache](./10-mutation-cache#advanced-scope-based-serialization-to-prevent-racing-submissions) level if `scope` is set).
+
+### `reset()`
+
+```typescript
+reset(): void
+```
+
+Sets `this.#currentMutation = undefined`, recomputes the result (which falls back to the default idle state — see below), and notifies subscribers. Does **not** call anything on the previous mutation (no `removeObserver`, no cancel) — it simply detaches the observer's *reference*. The underlying `Mutation` instance, if still running, continues unaffected; it just no longer has this observer watching it.
+
+### `getCurrentResult()`
+
+Returns the cached `#currentResult` computed by `#updateResult()` — synchronous, no recomputation cost on every call.
+
+### `onMutationUpdate(action)`
+
+Called by the attached `Mutation` (via `Mutation.dispatch()` → `observer.onMutationUpdate(action)` for every observer in `#observers`) on every state transition. Simply calls `#updateResult()` then `#notify()` — the `action` parameter is accepted but unused beyond triggering the refresh.
+
+### `#updateResult()` (private)
+
+Reads `this.#currentMutation?.state`, or — if there is no current mutation (initial state, or after `reset()`) — a literal default object: `{ context: undefined, data: undefined, error: null, failureCount: 0, failureReason: null, isPaused: false, status: 'idle', variables: undefined, submittedAt: 0 }`. Spreads that state plus derives `isIdle`/`isPending`/`isSuccess`/`isError` booleans from `status`, and attaches the bound `mutate` and `reset` functions onto the result object — so `result.mutate(...)` works directly off a snapshot.
+
+### `#notify()` (private)
+
+`notifyManager.batch(() => this.listeners.forEach(listener => listener(this.#currentResult)))` — standard batched fan-out, same pattern as [MutationCache.notify](./10-mutation-cache#notifyevent).
+
+### `onUnsubscribe()` (protected, from `Subscribable`)
+
+When the last listener unsubscribes (`!this.hasListeners()`), detaches from the current mutation: `this.#currentMutation?.removeObserver(this)`. This is what allows a `Mutation` with no observers left to become eligible for garbage collection via its `gcTime` (see [Mutation](./09-mutation)).
+
+## Common pitfalls
+
+- **Calling `mutate()` again while a previous call is still pending replaces the tracked mutation, but does not cancel the previous `mutationFn`.** The old `Mutation`'s `execute()` promise keeps running in the background (detached from this observer) — if it eventually resolves, nothing in this observer reflects it anymore, but any constructor-time `onSuccess`/`onError`/`onSettled` on `this.options` for that earlier run already fired/will still fire from inside `Mutation.execute()`, since those are read off the mutation's own (separately copied) `options`, not the observer's live `this.options`. Guard against overlapping calls in the UI layer (disable the submit button) if this matters.
+- **`reset()` does not stop or roll back an in-flight mutation** — it only blanks the observer's *view*. If you need to actually cancel work, you need the mutation's own cancellation hooks (there is no `cancel()` exposed on `MutationObserver` itself, unlike `QueryObserver`/`Query`).
+- **The call-time `MutateOptions` passed to `mutate()` are stored but not directly threaded through `Mutation.execute()`** — see [Advanced](#advanced-call-time-vs-constructor-time-callbacks) above. Don't assume a call-time `onSuccess` is guaranteed to fire from this layer of the source alone; verify how your framework adapter wires `#mutateOptions` in.
+- **`setOptions()` can fire an `'observerAdded'` cache event referencing `this.#currentMutation!` even when `#currentMutation` is `undefined`** (non-null assertion, not a real guard) — this only matters if you're writing a `MutationCache` subscriber that expects `event.mutation` to always be a valid `Mutation`; it's possible to receive `undefined` there before any `mutate()` call has happened.

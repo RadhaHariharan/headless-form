@@ -1,0 +1,332 @@
+# QueryClient
+
+**File:** `src/queryClient.ts`
+
+`QueryClient` is the coordination object every other piece of `@headlesskit/query-core` hangs off of. It owns a [`QueryCache`](./03-query-cache) and a `MutationCache`, holds default options, resolves per-key defaults, and exposes the imperative API (`fetchQuery`, `setQueryData`, `invalidateQueries`, etc.) that [`QueryObserver`](./05-query-observer) and framework hooks call into. This doc goes one level deeper than [the overview](./01-overview) — every method below is described by what it literally calls internally.
+
+```typescript
+import { QueryClient } from '@headlesskit/query-core';
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: { staleTime: 60_000, retry: 3 },
+    mutations: { retry: 0 },
+  },
+});
+```
+
+## Signature
+
+```typescript
+new QueryClient(config?: QueryClientConfig)
+```
+
+| Constructor option | Type | Default (from source) | Description |
+|---|---|---|---|
+| `queryCache` | `QueryCache` | `config.queryCache \|\| new QueryCache()` | The cache instance used to store `Query` objects. The client immediately calls `queryCache.setQueryClient(this)` so the cache can hand itself a back-reference. |
+| `mutationCache` | `MutationCache` | `config.mutationCache \|\| new MutationCache()` | The cache instance used to store `Mutation` objects. |
+| `defaultOptions` | `DefaultOptions` (`{ queries?, mutations? }`) | `config.defaultOptions \|\| {}` | Base options merged underneath every per-query/per-mutation default and the call-site options (see [`defaultQueryOptions`](#defaultqueryoptions) and [`defaultMutationOptions`](#defaultmutationoptions)). |
+
+Internally the constructor also initializes `#queryDefaults` and `#mutationDefaults` as empty `Map<string, ...>`s (keyed by hashed query/mutation key) and `#mountCount = 0`.
+
+## Basic usage
+
+```typescript
+import { QueryClient } from '@headlesskit/query-core';
+
+const queryClient = new QueryClient();
+queryClient.mount();
+
+const posts = await queryClient.fetchQuery({
+  queryKey: ['posts'],
+  queryFn: () => fetch('/api/posts').then((r) => r.json()),
+  staleTime: 10_000,
+});
+
+queryClient.setQueryData(['posts'], (old) => [...(old ?? []), { id: 99, title: 'New' }]);
+
+await queryClient.invalidateQueries({ queryKey: ['posts'] });
+
+queryClient.unmount();
+```
+
+## Advanced: optimistic update with rollback via cancelQueries + setQueryData
+
+A standard mutation flow: cancel any in-flight fetch for the affected query (so it can't race in and clobber the optimistic value), snapshot the previous data with `getQueryData`, write the optimistic value with `setQueryData`, then on error roll back with the snapshot and on settle invalidate to reconcile with the server.
+
+```typescript
+async function updatePostTitle(queryClient: QueryClient, postId: number, title: string) {
+  const queryKey = ['posts', postId];
+
+  // Stop any fetch that's already in flight for this query so it can't
+  // resolve after our optimistic write and overwrite it.
+  await queryClient.cancelQueries({ queryKey });
+
+  // Snapshot for rollback.
+  const previous = queryClient.getQueryData<Post>(queryKey);
+
+  // Optimistic write — setQueryData no-ops (returns undefined) if the
+  // functional updater itself returns undefined, so always return a value.
+  queryClient.setQueryData<Post>(queryKey, (old) =>
+    old ? { ...old, title } : old,
+  );
+
+  try {
+    const saved = await api.patchPost(postId, { title });
+    // Reconcile with the authoritative server response.
+    queryClient.setQueryData(queryKey, saved);
+  } catch (err) {
+    // Roll back to the snapshot. setQueryData is a no-op if `previous`
+    // is undefined (the updater would return undefined).
+    if (previous !== undefined) {
+      queryClient.setQueryData(queryKey, previous);
+    }
+    throw err;
+  } finally {
+    // refetchType defaults to 'active', so this only refetches the query
+    // if it currently has an observer mounted.
+    await queryClient.invalidateQueries({ queryKey, refetchType: 'active' });
+  }
+}
+```
+
+Because `setQueriesData` wraps its `findAll` + per-query `setQueryData` loop in `notifyManager.batch()`, and because `invalidateQueries` and `refetchQueries` also batch internally, you can wrap several of these calls yourself in `notifyManager.batch()` to collapse all resulting subscriber notifications (e.g. React re-renders) into one flush — see [`16-notify-manager`](./16-notify-manager).
+
+## Advanced: batch-prefetching with ensureQueryData
+
+`ensureQueryData` is useful for warm-up code paths (route loaders, server components) where you want "give me the data, fetching only if necessary," without manually checking `getQueryData` first:
+
+```typescript
+async function loadDashboard(queryClient: QueryClient, userId: number) {
+  const [user, posts, stats] = await Promise.all([
+    queryClient.ensureQueryData({
+      queryKey: ['user', userId],
+      queryFn: () => api.getUser(userId),
+    }),
+    queryClient.ensureQueryData({
+      queryKey: ['posts', userId],
+      queryFn: () => api.getPosts(userId),
+    }),
+    queryClient.ensureQueryData({
+      queryKey: ['stats', userId],
+      queryFn: () => api.getStats(userId),
+    }),
+  ]);
+  return { user, posts, stats };
+}
+```
+
+`ensureQueryData` calls `getQueryData` first; only if that returns `undefined` does it fall through to `fetchQuery` (which always returns a `Promise`, so the cached branch is wrapped in `Promise.resolve(cachedData)` to keep the return type uniform).
+
+## Method-by-method reference
+
+### Lifecycle: `mount` / `unmount`
+
+```typescript
+mount(): void
+unmount(): void
+```
+
+`mount()` increments `#mountCount`; the focus/online subscriptions are only attached when the count transitions from `0` to `1` (so nested `mount()` calls from multiple consumers are safe and idempotent). When it does attach: it calls `focusManager.subscribe(async (focused) => { if (focused) { await this.resumePausedMutations(); this.#queryCache.onFocus() } })`, and the analogous subscription on `onlineManager`. `unmount()` decrements the counter and, only when it reaches exactly `0`, calls both stored unsubscribe functions and clears them to `undefined`. Calling `unmount()` more times than `mount()` is **not** guarded — `#mountCount` can go negative, and since the unsubscribe refs are already cleared after the first balanced unmount, further calls are harmless no-ops.
+
+### `isFetching(filters?)`
+
+```typescript
+isFetching(filters?: QueryFilters): number
+```
+
+Returns `this.#queryCache.findAll({ ...filters, fetchStatus: 'fetching' }).length` — i.e. it forces `fetchStatus: 'fetching'` into the filter object regardless of what you passed, overriding any `fetchStatus` you supplied.
+
+### `isMutating(filters?)`
+
+```typescript
+isMutating(filters?: { status?: 'pending' }): number
+```
+
+Same pattern against the mutation cache: forces `status: 'pending'` into the filter, so the `status` field in the argument is always overwritten.
+
+### `getQueryData(queryKey)`
+
+```typescript
+getQueryData<TData = unknown>(queryKey: QueryKey): TData | undefined
+```
+
+Calls `defaultQueryOptions({ queryKey })` to compute the hash (this is how a raw `QueryKey` is turned into the same hash the cache uses), looks the query up via `queryCache.get(options.queryHash!)`, and returns `?.state.data`. If no query with that hash exists, returns `undefined`.
+
+### `ensureQueryData(options)`
+
+```typescript
+ensureQueryData(options: FetchQueryOptions_<...>): Promise<TData>
+```
+
+`const cachedData = this.getQueryData(options.queryKey!); if (cachedData !== undefined) return Promise.resolve(cachedData); return this.fetchQuery(options);` — a cache hit short-circuits entirely; a miss delegates fully to `fetchQuery` (so it inherits `fetchQuery`'s staleness check, retry defaulting, etc. — see below).
+
+### `getQueriesData(filters)`
+
+```typescript
+getQueriesData<TData = unknown>(filters: QueryFilters): Array<[QueryKey, TData | undefined]>
+```
+
+`queryCache.findAll(filters).map(({ queryKey, state }) => [queryKey, state.data])` — reads `state.data` directly off each matched `Query`, no hashing/defaulting step (unlike `getQueryData`).
+
+### `setQueryData(queryKey, updater, options?)`
+
+```typescript
+setQueryData<TQueryFnData>(
+  queryKey: QueryKey,
+  updater: Updater<TData | undefined, TData | undefined>,
+  options?: SetDataOptions,
+): TData | undefined
+```
+
+1. Computes the hash via `defaultQueryOptions({ queryKey })` and looks up the existing `Query` via `queryCache.get`.
+2. Reads `prevData = query?.state.data` (so if the query doesn't exist yet, `prevData` is `undefined` — this method never creates a query).
+3. Computes `data = functionalUpdate(updater, prevData)` — calls `updater(prevData)` if it's a function, otherwise uses it directly.
+4. **If `data === undefined`, returns `undefined` immediately and does nothing else** — this is the most important behavioral detail: an updater that returns `undefined` is treated as "no update," and no query is created or mutated, even if one already existed.
+5. Only if a `query` was found does it call `query.setState({ data, ...options, dataUpdatedAt: options?.updatedAt ?? Date.now(), status: 'success', error: null })`. If no matching query exists in the cache, `setQueryData` computes `data` and returns it, but **never creates a `Query` object** — the value is not actually cached anywhere.
+
+### `setQueriesData(filters, updater, options?)`
+
+```typescript
+setQueriesData<TData>(filters, updater, options?): Array<[QueryKey, TData | undefined]>
+```
+
+Wraps the whole operation in `notifyManager.batch()`: `queryCache.findAll(filters).map(({ queryKey }) => [queryKey, this.setQueryData(queryKey, updater, options)])` — i.e. it delegates to `setQueryData` once per matched query, so all the same caveats (undefined-updater no-op) apply per-query, and all resulting notifications are flushed together as one batch.
+
+### `getQueryState(queryKey)`
+
+```typescript
+getQueryState<TData, TError>(queryKey: QueryKey): QueryState<TData, TError> | undefined
+```
+
+Same hash-then-lookup pattern as `getQueryData`, but returns the full `query.state` object instead of just `state.data`.
+
+### `removeQueries(filters?)`
+
+```typescript
+removeQueries(filters?: QueryFilters): void
+```
+
+`notifyManager.batch(() => queryCache.findAll(filters).forEach(query => queryCache.remove(query)))`. Delegates entirely to `QueryCache.remove` (see [`03-query-cache`](./03-query-cache)) for each match — no special-casing here.
+
+### `resetQueries(filters?, options?)`
+
+```typescript
+resetQueries(filters?: QueryFilters, options?: ResetOptions): Promise<void>
+```
+
+Builds `refetchFilters = { type: 'active', ...filters }` (so caller-supplied `filters.type`, if present, overrides the `'active'` default — object spread order). Inside `notifyManager.batch()`: for every query matched by the **original** `filters` (not `refetchFilters`), calls `query.setState(query.initialState)` to reset state back to its construction-time initial state, then returns `this.refetchQueries(refetchFilters, options)`. Note the asymmetry: the reset step uses `filters` as given, while the follow-up refetch defaults `type` to `'active'` unless you explicitly set it.
+
+### `cancelQueries(filters?, cancelOptions?)`
+
+```typescript
+cancelQueries(filters?: QueryFilters, cancelOptions?: CancelOptions): Promise<void>
+```
+
+Defaults `cancelOptions` to `{ revert: true, ...cancelOptions }` — so cancellation reverts query state to its pre-fetch value by default unless you explicitly pass `revert: false`. Inside `notifyManager.batch()`, maps every matched query through `query.cancel(defaultedCancelOptions)` (each `Query.cancel` delegates to its internal retryer's `cancel()`, passing through `revert`/`silent`). The resulting promises are awaited with `Promise.all(promises).then(noop).catch(noop)` — **errors from cancellation are always swallowed**, this method never rejects.
+
+### `invalidateQueries(filters?, options?)`
+
+```typescript
+invalidateQueries(filters?: InvalidateQueryFilters, options?: InvalidateOptions): Promise<void>
+```
+
+Inside `notifyManager.batch()`: calls `query.invalidate()` on every match (sets `state.isInvalidated = true` via the query's internal reducer — see `Query.invalidate`/`Query.isStaleByTime`, [`04-query`](./04-query)). If `filters.refetchType === 'none'`, returns `Promise.resolve()` immediately — invalidation happens but nothing is refetched. Otherwise builds `refetchFilters = { ...filters, type: filters.refetchType ?? filters.type ?? 'active' }` and delegates to `refetchQueries`. The precedence is exactly: explicit `refetchType` wins, else explicit `type`, else `'active'`.
+
+### `refetchQueries(filters?, options?)`
+
+```typescript
+refetchQueries(filters?: QueryFilters, options?: RefetchOptions_): Promise<void>
+```
+
+Defaults `fetchOptions = { cancelRefetch: true, ...options }`. Inside `notifyManager.batch()`: takes `queryCache.findAll(filters)`, **filters out disabled queries** (`!query.isDisabled()`), then for each remaining query calls `query.fetch(undefined, fetchOptions)`. If `!fetchOptions.throwOnError`, each promise is wrapped with `.catch(noop)` so individual fetch failures don't reject the aggregate. Critically: if a query's `fetchStatus === 'paused'` (i.e. it's network-paused, e.g. offline with `networkMode: 'online'`), the per-query promise is replaced with `Promise.resolve()` — **a paused query's fetch is fired but not awaited**, so `refetchQueries` can resolve before a paused fetch ever completes. The final `Promise.all(promises).then(noop)` is *not* wrapped in `.catch` at this layer, but `throwOnError`-respecting catches happen per-promise above.
+
+### `fetchQuery(options)`
+
+```typescript
+fetchQuery<TQueryFnData, TError, TData, TQueryKey>(options): Promise<TData>
+```
+
+1. `defaultedOptions = this.defaultQueryOptions(options)`.
+2. If `defaultedOptions.retry === undefined`, **forces it to `false`** — this is a key difference from observer-driven fetches: `fetchQuery` does not retry by default unless you explicitly set `retry` on the call (the global default-options `retry` for queries is irrelevant here unless it survived into `options.retry` before defaulting... actually since `defaultQueryOptions` merges `#defaultOptions.queries` first, a global `retry` setting *would* flow through `defaultedOptions.retry` and only get overridden to `false` if it's still `undefined` after that merge).
+3. `query = queryCache.build(this, defaultedOptions)` — gets-or-creates the `Query` (see [`03-query-cache`](./03-query-cache) `build`).
+4. Returns `query.fetch(defaultedOptions)` if `query.isStaleByTime(resolveStaleTime(defaultedOptions.staleTime, query))` is true, **otherwise returns `Promise.resolve(query.state.data)` without fetching at all** — this is the "fetch only if stale" behavior described in the overview, made precise: staleness is computed via the same `isStaleByTime` used everywhere else, with `staleTime` resolved as a function of the query if a function was supplied.
+
+### `prefetchQuery(options)`
+
+```typescript
+prefetchQuery(options): Promise<void>
+```
+
+`this.fetchQuery(options).then(noop).catch(noop)` — strictly a fire-and-forget wrapper; both success and failure are discarded. Errors thrown by the underlying fetch never propagate, by design.
+
+### `fetchInfiniteQuery(options)`
+
+```typescript
+fetchInfiniteQuery(options): Promise<TData>
+```
+
+Mutates `options.behavior = infiniteQueryBehavior(options.maxPages)` (a module-local function building an `onFetch` hook that drives the page-fetching loop / `getNextPageParam`/`getPreviousPageParam` logic and forward/backward pagination), then calls `this.fetchQuery(options)` — all the staleness/retry/build logic of `fetchQuery` applies identically; the only difference is the injected `behavior.onFetch` that the underlying `Query`'s fetch context invokes to assemble `{ pages, pageParams }` instead of a single page of data.
+
+### `prefetchInfiniteQuery(options)`
+
+`this.fetchInfiniteQuery(options).then(noop).catch(noop)` — same swallow-everything pattern as `prefetchQuery`.
+
+### `resumePausedMutations()`
+
+```typescript
+resumePausedMutations(): Promise<unknown>
+```
+
+Only calls `this.#mutationCache.resumePausedMutations()` if `onlineManager.isOnline()` is currently `true`; otherwise returns `Promise.resolve()` without touching the mutation cache. This is the method `mount()`'s focus/online subscriptions call before triggering `queryCache.onFocus()`/`onOnline()`, so paused mutations always get first crack at resuming before queries do.
+
+### `getQueryCache()` / `getMutationCache()`
+
+Plain getters returning the private `#queryCache` / `#mutationCache` instances — no defaulting or copying.
+
+### `getDefaultOptions()` / `setDefaultOptions(options)`
+
+`getDefaultOptions` returns `#defaultOptions` by reference (not a copy — mutating the returned object affects the client). `setDefaultOptions` does a full replacement: `this.#defaultOptions = options` — it does **not** merge with the previous value, so calling it with a partial `DefaultOptions` drops whatever wasn't specified.
+
+### `setQueryDefaults(queryKey, options)` / `getQueryDefaults(queryKey)`
+
+`setQueryDefaults` stores into `#queryDefaults` keyed by `hashQueryKeyByOptions(queryKey)` (note: hashed with **no** options object, so it uses the default `hashKey` function regardless of any custom `queryKeyHashFn` you might set elsewhere), merging `{ ...existingEntryForThisHash, ...options, queryKey }` — repeated calls for the same key accumulate/override fields rather than replace wholesale.
+
+`getQueryDefaults` does **not** do a hash lookup — it iterates every entry in `#queryDefaults` and calls `partialMatchKey(queryKey, queryDefault.queryKey)` for each, `Object.assign`-ing every match into an accumulator `result`. This means: (a) it's O(n) over all registered defaults, not O(1); (b) **multiple registered defaults can match the same queryKey** (since `partialMatchKey` is a subset match — e.g. defaults registered for `['users']` match a lookup for `['users', 1]`), and later-iterated matches' fields win via `Object.assign` overwrite, with `Map` iteration order being insertion order.
+
+### `setMutationDefaults(mutationKey, options)` / `getMutationDefaults(mutationKey)`
+
+Same pattern as the query-defaults pair, keyed by `hashQueryKeyByOptions(mutationKey)`. The one functional difference: `getMutationDefaults` returns `undefined` if the accumulated `result` has zero keys (`Object.keys(result).length > 0 ? result : undefined`), whereas `getQueryDefaults` always returns an object (possibly `{}`) and never `undefined`.
+
+### `defaultQueryOptions(options)`
+
+The central option-resolution method, called by nearly every other method above (`getQueryData`, `setQueryData`, `fetchQuery`, etc.):
+
+1. **Short-circuit:** if `options._defaulted` is already truthy, returns `options` unchanged — defaulting is idempotent and a previously-defaulted options object is never re-processed.
+2. Otherwise builds `defaultedOptions` by spreading, in order: `#defaultOptions.queries` → `getQueryDefaults(options.queryKey)` (only if `options.queryKey` is set) → `options` itself → `{ _defaulted: true }`. Spread order means call-site `options` always wins over registered defaults, which win over global `#defaultOptions.queries`.
+3. If `defaultedOptions.queryHash` is falsy, computes it via `hashQueryKeyByOptions(defaultedOptions.queryKey!, defaultedOptions)` — this call **does** pass the full options object, so a custom `queryKeyHashFn` on the options is honored here (unlike the defaults-Map hashing above).
+4. If `refetchOnReconnect` is `undefined`, defaults it to `networkMode !== 'always'` — i.e. `networkMode: 'always'` queries do not auto-refetch on reconnect by default.
+5. If `throwOnError` is `undefined`, defaults it to `!!suspense` — Suspense-enabled queries throw on error by default; non-Suspense queries don't.
+6. If `staleTime` is neither a `number` nor a `function`, forces it to `0` — guards against `undefined`/other garbage values flowing through.
+
+### `defaultMutationOptions(options?)`
+
+Mirrors `defaultQueryOptions` but simpler: short-circuits on `options?._defaulted`; otherwise spreads `#defaultOptions.mutations` → `getMutationDefaults(options?.mutationKey)` (only if `mutationKey` is set) → `options` → `{ _defaulted: true }`. No hash computation, no `refetchOnReconnect`/`throwOnError`/`staleTime` post-processing — mutations don't have those concepts.
+
+### `clear()`
+
+```typescript
+clear(): void
+```
+
+`this.#queryCache.clear(); this.#mutationCache.clear()` — removes every query and every mutation from both caches (see [`QueryCache.clear`](./03-query-cache#clear)). Unlike `removeQueries()`, this is unconditional and untargeted — no filters.
+
+## Common pitfalls
+
+- **`setQueryData` silently no-ops if the updater returns `undefined`** — `if (data === undefined) return undefined` happens before any cache write. A common bug: `setQueryData(key, (old) => old?.items.filter(...))` where `old` is `undefined` on first call produces `undefined` and writes nothing, leaving you wondering why the cache "didn't update."
+- **`setQueryData` never creates a query that doesn't already exist.** It computes and returns the would-be value, but the `if (query) { query.setState(...) }` guard means an absent query is left absent. Use `fetchQuery`/`prefetchQuery` (or `queryCache.build`) first if you need the entry to exist.
+- **`fetchQuery` forces `retry: false` when `retry` is `undefined` after merging defaults** — if you expect global `defaultOptions.queries.retry` to apply to a direct `fetchQuery` call and it doesn't seem to retry, check whether `retry` actually survived the merge as something other than `undefined`; the override only triggers on a strict `undefined`, not on falsy values like `0` or `false` (those are already "no retry" anyway, so this mostly matters when you expected inherited retry behavior).
+- **`refetchQueries` resolves immediately for paused queries** without waiting for the underlying fetch to ever complete (`fetchStatus === 'paused'` queries are mapped to `Promise.resolve()`). Awaiting `refetchQueries()` is not a guarantee that paused/offline queries have updated data by the time it resolves.
+- **`getQueryDefaults`/`getMutationDefaults` do partial/subset key matching across *all* registered defaults**, not an exact lookup — registering defaults for `['users']` will also apply to `['users', 1]`, `['users', 1, 'posts']`, etc. If two registered prefixes both match a key, later-inserted entries in the `Map` win on overlapping fields via `Object.assign`.
+- **`setDefaultOptions` replaces, it does not merge.** Calling it a second time with only `{ queries: {...} }` drops any previously-set `mutations` defaults entirely.
+- **`mount()`/`unmount()` reference counting has no floor check** — calling `unmount()` more times than `mount()` decrements `#mountCount` below zero without error; it's harmless only because the unsubscribe refs are already `undefined` after the first balanced pair.

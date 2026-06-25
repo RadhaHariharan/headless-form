@@ -197,7 +197,8 @@ function parseHash() {
   if (!raw) return { pkg: null, doc: null, heading: null }
 
   const [pathPart, heading = null] = raw.split(':')
-  const [pkg, doc = null] = pathPart.split('/')
+  const [pkg, ...docParts] = pathPart.split('/')
+  const doc = docParts.length ? docParts.join('/') : null
   return { pkg: pkg || null, doc, heading }
 }
 

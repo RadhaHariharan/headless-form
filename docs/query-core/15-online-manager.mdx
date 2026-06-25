@@ -1,0 +1,137 @@
+# onlineManager
+
+**File:** `src/onlineManager.ts` (63 lines)
+
+Tracks network connectivity and notifies subscribers when it changes. Drives `refetchOnReconnect` and the `'online'` `networkMode` gate that decides whether a fetch is attempted immediately or paused.
+
+```typescript
+import { onlineManager, OnlineManager } from '@headlesskit/query-core';
+```
+
+## Signature
+
+`onlineManager` is a singleton instance of `OnlineManager`, which extends [`Subscribable<Listener>`](./17-subscribable) where `Listener = (online: boolean) => void`.
+
+| Member | Signature | Description |
+|--------|-----------|--------------|
+| `setEventListener` | `(setup: SetupFn) => void` | Replace the default browser `online`/`offline` detection with a custom setup function |
+| `setOnline` | `(online: boolean) => void` | Manually force the online state (no "reset to automatic" mode — see pitfalls) |
+| `isOnline` | `() => boolean` | Current online state |
+| `subscribe` (inherited) | `(listener: Listener) => () => void` | Register a listener; lazily attaches the underlying event listener on first subscriber |
+
+```typescript
+type SetupFn = (setOnline: (online: boolean) => void) => (() => void) | undefined
+```
+
+## Basic usage
+
+```typescript
+import { onlineManager } from '@headlesskit/query-core';
+
+const unsubscribe = onlineManager.subscribe((online) => {
+  console.log('online:', online);
+});
+
+console.log(onlineManager.isOnline()); // true (default)
+
+unsubscribe();
+```
+
+## Advanced: NetInfo-based detection and manual overrides for tests
+
+The built-in setup only wires up DOM `online`/`offline` window events, gated by `typeof window !== 'undefined' && window.addEventListener` — there is no React Native detection out of the box. Swap in `@react-native-community/netinfo`:
+
+```typescript
+import NetInfo from '@react-native-community/netinfo';
+import { onlineManager } from '@headlesskit/query-core';
+
+onlineManager.setEventListener((setOnline) => {
+  return NetInfo.addEventListener((state) => {
+    setOnline(!!state.isConnected);
+  });
+});
+```
+
+`NetInfo.addEventListener` already returns its own unsubscribe function, so it can be returned directly as the cleanup — `setEventListener` stores whatever your `setup` function returns as `#cleanup` and invokes it the next time the listener is replaced or the last subscriber unsubscribes.
+
+For tests, skip the event-listener mechanism entirely and drive the manager directly:
+
+```typescript
+// Force "offline" for a test, observe that mutations pause
+onlineManager.setOnline(false);
+expect(queryClient.isMutating()).toBe(0);
+
+// Restore
+onlineManager.setOnline(true);
+```
+
+Unlike `focusManager.setFocused`, there is no `undefined`/"automatic" sentinel for `setOnline` — it's a plain `boolean` parameter, so the only way to return to browser-driven detection after a manual override is to call `setEventListener` again (which re-invokes your setup function) or simply call `setOnline` with whatever value matches reality going forward.
+
+## Method-by-method breakdown
+
+### Constructor / default `#setup`
+
+```typescript
+if (typeof window !== 'undefined' && window.addEventListener) {
+  const onlineListener = () => onOnline(true)
+  const offlineListener = () => onOnline(false)
+  window.addEventListener('online', onlineListener, false)
+  window.addEventListener('offline', offlineListener, false)
+  return () => {
+    window.removeEventListener('online', onlineListener)
+    window.removeEventListener('offline', offlineListener)
+  }
+}
+return
+```
+
+Two separate listeners are attached — `'online'` calls the setup callback with `true`, `'offline'` with `false`. In a non-browser environment the guard fails, no listeners attach, and `undefined` is returned (no cleanup function).
+
+### `#online` initial value
+
+```typescript
+#online = true
+```
+
+Unlike `FocusManager`'s `#focused` (which starts `undefined`, deferring to `document.visibilityState`), `OnlineManager` initializes `#online = true` directly — there's no document-equivalent fallback check inside `isOnline()`. This means in a server/Node environment with no manual override, `isOnline()` returns `true` simply because that's the field's initial value, not because of any runtime connectivity check.
+
+### `onSubscribe()` / `onUnsubscribe()` (protected, override `Subscribable`)
+
+Identical pattern to `FocusManager`: `onSubscribe` calls `setEventListener(#setup)` only if `#cleanup` isn't already set (lazy, idempotent attach on first subscriber); `onUnsubscribe` calls `#cleanup?.()` and clears it only once `hasListeners()` is `false` (last unsubscribe).
+
+### `setEventListener(setup)`
+
+Stores `setup`, calls the existing `#cleanup` (if any), then calls `setup(this.setOnline.bind(this))` and stores the result as the new `#cleanup`. Note the callback passed to your setup function **is `setOnline` itself**, bound — there's no intermediate boolean-vs-undefined branching like `FocusManager` has; whatever you call it with becomes the new online state verbatim.
+
+### `setOnline(online)`
+
+```typescript
+const changed = this.#online !== online
+if (changed) {
+  this.#online = online
+  this.listeners.forEach((listener) => listener(online))
+}
+```
+
+No-ops if `online` strictly equals the current value — calling `setOnline(true)` when already online does not notify listeners. Listeners are called directly here with the raw `online` argument (no separate `onOnline()` recompute step the way `FocusManager.onFocus()` recomputes `isFocused()` before notifying).
+
+### `isOnline()`
+
+```typescript
+return this.#online
+```
+
+Always just the current field value — set either by the active event listener calling back into `setOnline`, or by a manual `setOnline` call. No environment-detection fallback at read-time (contrast with `FocusManager.isFocused()`'s `document.visibilityState` fallback).
+
+## Cross-links
+
+- [Overview — OnlineManager section](./01-overview)
+- [focusManager](./14-focus-manager) — same `Subscribable`-based shape; compare the default-value and fallback differences noted above
+- [Subscribable](./17-subscribable) — shared base class
+
+## Common pitfalls
+
+- **No "automatic" reset for `setOnline`, unlike `focusManager.setFocused(undefined)`.** Once you manually call `setOnline(false)` for a test, the manager stays manually pinned until you call `setOnline` again or replace the listener with `setEventListener` — there's no sentinel value to fall back to live detection.
+- **`isOnline()` defaults to `true` everywhere, including Node/SSR**, purely because `#online` is initialized to `true` — there is no "are we actually connected" check happening; if your server-side code path checks `onlineManager.isOnline()` expecting it to reflect real connectivity, it will always say yes unless something has explicitly called `setOnline(false)`.
+- **No built-in React Native support** — same gap as `focusManager`: the default setup only wires DOM `online`/`offline` events behind a `window.addEventListener` guard, so React Native needs an explicit `setEventListener(NetInfo...)` call.
+- **Listener calls are not deduped across repeated identical states** — but they ARE deduped against the *previous* state via the `changed` check, so rapid-fire `online`/`offline` browser events that don't actually change the resolved boolean won't cause redundant notifications, only a true flip does.

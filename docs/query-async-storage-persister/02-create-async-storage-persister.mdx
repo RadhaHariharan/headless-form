@@ -1,0 +1,180 @@
+# createAsyncStoragePersister
+
+**File:** `src/index.ts`
+
+Builds a [`Persister`](../query-persist-client-core/01-overview) (`persistClient` / `restoreClient` / `removeClient`) backed by any async key-value store — React Native `AsyncStorage`, IndexedDB wrappers, or a custom remote backend. Writes are throttled internally via [asyncThrottle](03-async-throttle); reads and removals are not.
+
+```typescript
+import { createAsyncStoragePersister } from '@headlesskit/query-async-storage-persister';
+```
+
+## Signature
+
+```typescript
+function createAsyncStoragePersister(
+  options: AsyncStoragePersisterOptions,
+): Persister
+```
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `storage` | `AsyncStorage \| undefined \| null` | Yes | — | The backing store. If falsy, every returned method is a no-op. |
+| `serialize` | `(client: PersistedClient) => string` | No | `JSON.stringify` | Converts the snapshot to a string before `storage.setItem`. |
+| `deserialize` | `(cachedString: string) => PersistedClient` | No | `JSON.parse` | Converts the stored string back into a `PersistedClient`. |
+| `key` | `string` | No | `'REACT_QUERY_OFFLINE_CACHE'` | The storage key used for `getItem`/`setItem`/`removeItem`. |
+| `throttleTime` | `number` | No | `1000` | Minimum interval (ms) the underlying `asyncThrottle` waits between actual `setItem` calls. |
+
+**Returns:** a `Persister`:
+
+```typescript
+interface Persister {
+  persistClient(persistedClient: PersistedClient): Promise<void>
+  restoreClient(): Promise<PersistedClient | undefined>
+  removeClient(): Promise<void>
+}
+```
+
+### The `AsyncStorage` shape it expects
+
+```typescript
+interface AsyncStorage {
+  getItem: (key: string) => Promise<string | null | undefined>
+  setItem: (key: string, value: string) => Promise<unknown>
+  removeItem: (key: string) => Promise<void>
+}
+```
+
+Anything satisfying this (React Native's `AsyncStorage`, `idb-keyval`, a `fetch`-backed shim) works without an adapter layer.
+
+## Basic usage
+
+```typescript
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { createAsyncStoragePersister } from '@headlesskit/query-async-storage-persister';
+
+const persister = createAsyncStoragePersister({
+  storage: AsyncStorage,
+});
+
+// Persister methods are called by query-persist-client-core, but you
+// can also drive them by hand:
+await persister.persistClient({
+  timestamp: Date.now(),
+  buster: 'v1',
+  clientState: { queries: [], mutations: [] },
+});
+
+const restored = await persister.restoreClient();
+await persister.removeClient();
+```
+
+## Advanced: wiring into a QueryClient's full persistence lifecycle
+
+The persister returned here is a plain adapter — it does nothing on its own until handed to [`persistQueryClient`](../query-persist-client-core/01-overview#persistqueryclient) from `@headlesskit/query-persist-client-core`, which restores on startup and subscribes to future cache changes:
+
+```typescript
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { QueryClient } from '@headlesskit/query-core';
+import { persistQueryClient } from '@headlesskit/query-persist-client-core';
+import { createAsyncStoragePersister } from '@headlesskit/query-async-storage-persister';
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: { gcTime: 1000 * 60 * 60 * 24 }, // must exceed maxAge below
+  },
+});
+
+const persister = createAsyncStoragePersister({
+  storage: AsyncStorage,
+  key: 'MY_APP_QUERY_CACHE',
+  throttleTime: 2000, // batch rapid cache changes into one write per 2s
+});
+
+const [unsubscribe, restorePromise] = await persistQueryClient({
+  queryClient,
+  persister,
+  maxAge: 1000 * 60 * 60 * 24,
+  buster: 'v1',
+  onSuccess: () => console.log('Cache restored from AsyncStorage'),
+  onError: (err) => console.warn('Restore failed, starting cold:', err),
+});
+
+await restorePromise;
+queryClient.mount();
+
+// On unmount / logout:
+unsubscribe();
+await persister.removeClient();
+```
+
+Every cache mutation thereafter calls `persistClient`, which forwards into the throttled writer — so a burst of query updates (e.g. a paginated list finishing several requests in the same tick) collapses into a single `storage.setItem` per `throttleTime` window rather than one write per query.
+
+## Behavior, method by method
+
+### `persistClient`
+
+```typescript
+persistClient: async (persistedClient: PersistedClient) => {
+  throttledPersist(persistedClient)
+}
+```
+
+Does **not** await the actual write. It calls the throttled function (built once, closed over `storage`, `serialize`, and `storageKey`) and returns immediately — the promise resolves before `storage.setItem` necessarily runs. The real write happens on `asyncThrottle`'s own schedule (see [asyncThrottle](03-async-throttle) for the exact timing), serializing with whatever `serialize` function was configured (`JSON.stringify` by default).
+
+Because the call is fire-and-forget from `persistClient`'s perspective, any error thrown by `storage.setItem` or by `serialize` is swallowed inside `asyncThrottle` (passed to its optional `onError`, which `createAsyncStoragePersister` does not wire up) — `persistClient` itself never rejects on a storage failure.
+
+### `restoreClient`
+
+```typescript
+restoreClient: async () => {
+  const cacheString = await storage.getItem(storageKey)
+  if (!cacheString) {
+    return undefined
+  }
+  return deserialize(cacheString) as PersistedClient
+}
+```
+
+Reads `storageKey` directly — bypasses the throttle entirely, so a `restoreClient()` call immediately after `persistClient()` may race ahead of a pending throttled write and read stale (or absent) data.
+
+If `storage.getItem` resolves to `null`, `undefined`, or `''` (anything falsy), `restoreClient` returns `undefined` — callers (like `persistQueryClientRestore`) treat this as "nothing to restore" rather than an error.
+
+**No try/catch around `deserialize`.** If `cacheString` is present but not valid JSON (or whatever `deserialize` expects), `JSON.parse` throws synchronously and `restoreClient()`'s returned promise rejects — there is no fallback to "treat corrupt cache as empty." Callers that want resilience against corrupted storage need to catch this themselves or pass a `deserialize` that swallows parse errors.
+
+### `removeClient`
+
+```typescript
+removeClient: async () => {
+  await storage.removeItem(storageKey)
+}
+```
+
+A direct passthrough to `storage.removeItem`. Not throttled, not debounced — runs immediately. If `storage.removeItem` rejects, `removeClient()` rejects with the same error.
+
+### The no-op fallback (`storage` is falsy)
+
+```typescript
+if (!storage) {
+  return {
+    persistClient: async () => undefined,
+    restoreClient: async () => undefined,
+    removeClient: async () => undefined,
+  }
+}
+```
+
+When `storage` is `null` or `undefined`, `createAsyncStoragePersister` short-circuits before constructing the throttled writer at all — every method becomes an `async () => undefined` no-op. This lets call sites pass a possibly-unavailable storage object (e.g. `AsyncStorage` only exists on native, not on web) without branching:
+
+```typescript
+const persister = createAsyncStoragePersister({
+  storage: Platform.OS === 'web' ? undefined : AsyncStorage,
+});
+// Safe everywhere — persistClient/restoreClient/removeClient just resolve to undefined on web
+```
+
+## Common pitfalls
+
+- **Corrupted or foreign data in storage throws on restore, not on persist.** Since `deserialize` (`JSON.parse` by default) is called unguarded inside `restoreClient`, anything that writes non-JSON to the same key — a manual edit, a different app version's format, truncated storage — will make every future `restoreClient()` call reject until the key is cleared. If you need resilience, wrap `deserialize` to catch and return a sentinel, or call `removeClient()` on a restore failure.
+- **`persistClient` resolving does not mean the write happened.** Because the actual `storage.setItem` call is deferred behind `throttleTime`, code that calls `persistClient()` then immediately tears down the app (or the storage backend) can lose the write entirely. There's no `flush()` exposed — the last write is only guaranteed if the process stays alive past the throttle window.
+- **Throttled write errors are silent.** `createAsyncStoragePersister` does not pass an `onError` to `asyncThrottle`, so if `storage.setItem` throws (quota exceeded, storage unavailable), the error is caught internally and discarded — `persistClient` never surfaces it. There is no built-in retry or logging for storage write failures from this package; pair it with `persistQueryClient`'s own `onError` (which only covers restore, not persist) or monitor your storage backend separately if this matters.
+- **`restoreClient` can race a pending throttled `persistClient`.** Because reads bypass the throttle and go straight to `storage.getItem`, calling `restoreClient()` right after `persistClient()` is not guaranteed to see that write if it's still queued.

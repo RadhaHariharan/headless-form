@@ -1,0 +1,198 @@
+# persistQueryClient / persistQueryClientRestore / persistQueryClientSave / persistQueryClientSubscribe
+
+**File:** `src/persist.ts`
+
+Whole-`QueryClient` persistence: dehydrate the **entire** cache to a [Persister](./01-overview) and restore it on startup, in contrast to [experimental_createPersister](./02-create-persister)'s per-query approach. Builds directly on `dehydrate`/`hydrate` from [@headlesskit/query-core](../query-core/01-overview).
+
+```typescript
+import {
+  persistQueryClient,
+  persistQueryClientRestore,
+  persistQueryClientSave,
+  persistQueryClientSubscribe,
+} from '@headlesskit/query-persist-client-core';
+```
+
+## Signature
+
+```typescript
+function persistQueryClientRestore(options: PersistQueryClientRestoreOptions): Promise<void>
+function persistQueryClientSave(options: Omit<PersistQueryClientOptions, 'maxAge'>): Promise<void>
+function persistQueryClientSubscribe(options: PersistQueryClientSubscribeOptions): () => void
+function persistQueryClient(options: PersistQueryClientSubscribeOptions): Promise<[() => void, Promise<void>]>
+```
+
+| Option | Type | Default | Used by | Description |
+|--------|------|---------|---------|-------------|
+| `queryClient` | `QueryClient` | required | all | The client to restore into / save from |
+| `persister` | `Persister` | required | all | Storage adapter — see [overview](./01-overview) |
+| `maxAge` | `number` | `1000 * 60 * 60 * 24` (24h) | restore only | Snapshot older than this is discarded |
+| `buster` | `string` | `''` | all | Version string compared against the stored snapshot's `buster` |
+| `dehydrateOptions` | `{ shouldDehydrateQuery?, shouldDehydrateMutation?, serializeData? }` | — | save | Forwarded as-is to query-core's `dehydrate` |
+| `hydrateOptions` | — | — | restore | Declared on the options interface but **never actually passed to `hydrate`** — see [Common pitfalls](#common-pitfalls) |
+| `onSuccess` | `() => Promise<unknown> \| unknown` | — | subscribe/full | Called after a successful restore |
+| `onError` | `(error) => Promise<unknown> \| unknown` | — | subscribe/full | Called when restore rejects |
+
+## persistQueryClientRestore
+
+```typescript
+async function persistQueryClientRestore(options: PersistQueryClientRestoreOptions): Promise<void>
+```
+
+Reads a snapshot from `persister.restoreClient()` and, if it's still valid, hydrates it into `queryClient`. Step by step:
+
+1. **SSR guard.** `if (typeof window === 'undefined') return` — restore is a no-op on the server; there is nothing to restore from on the server and no point hydrating a client that will be discarded.
+2. **Read the snapshot.** `await persister.restoreClient()`.
+3. **If nothing was returned**, the function simply resolves — no error, no `removeClient()` call (there's nothing to remove).
+4. **If a snapshot was returned but has no `timestamp`** (a falsy/missing `timestamp`, e.g. `0` or `undefined`), it's treated as malformed and `persister.removeClient()` is called to clean it up — nothing is hydrated.
+5. **If a snapshot with a `timestamp` was returned**, it's checked against two independent conditions:
+   - `expired = Date.now() - cachedState.timestamp > maxAge`
+   - `busted = cachedState.buster !== buster`
+   - **If either is true**, `await persister.removeClient()` — the stale/busted snapshot is wiped from storage entirely (not just ignored), so a subsequent app load won't see it either.
+   - **If neither is true**, it dynamically imports `hydrate` from `@headlesskit/query-core` and calls `hydrate(queryClient, cachedState.clientState)`, replaying the dehydrated queries/mutations into the live client.
+6. **Error handling.** The entire body (steps 2–5) is wrapped in a `try`/`catch`. On any thrown error:
+   - In non-production (`process.env['NODE_ENV'] !== 'production'`), it logs the error and a warning to the console.
+   - Either way, it calls `await persister.removeClient()` as a defensive measure — a corrupted or unreadable persisted cache is discarded rather than left around to fail again on the next load.
+   - **The function does not re-throw** — it resolves normally even after an error, so callers awaiting `persistQueryClientRestore` directly will never see it reject (contrast with how `persistQueryClient` wires `onError`, which fires from a *different* code path — see below).
+
+```typescript
+await persistQueryClientRestore({
+  queryClient,
+  persister,
+  maxAge: 1000 * 60 * 60 * 24,
+  buster: 'v3',
+});
+// Resolves even if the persisted cache was corrupted or missing —
+// check queryClient's cache state afterward if you need to know whether
+// anything was actually restored.
+```
+
+## persistQueryClientSave
+
+```typescript
+async function persistQueryClientSave(
+  options: Omit<PersistQueryClientOptions, 'maxAge'>,
+): Promise<void>
+```
+
+1. Dynamically imports `dehydrate` from `@headlesskit/query-core`.
+2. Calls `dehydrate(queryClient, dehydrateOptions)` — this applies whatever `shouldDehydrateQuery`/`shouldDehydrateMutation`/`serializeData` filters you passed, exactly as documented in [query-core's hydration section](../query-core/01-overview#hydration--ssr).
+3. Wraps the result in a `PersistedClient`: `{ buster, timestamp: Date.now(), clientState: dehydratedClient }`.
+4. Calls `await persister.persistClient(persistedClient)`.
+
+Note there is **no `try`/`catch` here** — if `dehydrate` throws (e.g. a `serializeData` function throws) or `persister.persistClient` rejects, `persistQueryClientSave`'s returned promise rejects too. Callers that invoke this directly need their own error handling; callers that go through `persistQueryClientSubscribe`/`persistQueryClient` get partial protection (see below).
+
+## persistQueryClientSubscribe
+
+```typescript
+function persistQueryClientSubscribe(props: PersistQueryClientSubscribeOptions): () => void
+```
+
+This is **synchronous** at the call site — it returns the unsubscribe function immediately, without waiting for the initial restore:
+
+1. Calls `persistQueryClientRestore(props)` and attaches `.then(onSuccess, onError)` — note this is the two-argument form of `.then`, so `onError` is wired as a rejection handler. Because `persistQueryClientRestore` itself never rejects (see above), in practice `onError` here only fires if `onSuccess` itself throws, or in some unusual scenario — it is **not** the primary path for surfacing restore failures.
+2. Independently (not waiting for restore to finish), it subscribes to `queryClient.getQueryCache().subscribe(() => persistQueryClientSave(props))` — **every single cache event** (added/updated/removed/observer changes — anything `QueryCache` emits) triggers a full re-save of the entire dehydrated client.
+3. Returns the cache subscription's `unsubscribe` function.
+
+```typescript
+const unsubscribe = persistQueryClientSubscribe({
+  queryClient,
+  persister,
+  buster: 'v3',
+  onSuccess: () => console.log('restored'),
+  onError: (e) => console.error('restore failed', e),
+});
+// later
+unsubscribe();
+```
+
+Because the restore and the save-subscription are both kicked off immediately and run concurrently, it's possible for a cache-changing event (e.g. mount-triggered fetches) to fire and trigger a save **before** the restore promise has resolved — see [Common pitfalls](#common-pitfalls).
+
+## persistQueryClient (full lifecycle)
+
+```typescript
+async function persistQueryClient(
+  opts: PersistQueryClientSubscribeOptions,
+): Promise<[() => void, Promise<void>]>
+```
+
+This is the carefully-sequenced version that avoids the race in `persistQueryClientSubscribe`:
+
+1. Sets up a `hasUnsubscribed` flag and a mutable `unsubscribeFromQueryCache` reference (initially a no-op), and an `unsubscribe` closure that sets the flag and calls whatever `unsubscribeFromQueryCache` currently points to.
+2. Builds `restorePromise` as a chain:
+   - `persistQueryClientRestore(opts)` first.
+   - `.then(...)`: if not yet unsubscribed, calls `opts.onSuccess?.()`.
+   - `.catch(...)`: if not yet unsubscribed, calls `opts.onError?.(error)` — this **is** a real rejection path, but recall `persistQueryClientRestore` itself swallows its own errors internally, so this only fires if `onSuccess` (from the previous `.then`) throws.
+   - **A final `.then(...)` only after both onSuccess/onError settle**: if still not unsubscribed, *now* it subscribes to the query cache (`opts.queryClient.getQueryCache().subscribe(...)`) and stores the result in `unsubscribeFromQueryCache`. The subscription callback itself re-checks `!hasUnsubscribed` before calling `persistQueryClientSave(opts)`.
+3. Returns `[unsubscribe, restorePromise]` immediately — `restorePromise` resolves once the entire restore → callback → subscribe chain has settled.
+
+The key difference from `persistQueryClientSubscribe`: **the save-subscription is not attached until restore has fully finished** (including the `onSuccess`/`onError` callback), eliminating the race where an early cache write could trigger a save mid-restore. Calling `unsubscribe()` *before* the chain reaches the final `.then()` prevents the subscription from ever being attached at all, because of the `!hasUnsubscribed` guard.
+
+```typescript
+const [unsubscribe, restorePromise] = await persistQueryClient({
+  queryClient,
+  persister,
+  maxAge: 1000 * 60 * 60 * 24,
+  buster: process.env.BUILD_ID ?? '',
+  onSuccess: () => console.log('cache warm'),
+  onError: (e) => console.warn('restore failed, starting cold', e),
+});
+
+await restorePromise; // safe to render now — restore + initial subscribe both done
+```
+
+## Basic usage
+
+```typescript
+import { QueryClient } from '@headlesskit/query-core';
+import { persistQueryClient } from '@headlesskit/query-persist-client-core';
+import { createSyncStoragePersister } from '@headlesskit/query-sync-storage-persister';
+
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { gcTime: 1000 * 60 * 60 * 24 } },
+});
+
+const persister = createSyncStoragePersister({ storage: window.localStorage });
+
+const [unsubscribe] = await persistQueryClient({ queryClient, persister });
+```
+
+## Advanced: versioned persistence across deploys with a retry on restore failure
+
+A common production pattern: bump `buster` on every deploy (so old clients never hydrate stale shape-incompatible data), and fall back to a clean slate if `restoreClient()` throws for any reason — e.g. corrupted IndexedDB data via [@headlesskit/query-async-storage-persister](../query-async-storage-persister/01-overview).
+
+```typescript
+import { persistQueryClient } from '@headlesskit/query-persist-client-core';
+import { createAsyncStoragePersister } from '@headlesskit/query-async-storage-persister';
+
+const persister = createAsyncStoragePersister({
+  storage: AsyncStorage, // React Native AsyncStorage
+});
+
+const [unsubscribe, restorePromise] = await persistQueryClient({
+  queryClient,
+  persister,
+  buster: APP_BUILD_HASH, // e.g. git sha injected at build time
+  maxAge: 1000 * 60 * 60 * 24 * 3, // 3 days
+  onSuccess: () => {
+    analytics.track('cache_restored');
+  },
+  onError: (error) => {
+    // persistQueryClientRestore already called persister.removeClient()
+    // internally before this fires — storage is already clean.
+    analytics.track('cache_restore_failed', { error: String(error) });
+  },
+});
+
+await restorePromise;
+```
+
+Because `buster` mismatches cause `removeClient()` to run (full wipe, not partial), every deploy that changes `buster` gives every returning user a guaranteed-clean cache rather than a half-hydrated one.
+
+## Common pitfalls
+
+- **`hydrateOptions` is accepted but silently ignored.** `persistQueryClientRestore` destructures `hydrateOptions` out of its options but never forwards it to the `hydrate(queryClient, cachedState.clientState)` call — only `cachedState.clientState` is passed. If you need `defaultOptions` or `deserializeData` applied during hydration, you must call query-core's `hydrate` yourself instead of relying on this option.
+- **`persistQueryClientRestore` never rejects.** Every failure path inside it — a malformed snapshot, an expired/busted snapshot, or a thrown error from `persister.restoreClient()` itself — resolves normally (after calling `removeClient()` as needed). Code that does `try { await persistQueryClientRestore(...) } catch { ... }` will never enter the `catch` block from a restore failure; use `persistQueryClient`'s `onError` callback instead, which is wired to a real failure path further up the chain.
+- **`persistQueryClientSubscribe` can race a save against an in-flight restore.** Because the cache subscription is attached immediately (not after restore resolves), an early `setQueryData`/fetch-triggered cache event during the restore window can call `persistQueryClientSave` before `hydrate` has run, potentially persisting a smaller/older state than what's about to be restored. Prefer `persistQueryClient`, which sequences subscription-after-restore.
+- **Every cache event triggers a full re-save.** Both `persistQueryClientSubscribe` and `persistQueryClient` re-dehydrate and re-persist the **entire** client on every single `QueryCache` event (not debounced or batched). On a busy cache, this means frequent full-client serialization — keep `dehydrateOptions.shouldDehydrateQuery` narrow (e.g. success-only, as query-core defaults to) to bound the cost.
+- **`gcTime` must outlive `maxAge`/persistence intent.** `dehydrate` only includes queries still present in the in-memory cache; if `gcTime` is shorter than how long you expect data to be useful across reloads, queries will be garbage-collected from memory (and therefore omitted from the next save) before they're ever persisted.

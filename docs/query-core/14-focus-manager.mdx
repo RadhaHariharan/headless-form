@@ -1,0 +1,147 @@
+# focusManager
+
+**File:** `src/focusManager.ts` (78 lines)
+
+Tracks whether the window/app is "focused," and notifies subscribers when that changes. `QueryCache.onFocus()` (called by `focusManager`'s own subscription, wired up internally) uses this to drive `refetchOnWindowFocus`.
+
+```typescript
+import { focusManager, FocusManager } from '@headlesskit/query-core';
+```
+
+## Signature
+
+`focusManager` is a singleton instance of `FocusManager`, which extends [`Subscribable<Listener>`](./17-subscribable) where `Listener = (focused: boolean) => void`.
+
+| Member | Signature | Description |
+|--------|-----------|--------------|
+| `setEventListener` | `(setup: SetupFn) => void` | Replace the default browser detection with a custom setup function |
+| `setFocused` | `(focused?: boolean) => void` | Manually force the focused state, or pass `undefined` to return to automatic detection |
+| `onFocus` | `() => void` | Notifies all subscribers with the current `isFocused()` value |
+| `isFocused` | `() => boolean` | Current focus state |
+| `subscribe` (inherited) | `(listener: Listener) => () => void` | Register a listener; triggers `onSubscribe` (lazily attaches the event listener on first subscriber) |
+
+```typescript
+type SetupFn = (setFocused: (focused?: boolean) => void) => (() => void) | undefined
+```
+
+## Basic usage
+
+```typescript
+import { focusManager } from '@headlesskit/query-core';
+
+const unsubscribe = focusManager.subscribe((focused) => {
+  console.log('window focused:', focused);
+});
+
+// Force a state (e.g. in a test, or a non-browser runtime)
+focusManager.setFocused(true);
+focusManager.setFocused(false);
+
+// Return to automatic browser detection
+focusManager.setFocused(undefined);
+
+unsubscribe();
+```
+
+## Advanced: React Native `AppState` integration
+
+The default setup function only attaches a DOM `visibilitychange` listener, gated behind `typeof window !== 'undefined' && window.addEventListener` — there is no React Native (or other non-DOM) detection built in. To make `refetchOnWindowFocus` work in React Native, replace the setup function with one driven by `AppState`:
+
+```typescript
+import { AppState, Platform } from 'react-native';
+import { focusManager } from '@headlesskit/query-core';
+
+focusManager.setEventListener((setFocused) => {
+  if (Platform.OS !== 'web') {
+    const subscription = AppState.addEventListener('change', (state) => {
+      setFocused(state === 'active');
+    });
+    return () => subscription.remove();
+  }
+  return undefined;
+});
+```
+
+Calling `setEventListener` immediately tears down whatever listener is currently installed (`this.#cleanup?.()`) and installs the new one right away — it does not wait for the next `subscribe()` call. The callback you receive (`setFocused` in the example) is the internal closure passed to your `setup` function; calling it with a `boolean` routes to `this.setFocused(focused)`, while calling it with no argument (or `undefined`) routes to `this.onFocus()` directly (re-broadcasting the current state without changing it).
+
+## Method-by-method breakdown
+
+### Constructor / default `#setup`
+
+The default setup function:
+
+```typescript
+if (typeof window !== 'undefined' && window.addEventListener) {
+  const listener = () => onFocus()
+  window.addEventListener('visibilitychange', listener, false)
+  return () => window.removeEventListener('visibilitychange', listener)
+}
+return
+```
+
+It listens for `visibilitychange` (not `focus`/`blur`) — this means tab-switching and minimizing trigger it, but it does **not** distinguish "focused but a different app element has focus" scenarios; it's purely document visibility. In a non-browser environment (no `window`, or `window.addEventListener` missing — e.g. SSR/Node), the guard fails and the function returns `undefined`, meaning no listener is attached and no cleanup function exists.
+
+### `onSubscribe()` (protected, overrides `Subscribable`)
+
+```typescript
+if (!this.#cleanup) {
+  this.setEventListener(this.#setup)
+}
+```
+
+Lazily installs the event listener (default or custom, whichever is currently set as `#setup`) the first time a subscriber attaches, but only if no cleanup is already registered — so repeated subscriptions don't reinstall the listener.
+
+### `onUnsubscribe()` (protected, overrides `Subscribable`)
+
+```typescript
+if (!this.hasListeners()) {
+  this.#cleanup?.()
+  this.#cleanup = undefined
+}
+```
+
+Tears down the underlying listener only once the **last** subscriber unsubscribes (`hasListeners()` from the base `Subscribable` checks `this.listeners.size > 0`).
+
+### `setEventListener(setup)`
+
+Stores `setup` as the new `#setup`, immediately calls any existing `#cleanup`, then calls `setup(callback)` and stores its return value as the new `#cleanup`. The `callback` passed to your `setup` function is `(focused) => { typeof focused === 'boolean' ? this.setFocused(focused) : this.onFocus() }`.
+
+### `setFocused(focused?)`
+
+```typescript
+const changed = this.#focused !== focused
+if (changed) {
+  this.#focused = focused
+  this.onFocus()
+}
+```
+
+No-ops if the new value strictly equals the current `#focused` (reference/primitive equality — calling `setFocused(true)` twice in a row only notifies once). Passing `undefined` is itself a valid "changed" transition away from a previously forced `true`/`false`, since it flips `isFocused()` back to automatic detection.
+
+### `onFocus()`
+
+Computes `isFocused()` once and calls every listener in `this.listeners` with that single boolean — listeners always receive the manager's current resolved state, not raw event data.
+
+### `isFocused()`
+
+```typescript
+if (typeof this.#focused === 'boolean') {
+  return this.#focused
+}
+return globalThis.document?.visibilityState !== 'hidden'
+```
+
+If `setFocused` was called with an explicit boolean, that value wins unconditionally (manual override). Otherwise it falls back to `globalThis.document?.visibilityState !== 'hidden'` — note the optional chaining: if `document` doesn't exist at all (Node/SSR with no manual override applied), `globalThis.document?.visibilityState` is `undefined`, and `undefined !== 'hidden'` evaluates to `true` — so **`isFocused()` defaults to `true` in environments without a `document`**, not `false`.
+
+## Cross-links
+
+- [Overview — FocusManager section](./01-overview)
+- [onlineManager](./15-online-manager) — same `Subscribable`-based pattern, parallel API shape
+- [Subscribable](./17-subscribable) — base class providing `subscribe`/`hasListeners`/`onSubscribe`/`onUnsubscribe`
+
+## Common pitfalls
+
+- **No automatic React Native support.** The built-in setup only checks for `window.addEventListener` and listens for DOM `visibilitychange` — React Native apps get `isFocused()` always falling back to the `document`-based branch (which, per the logic above, resolves to `true` since there's no `document`), unless you call `setEventListener` yourself with an `AppState`-based listener.
+- **`isFocused()` defaults to `true`, not `false`, when there's no `document`.** This surprises people who expect "no document = not focused" — the actual guard is `!== 'hidden'`, so anything that isn't literally `'hidden'` (including `undefined`) counts as focused.
+- **`setFocused(undefined)` is a real reset, not a no-op.** If you previously called `setFocused(false)` for testing and want automatic detection back, you must explicitly pass `undefined` — there's no separate "clear override" method.
+- **The listener only fires on *change*.** Subscribing doesn't immediately call your listener with the current state; `onFocus()` only runs from inside `setFocused`'s changed-branch or from the underlying browser event firing. If you need the current value at subscribe time, call `focusManager.isFocused()` directly rather than waiting for the first notification.

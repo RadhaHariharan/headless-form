@@ -1,0 +1,131 @@
+# experimental_createStreamedQuery
+
+**File:** `src/streamedQuery.ts`
+
+`experimental_createStreamedQuery` builds a query "behavior" object that wraps a `queryFn` so that, if the function returns an `AsyncIterable` (e.g. an async generator consuming a streamed HTTP response or SSE feed), each chunk is pushed into the query's cached data incrementally — observers see `data` grow chunk-by-chunk instead of waiting for the whole stream to finish. As the `experimental_` prefix signals, its API surface may change in a future release.
+
+```typescript
+import { experimental_createStreamedQuery } from '@headlesskit/query-core';
+```
+
+## Signature
+
+```typescript
+interface StreamedQueryOptions<TData = unknown> {
+  refetchMode?: 'reset' | 'append';
+}
+
+function experimental_createStreamedQuery<
+  TData = unknown,
+  TQueryKey extends QueryKey = QueryKey,
+>(
+  options: StreamedQueryOptions<TData>,
+): { behavior: { onFetch: (context: any, query: any) => void } };
+```
+
+| Parameter / field | Type | Default | Description |
+|---|---|---|---|
+| `options.refetchMode` | `'reset' \| 'append'` | `'reset'` | On refetch, whether to start the accumulated chunk array fresh (`'reset'`) or continue appending onto the existing cached data (`'append'`) |
+| Returns | `{ behavior: { onFetch } }` | — | A `behavior` object meant to be spread into a query's options (consumed by query-core's internal fetch machinery as an `onFetch` hook) |
+
+## Basic usage
+
+`experimental_createStreamedQuery` returns a `behavior` object — pass it as the `behavior` option alongside a `queryFn` that returns (or resolves to) an `AsyncIterable`:
+
+```typescript
+import { experimental_createStreamedQuery } from '@headlesskit/query-core';
+
+async function* streamLines(url: string) {
+  const response = await fetch(url);
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+    for (const line of lines) yield JSON.parse(line);
+  }
+}
+
+queryClient.fetchQuery({
+  queryKey: ['logs', 'tail'],
+  queryFn: () => streamLines('/api/logs/stream'),
+  ...experimental_createStreamedQuery<LogEntry>({ refetchMode: 'reset' }),
+});
+```
+
+As each `LogEntry` chunk is yielded, the cached `data` array grows by one element and observers receive a state update with `status: 'success'` — no need to wait for the generator to finish.
+
+## Advanced: incrementally rendering an SSE/LLM-style token stream
+
+A common real-world case is a server that streams partial results (e.g. LLM tokens, progressive search results) over Server-Sent Events. Wrap the SSE connection in an async generator so `experimental_createStreamedQuery` can drive incremental cache updates, and use `refetchMode: 'append'` if a manual refetch should continue rather than restart the stream:
+
+```typescript
+async function* sseTokens(url: string): AsyncGenerator<string> {
+  const response = await fetch(url, { headers: { Accept: 'text/event-stream' } });
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) return;
+    buffer += decoder.decode(value, { stream: true });
+    const events = buffer.split('\n\n');
+    buffer = events.pop() ?? '';
+    for (const event of events) {
+      const match = /^data: (.*)$/m.exec(event);
+      if (match) yield match[1];
+    }
+  }
+}
+
+const observer = new QueryObserver(queryClient, {
+  queryKey: ['completion', promptId],
+  queryFn: () => sseTokens(`/api/completions/${promptId}/stream`),
+  ...experimental_createStreamedQuery<string>({ refetchMode: 'append' }),
+});
+
+observer.subscribe((result) => {
+  // result.data is an array of tokens that grows on every chunk
+  renderPartialCompletion(result.data?.join('') ?? '');
+});
+```
+
+With `refetchMode: 'append'`, calling `observer.refetch()` mid-stream seeds `chunks` from `(query.state.data as Array<TData>) ?? []` (a *copy*, via `.slice()`) instead of starting from `[]` — useful for "continue generating" UX rather than restarting from scratch.
+
+## Method-by-method breakdown
+
+### `experimental_createStreamedQuery(options)`
+
+Returns `{ behavior: { onFetch } }`. The `onFetch` function is query-core's internal hook point, invoked with `(context, query)` when a fetch begins:
+
+1. Reads `refetchMode` from `options`, defaulting to `'reset'` via `options.refetchMode ?? 'reset'`.
+2. Captures `originalFetchFn = context.fetchFn` — the real `queryFn` the query was configured with.
+3. Initializes `chunks: Array<TData>` — `[]` if `refetchMode === 'reset'`, or a shallow copy of the existing cached array (`(query.state.data as Array<TData>) ?? []).slice()`) if `'append'`.
+4. **Replaces** `context.fetchFn` with a new async function that:
+   - Calls `originalFetchFn()` to get `result`.
+   - Checks `isAsyncIterable(result)` — an inline type guard testing `r != null && typeof r === 'object' && Symbol.asyncIterator in r`.
+   - If iterable: `for await (const chunk of result)`, pushes each `chunk` onto `chunks`, and calls `query.setState({ data: chunks.slice(), status: 'success', dataUpdatedAt: Date.now() })` after **every single chunk** — this is what produces the incremental UI updates. Returns `chunks.slice()` once the generator completes.
+   - If **not** iterable (a plain `Promise`/value): returns `result` unmodified — `experimental_createStreamedQuery` is a no-op pass-through for non-streaming `queryFn`s.
+
+### `isAsyncIterable` (inline, not exported)
+
+A local type guard, not part of the public API — checks for a non-null object with `Symbol.asyncIterator` present. Note it does **not** check for `Symbol.iterator` (regular sync iterables), only `Symbol.asyncIterator` — a plain array or sync generator returned from `queryFn` will *not* be treated as streamable and will pass through as a single resolved value instead.
+
+## Common pitfalls
+
+- **Returning a sync iterable instead of an async one.** Arrays, `Map`/`Set`, and sync generators implement `Symbol.iterator`, not `Symbol.asyncIterator` — `isAsyncIterable` returns `false` for them, so they're cached as a single opaque value rather than streamed chunk-by-chunk.
+- **Expecting `refetchMode: 'append'` to dedupe.** Appending is a raw `chunks.push(chunk)` onto the copied array — no deduplication or merge logic. If the underlying stream re-emits earlier chunks on reconnect, they'll be duplicated in the cached array.
+- **Assuming `data` is the raw stream values.** The cached `data` is always `Array<TData>` (one entry per yielded chunk) — even if your generator only ever yields a single chunk, `data` will be a one-element array, not the chunk itself.
+- **This is an `experimental_` API.** Both the name and shape may change between minor versions; pin behavior with tests if you depend on it in production.
+
+## See also
+
+- [Query Core overview](./01-overview)
+- [Query](./04-query)
+- [QueryObserver](./05-query-observer)

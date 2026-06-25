@@ -1,0 +1,247 @@
+# Mutation
+
+**File:** `src/mutation.ts`
+
+The state machine behind every imperative write operation (`POST`/`PUT`/`PATCH`/`DELETE`-style calls). Where [Query](./04-query) caches and re-derives read data, `Mutation` runs a side-effecting function exactly once per `execute()` call, tracks its `idle → pending → success | error` lifecycle, and fans status updates out to every subscribed `MutationObserver` plus the global `MutationCache`. You don't normally construct it directly — `MutationCache.build()` creates one per `mutate()` call (or reuses a restored one for paused offline mutations).
+
+```typescript
+import { MutationObserver } from '@headlesskit/query-core'
+// Mutation itself is created internally by MutationCache; you interact with it
+// through MutationObserver.mutate(), which calls mutation.execute() for you.
+
+const observer = new MutationObserver(queryClient, {
+  mutationFn: (vars: NewPost) => api.createPost(vars),
+  onSuccess: () => queryClient.invalidateQueries({ queryKey: ['posts'] }),
+})
+
+await observer.mutate({ title: 'Hello' })
+```
+
+## Signature
+
+```typescript
+class Mutation<TData = unknown, TError = DefaultError, TVariables = void, TContext = unknown> extends Removable {
+  state: MutationState<TData, TError, TVariables, TContext>
+  options: MutationOptions<TData, TError, TVariables, TContext>
+  readonly mutationId: number
+
+  constructor(config: MutationConfig<TData, TError, TVariables, TContext>)
+
+  get meta(): MutationMeta | undefined
+  get scope(): MutationScope | undefined
+
+  addObserver(observer: MutationObserver<TData, TError, TVariables, TContext>): void
+  removeObserver(observer: MutationObserver<TData, TError, TVariables, TContext>): void
+  setOptions(options?: MutationOptions<TData, TError, TVariables, TContext>): void
+  setState(state: Partial<MutationState<TData, TError, TVariables, TContext>>): void
+  execute(variables: TVariables): Promise<TData>
+  continue(): Promise<TData>
+}
+```
+
+| Constructor field (`MutationConfig`) | Type | Description |
+|---|---|---|
+| `mutationId` | `number` | Assigned by `MutationCache`, used for identity/devtools |
+| `mutationCache` | `MutationCache` | Back-reference — used for `canRun`, `runNext`, cache-level callbacks |
+| `options` | `MutationOptions` | This mutation's own options |
+| `defaultOptions` | `MutationOptions \| undefined` | Merged underneath `options` (`{ ...defaultOptions, ...options }`) |
+| `state` | `MutationState \| undefined` | Restored state (e.g. from persisted/paused mutations); defaults via `getDefaultState()` |
+
+`Mutation` extends [`Removable`](./04-query) — it schedules its own garbage collection (`scheduleGc`/`clearGcTimeout`) based on `options.gcTime`, the same mechanism `Query` uses.
+
+## `MutationState`
+
+```typescript
+interface MutationState<TData, TError, TVariables, TContext> {
+  context: TContext | undefined
+  data: TData | undefined
+  error: TError | null
+  failureCount: number
+  failureReason: TError | null
+  isPaused: boolean
+  status: MutationStatus       // 'idle' | 'pending' | 'success' | 'error'
+  variables: TVariables | undefined
+  submittedAt: number
+}
+```
+
+`getDefaultState()` is the all-`idle`/zeroed starting point: `status: 'idle'`, `failureCount: 0`, `isPaused: false`, `submittedAt: 0`, everything else `undefined`/`null`.
+
+## Basic usage
+
+```typescript
+const mutation = mutationCache.build(queryClient, {
+  mutationFn: (vars: { title: string }) => api.createPost(vars),
+  onSuccess: (data) => console.log('created', data),
+  onError: (err) => console.error(err),
+})
+
+const data = await mutation.execute({ title: 'Hello world' })
+console.log(mutation.state.status) // 'success'
+```
+
+## The dispatch reducer — every `MutationAction`
+
+All state transitions go through the private `dispatch(action)` method, which runs a pure reducer over `this.state`, then notifies observers and the cache in a single `notifyManager.batch(...)` call.
+
+| Action | Resulting state changes |
+|---|---|
+| `{ type: 'loading', variables?, context? }` | `status: 'pending'`, `variables`, `context`, `data: undefined`, `error: null`, `failureCount: 0`, `failureReason: null`, `submittedAt: Date.now()`, `isPaused: !canFetch(options.networkMode)` |
+| `{ type: 'failed', failureCount, error }` | `failureCount`, `failureReason: error` (no status change — recorded mid-retry) |
+| `{ type: 'pause' }` | `isPaused: true` |
+| `{ type: 'continue' }` | `isPaused: false` |
+| `{ type: 'success', data }` | `status: 'success'`, `data`, `error: null`, `failureCount: 0`, `failureReason: null`, `isPaused: false` |
+| `{ type: 'error', error }` | `status: 'error'`, `error`, `data: undefined`, `failureCount: state.failureCount + 1`, `failureReason: error`, `isPaused: false` |
+| `{ type: 'setState', state }` | Shallow-merges `state` over the existing state (used by `Mutation#setState`, e.g. for hydration) |
+
+Notice `loading`'s `isPaused` is computed from `canFetch(networkMode)` at dispatch time — a mutation created while offline (with `networkMode: 'online'`, the default) starts directly in the paused state rather than transitioning through "fetching" first.
+
+Every dispatch ends the same way regardless of action type:
+
+```typescript
+this.state = reducer(this.state)
+notifyManager.batch(() => {
+  this.#observers.forEach((observer) => observer.onMutationUpdate(action))
+  this.#mutationCache.notify({ mutation: this, type: 'updated', action })
+})
+```
+
+## `execute()` — the full lifecycle, in exact call order
+
+This is the heart of the file. Reading the source top to bottom for the success path:
+
+1. **Build the retryer.** `createRetryer({ fn: () => options.mutationFn(variables), onFail, onPause, onContinue, retry: options.retry ?? 0, retryDelay, networkMode, canRun: () => mutationCache.canRun(this) })`. `onFail`/`onPause`/`onContinue` dispatch `'failed'`/`'pause'`/`'continue'` respectively — see [Retryer](./12-retryer).
+2. **Start the retryer immediately** (`this.#retryer.start()`), regardless of whether this is a fresh `execute()` or one resuming a `'pending'`-restored mutation (both branches call `.start()` — the `restored` ternary doesn't currently differentiate behavior).
+3. **If this is not a restored mutation** (`this.state.status !== 'pending'` before the dispatch below):
+   - Dispatch `{ type: 'loading', variables }` — status becomes `'pending'`.
+   - Call **`this.options.onMutate?.(variables)`** (the **mutation-level** `onMutate` — note: there is no separate cache-level `onMutate` call inside `execute`; `MutationCache`'s `onMutate` config is invoked by `MutationObserver.mutate()` before `execute()` is ever reached, not by `Mutation` itself).
+   - If the returned context differs from `this.state.context`, dispatch a second `'loading'` action carrying `{ context: data, variables: this.state.variables }` to store it.
+   - If `onMutate` throws: call `mutationCache.config.onError?.(error, variables, undefined, this)`, console-log in non-production, then **rethrow** — `execute()` exits here without ever calling `mutationFn`.
+4. **Await the retryer's promise** (`await startPromise`) — this is where `mutationFn` actually runs (with retries per step 1).
+5. **On success**, in this exact order:
+   1. `await mutationCache.config.onSuccess?.(data, variables, this.state.context, this)` — **cache-level** `onSuccess` first.
+   2. `await this.options.onSuccess?.(data, variables, this.state.context)` — **mutation-level** `onSuccess` second.
+   3. `await this.options.onSettled?.(data, null, variables, this.state.context)` — **mutation-level** `onSettled`.
+   4. `await mutationCache.config.onSettled?.(data, null, variables, this.state.context, this)` — **cache-level** `onSettled` last.
+   5. Dispatch `{ type: 'success', data }`.
+   6. `return data`.
+6. **On error** (mutationFn/retryer rejects), in this exact order, inside a `try { ... } finally { dispatch({ type: 'error', error }) }`:
+   1. `await mutationCache.config.onError?.(error, variables, this.state.context, this)` — **cache-level** `onError` first.
+   2. `await this.options.onError?.(error, variables, this.state.context)` — **mutation-level** `onError` second.
+   3. `await this.options.onSettled?.(undefined, error, variables, this.state.context)` — **mutation-level** `onSettled`.
+   4. `await mutationCache.config.onSettled?.(undefined, error, variables, this.state.context, this)` — **cache-level** `onSettled` last.
+   5. **Rethrow** the error (inside the `try`, so it propagates after the `finally` dispatches `'error'`).
+7. **Always finally:** `this.#mutationCache.runNext(this)` — releases the next scope-queued mutation (see below). This `finally` wraps *both* the success and error paths, so it runs exactly once regardless of outcome.
+
+So the literal end-to-end order for a fresh, successful mutation is:
+
+```
+dispatch('loading')
+  → options.onMutate (mutation-level)
+  → dispatch('loading') again if context changed
+  → mutationFn (via retryer)
+  → mutationCache.config.onSuccess   (cache-level)
+  → options.onSuccess                (mutation-level)
+  → options.onSettled                (mutation-level)
+  → mutationCache.config.onSettled   (cache-level)
+  → dispatch('success')
+  → mutationCache.runNext
+```
+
+And for a failure after `onMutate` succeeded:
+
+```
+... mutationFn rejects ...
+  → mutationCache.config.onError     (cache-level)
+  → options.onError                  (mutation-level)
+  → options.onSettled                (mutation-level)
+  → mutationCache.config.onSettled   (cache-level)
+  → dispatch('error')   (in the finally — runs even though the error is rethrown above it)
+  → throw error
+  → mutationCache.runNext            (outer finally)
+```
+
+Note the asymmetry between success and error ordering for the *cache vs mutation* axis: both put the **cache-level callback before the mutation-level callback** for `onSuccess`/`onError` (cache observes globally first), but `onSettled` always runs mutation-level before cache-level, in both outcomes.
+
+## `continue()`
+
+```typescript
+continue(): Promise<TData>
+```
+
+If a `#retryer` already exists (mutation is currently paused/retrying), delegates to `this.#retryer.continue()`. Otherwise — no retryer exists, e.g. after a page reload restored a persisted `'pending'` mutation — it calls `this.execute(this.state.variables)` to start over from scratch. This is what `queryClient.resumePausedMutations()` calls under the hood for each paused mutation.
+
+## Retry behavior via `Retryer`
+
+`execute()` doesn't implement retry logic itself — it delegates entirely to `createRetryer` (see [Retryer](./12-retryer)):
+
+- `retry: this.options.retry ?? 0` — mutations default to **0 retries** (unlike queries, which default to 3), so a failed mutation surfaces immediately unless you opt in.
+- `canRun: () => this.#mutationCache.canRun(this)` — the retryer re-checks this before each attempt; this is the hook that makes scope-based serialization (below) actually block execution rather than just queuing it cosmetically.
+- `onFail`/`onPause`/`onContinue` route back into `dispatch`, so failure counts and paused state stay visible on `mutation.state` throughout retries — `isPaused` flips to `true` whenever `networkMode` blocks an attempt (e.g. offline with `networkMode: 'online'`), and back to `false` when connectivity returns.
+
+## Scope-based serialization
+
+`options.scope: { id: string }` ties a mutation to a named queue inside [MutationCache](./10-mutation-cache). The relevant logic lives in `MutationCache`, but `Mutation` is the consumer:
+
+- `Mutation#scope` is just `this.options.scope`.
+- `createRetryer`'s `canRun` callback calls `mutationCache.canRun(this)`, which looks up `scopeFor(mutation)` (i.e. `mutation.options.scope?.id`) and returns `true` only if this mutation is the **first pending mutation** in that scope's queue — mutations without a `scope` always return `true` (no serialization).
+- In `execute()`'s `finally` block, `mutationCache.runNext(this)` finds the **next pending mutation** in the same scope and lets it proceed (the cache's own internal bookkeeping — `Mutation` itself has no queue, it only triggers the check).
+
+Net effect: two mutations created with the same `scope: { id: 'post-1' }` will never have their `mutationFn`s in flight simultaneously — the second one's retryer just keeps reporting `canRun() === false` (which the retryer treats like a pause) until the first one's `execute()` finishes and calls `runNext`.
+
+## Advanced: optimistic update with rollback
+
+The canonical use of `onMutate`'s return value as a rollback context, relying on the verified call order above — cache-level `onError` happens before mutation-level `onError`, and `onMutate` runs before `mutationFn`:
+
+```typescript
+const observer = new MutationObserver(queryClient, {
+  mutationFn: (newTodo: Todo) => api.updateTodo(newTodo),
+
+  // Runs BEFORE mutationFn. Snapshot + optimistically write, return rollback context.
+  onMutate: async (newTodo) => {
+    await queryClient.cancelQueries({ queryKey: ['todos'] })
+
+    const previousTodos = queryClient.getQueryData<Todo[]>(['todos'])
+
+    queryClient.setQueryData<Todo[]>(['todos'], (old) =>
+      old?.map((t) => (t.id === newTodo.id ? newTodo : t)),
+    )
+
+    // Whatever is returned here becomes `this.state.context`,
+    // and is passed as the third argument to onError/onSuccess/onSettled.
+    return { previousTodos }
+  },
+
+  // Runs AFTER mutationFn rejects, and AFTER mutationCache.config.onError.
+  // `context` is exactly what onMutate returned above.
+  onError: (_err, _newTodo, context) => {
+    if (context?.previousTodos) {
+      queryClient.setQueryData(['todos'], context.previousTodos)
+    }
+  },
+
+  // Runs in both success and error cases, after the respective onSuccess/onError.
+  onSettled: () => {
+    queryClient.invalidateQueries({ queryKey: ['todos'] })
+  },
+})
+
+await observer.mutate({ id: 1, title: 'Buy milk', done: true })
+```
+
+Because `mutationFn` only runs after `onMutate` resolves (step 3 completes before step 4 in `execute()`), the optimistic write is guaranteed to be visible in the cache for the entire duration of the real request — and because `onError` always receives the same `context` object `onMutate` returned (carried through `state.context`, set by the second `'loading'` dispatch), the rollback always has the right snapshot even if multiple mutations are in flight for different variables.
+
+## Common pitfalls
+
+- **`onMutate` throwing aborts the mutation before `mutationFn` ever runs**, and skips your mutation-level `onError`/`onSettled` entirely — only `mutationCache.config.onError` (the cache-level handler) sees the error, then it's rethrown to the caller of `execute()`/`mutate()`. If you need cleanup on a failed `onMutate`, put it in a `try/catch` inside `onMutate` itself, not in `onSettled`.
+- **Mutations retry 0 times by default** (`this.options.retry ?? 0`), unlike queries' default of 3 — don't assume `retry` semantics carry over from `QueryOptions`.
+- **Cache-level callbacks always run before the matching mutation-level callback** for `onSuccess`/`onError`, but **mutation-level `onSettled` always runs before cache-level `onSettled`** — easy to get backwards if you're relying on side-effect ordering between the two layers (e.g. global toast notifications in `MutationCache.onSettled` will fire *after* a per-mutation `onSettled` has already run).
+- **`scope` only serializes mutations sharing the exact same `scope.id` string** — there's no automatic scoping by `mutationKey`; two unrelated mutations with the same `mutationKey` but no shared `scope` run fully in parallel.
+- **`continue()` silently falls back to `execute()` from scratch** if no retryer exists yet — calling `continue()` on a mutation that never started will re-run `onMutate` and `mutationFn` as if it were a brand-new `execute()` call, not a true "resume."
+- **The `restored` branch in `execute()` doesn't currently skip anything functionally different** — both branches call `this.#retryer.start()` identically; only the surrounding `if (!restored)` block (re-running `onMutate` and the initial `'loading'` dispatch) is skipped for restored mutations.
+
+## See also
+
+- [01-overview](./01-overview) — `MutationObserver`, `MutationOptions`, `MutationCache` basics
+- [10-mutation-cache](./10-mutation-cache) — `canRun`/`runNext`/scope queue implementation
+- [12-retryer](./12-retryer) — `createRetryer`, `canFetch`, pause/continue mechanics

@@ -1,0 +1,270 @@
+# createSyncStoragePersister
+
+**File:** `src/index.ts`
+
+Builds a `Persister` (the interface defined by [`@headlesskit/query-persist-client-core`](../query-persist-client-core/01-overview)) around any **synchronous** key-value store — `localStorage`, `sessionStorage`, or an in-memory stand-in. The [overview](01-overview) covers the shape of the option bag; this page walks through the actual control flow inside `createSyncStoragePersister` — the throttling closure, the `retry` loop, and exactly what happens when storage is missing, full, or holds garbage.
+
+```typescript
+import { createSyncStoragePersister } from '@headlesskit/query-sync-storage-persister';
+```
+
+## Signature
+
+```typescript
+function createSyncStoragePersister(options: StoragePersisterOptions): Persister
+
+interface StoragePersisterOptions {
+  storage: Storage | null | undefined;
+  serialize?: (client: PersistedClient) => string;
+  deserialize?: (cachedString: string) => PersistedClient;
+  key?: string;
+  throttleTime?: number;
+  retry?: (persistedClient: PersistedClient, error: Error) => PersistedClient | undefined;
+}
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|--------------|
+| `storage` | `Storage \| null \| undefined` | Yes | The synchronous backend. If falsy, `createSyncStoragePersister` short-circuits and returns a no-op `Persister` — see [No storage](#no-storage-null-undefined) below. |
+| `serialize` | `(client: PersistedClient) => string` | No (default `JSON.stringify`) | Turns the in-memory `PersistedClient` into the string written to storage. |
+| `deserialize` | `(cachedString: string) => PersistedClient` | No (default `JSON.parse`) | Turns the stored string back into a `PersistedClient`. |
+| `key` | `string` | No (default `'REACT_QUERY_OFFLINE_CACHE'`) | The single storage key used for `getItem`/`setItem`/`removeItem`. Captured once, at call time, into a local `storageKey` — see [internals](#internals-the-closures-this-function-builds). |
+| `throttleTime` | `number` | No (default `1000`) | Milliseconds the `persistClient` write is delayed/coalesced by, via `setTimeout`. Does **not** affect `restoreClient` or `removeClient`, which both run immediately. |
+| `retry` | `(persistedClient, error) => PersistedClient \| undefined` | No | Invoked only when the underlying `storage.setItem` throws. Lets you transform the client (e.g. shrink it) and try again. |
+
+**Returns:** a `Persister`:
+
+```typescript
+interface Persister {
+  persistClient(persistedClient: PersistedClient): Promise<void>;
+  restoreClient(): Promise<PersistedClient | undefined>;
+  removeClient(): Promise<void>;
+}
+```
+
+All three methods are declared `async`, but only `persistClient`'s actual work happens off the synchronous call stack (inside the `setTimeout` callback) — the returned promise from `persistClient` resolves as soon as the timer is *scheduled*, not after the write completes. `restoreClient` and `removeClient` do their storage call synchronously inside the `async` function body, so the promise resolves after the work is already done — `async` there only exists to satisfy the `Persister` interface.
+
+## Internals: the closures this function builds
+
+Reading top to bottom, `createSyncStoragePersister` does the following:
+
+1. **No-op short-circuit.** `if (!storage) { return { persistClient: noop, restoreClient: async () => undefined, removeClient: noop } }`. `noop` is a module-level `async function noop(): Promise<void> {}` shared by both `persistClient` and `removeClient` in this branch — calling either does precisely nothing and resolves immediately.
+2. **Per-persister mutable state**, captured by closure and **not shared across separate `createSyncStoragePersister(...)` calls**:
+   - `throttleTimeout: ReturnType<typeof setTimeout> | undefined` — the pending timer handle.
+   - `pendingClient: PersistedClient | undefined` — whichever client was passed to the *most recent* `persistClient` call that hasn't flushed yet.
+   - `storageKey` — `key` copied into a local `const`, purely cosmetic (no different from using `key` directly).
+3. **`trySave(client)`** — a local helper, not part of the public `Persister`:
+   ```typescript
+   const trySave = (client: PersistedClient): Error | undefined => {
+     try {
+       storage.setItem(storageKey, serialize(client));
+       return undefined;
+     } catch (error) {
+       return error as Error;
+     }
+   };
+   ```
+   It returns the `Error` instead of throwing it — the caller (`persistClient`'s timeout callback) inspects the return value rather than using `try/catch` at the call site.
+4. The returned `persistClient` / `restoreClient` / `removeClient` trio, detailed method-by-method below.
+
+## Basic usage
+
+```typescript
+import { createSyncStoragePersister } from '@headlesskit/query-sync-storage-persister';
+
+const persister = createSyncStoragePersister({
+  storage: window.localStorage,
+});
+
+await persister.persistClient({
+  timestamp: Date.now(),
+  buster: '',
+  clientState: { queries: [], mutations: [] },
+});
+```
+
+Wired into the full lifecycle via `@headlesskit/query-persist-client-core` (see that package's [overview](../query-persist-client-core/01-overview) for `persistQueryClient`):
+
+```typescript
+import { QueryClient } from '@headlesskit/query-core';
+import { persistQueryClient } from '@headlesskit/query-persist-client-core';
+import { createSyncStoragePersister } from '@headlesskit/query-sync-storage-persister';
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: { gcTime: 1000 * 60 * 60 * 24 }, // keep data in memory long enough to serialize
+  },
+});
+
+const persister = createSyncStoragePersister({
+  storage: window.localStorage,
+});
+
+const [unsubscribe, restorePromise] = await persistQueryClient({
+  queryClient,
+  persister,
+  maxAge: 1000 * 60 * 60 * 24,
+  buster: '',
+});
+
+await restorePromise;
+queryClient.mount();
+```
+
+## Advanced: versioned cache + throttled writes + custom serialization
+
+A realistic production wiring: bust the persisted cache on every deploy with `buster`, slow down writes so a flurry of query updates doesn't hammer `localStorage`, and swap in a serializer that can round-trip `Date`/`Map`/`undefined` (which `JSON.stringify`/`JSON.parse` silently mangle).
+
+```typescript
+import SuperJSON from 'superjson';
+import { QueryClient } from '@headlesskit/query-core';
+import { persistQueryClient } from '@headlesskit/query-persist-client-core';
+import { createSyncStoragePersister } from '@headlesskit/query-sync-storage-persister';
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: { gcTime: 1000 * 60 * 60 * 24 },
+  },
+});
+
+const persister = createSyncStoragePersister({
+  storage: window.localStorage,
+  key: 'MY_APP_CACHE',
+  throttleTime: 3000,           // coalesce writes — at most once every 3s
+  serialize: SuperJSON.stringify,
+  deserialize: SuperJSON.parse,
+  retry: (persistedClient, error) => {
+    // Quota exceeded — drop the oldest queries and try a smaller payload.
+    if (error.name !== 'QuotaExceededError') return undefined;
+    return {
+      ...persistedClient,
+      clientState: {
+        ...persistedClient.clientState,
+        queries: persistedClient.clientState.queries.slice(-20),
+      },
+    };
+  },
+});
+
+const [unsubscribe, restorePromise] = await persistQueryClient({
+  queryClient,
+  persister,
+  maxAge: 1000 * 60 * 60 * 24,
+  // Bump this on every deploy (e.g. inject the build hash at build time) —
+  // any previously persisted snapshot with a different `buster` is discarded
+  // on restore instead of being hydrated into the new client shape.
+  buster: import.meta.env.VITE_BUILD_HASH ?? '',
+});
+
+await restorePromise;
+queryClient.mount();
+```
+
+Note that `createSyncStoragePersister` itself never reads `buster` or `maxAge` — those are entirely `@headlesskit/query-persist-client-core`'s concern (`persistQueryClientRestore` compares the restored `PersistedClient.buster`/`timestamp` and calls `removeClient()` if either check fails). The persister only ever sees a `PersistedClient` it's told to save or asked to load — it has no opinion about versioning.
+
+## Method-by-method behavior
+
+### `persistClient`
+
+```typescript
+persistClient(persistedClient: PersistedClient): Promise<void>
+```
+
+```typescript
+persistClient: async (persistedClient: PersistedClient) => {
+  if (throttleTimeout) {
+    clearTimeout(throttleTimeout);
+  }
+  pendingClient = persistedClient;
+  throttleTimeout = setTimeout(() => {
+    if (pendingClient !== undefined) {
+      let client: PersistedClient | undefined = pendingClient;
+      let error = trySave(client);
+      if (error && retry) {
+        do {
+          client = retry(client, error);
+          if (!client) break;
+          error = trySave(client);
+        } while (error);
+      }
+      pendingClient = undefined;
+    }
+  }, throttleTime);
+},
+```
+
+- **Trailing-edge throttle, not leading-edge.** Every call clears the previous timer (if one is pending) and starts a fresh one. If `persistClient` is called repeatedly faster than `throttleTime`, only the **last** `persistedClient` passed in that window is ever written — earlier ones are discarded entirely, never written at all (not queued, not merged).
+- **The write itself happens `throttleTime` ms *after the last call*, not on a fixed interval.** A query cache that updates continuously will never persist until updates stop for at least `throttleTime` ms — with the default `1000`, a query client under constant churn could go a long time without a successful disk write.
+- **The returned promise resolves as soon as the timer is scheduled**, before any actual `setItem` call happens. Awaiting `persistClient(...)` does not mean the data is on disk yet.
+- **Retry loop on failure.** If `storage.setItem` throws (caught inside `trySave`) and a `retry` function was supplied, it's called in a `do...while` loop: `retry(client, error)` returns either a (presumably smaller/different) replacement `PersistedClient` to try again, or a falsy value to give up. The loop calls `trySave` again with whatever `retry` returned, and keeps looping **as long as `trySave` keeps failing and `retry` keeps returning a truthy client**. If `retry` returns `undefined`/`null`, the loop `break`s and the write is silently abandoned — no error is thrown or surfaced anywhere.
+- **No `retry` supplied + `setItem` throws** → the error is captured by `trySave`, returned, but since `if (error && retry)` is false, nothing happens with it. The failure is swallowed — `persistClient`'s promise still resolves successfully.
+- **`pendingClient` is reset to `undefined` after the timeout body runs**, regardless of whether the save ultimately succeeded, failed, or was abandoned via `retry`. This is bookkeeping only — it does not block subsequent `persistClient` calls.
+
+### `restoreClient`
+
+```typescript
+restoreClient(): Promise<PersistedClient | undefined>
+```
+
+```typescript
+restoreClient: async () => {
+  const cacheString = storage.getItem(storageKey);
+  if (!cacheString) {
+    return undefined;
+  }
+  return deserialize(cacheString) as PersistedClient;
+},
+```
+
+- Calls `storage.getItem(storageKey)` directly — **not throttled**, **not subject to `pendingClient`**. If a `persistClient` write is still sitting in its throttle window (not yet flushed to storage), `restoreClient` will not see it; it only sees what's actually been written to `storage`.
+- `if (!cacheString)` treats `null` (key absent — the standard `Storage.getItem` miss return), `undefined`, and `''` (empty string) all the same way: returns `undefined`, meaning "nothing to restore." An empty string is a falsy value here even though it's a different signal from "no key" — there's no way to distinguish them from this function's return value alone.
+- **Does not catch `deserialize` errors.** If the stored string is corrupt or not valid input for `deserialize` (default `JSON.parse` throws `SyntaxError` on malformed JSON), that exception propagates straight out of `restoreClient()` and rejects the returned promise — there's no internal try/catch the way `persistClient` has via `trySave`. Callers (e.g. `persistQueryClientRestore`'s `onError`) need to be ready to catch it.
+
+### `removeClient`
+
+```typescript
+removeClient(): Promise<void>
+```
+
+```typescript
+removeClient: async () => {
+  storage.removeItem(storageKey);
+},
+```
+
+- Calls `storage.removeItem` immediately and unconditionally — **no throttling**, and it does not check or clear `pendingClient`/`throttleTimeout`. If a `persistClient` call is mid-flight (timer pending) when `removeClient` runs, the previously scheduled write can still fire *after* the removal completes, re-writing the key the caller just asked to clear. There's no internal coordination between the two methods.
+- Does not catch exceptions from `storage.removeItem` — if it throws, `removeClient()`'s promise rejects.
+
+## No storage (`null`/`undefined`)
+
+```typescript
+if (!storage) {
+  return {
+    persistClient: noop,
+    restoreClient: async () => undefined,
+    removeClient: noop,
+  };
+}
+```
+
+This is checked once, synchronously, when `createSyncStoragePersister(...)` is called — not on every method call. Useful for SSR or any environment where `window`/`localStorage` may not exist:
+
+```typescript
+const persister = createSyncStoragePersister({
+  storage: typeof window !== 'undefined' ? window.localStorage : null,
+});
+// On the server: every method is a no-op. persistClient/removeClient resolve
+// immediately doing nothing; restoreClient always resolves to `undefined`.
+```
+
+Note this branch is taken for `null` **and** `undefined`, but also for any other falsy value (e.g. accidentally passing `0` or `''` for `storage` also triggers it, since the check is `!storage`, not `storage == null`).
+
+## Common pitfalls
+
+- **Assuming `await persister.persistClient(...)` means the write finished.** It only means the timer was scheduled. If you immediately read back from `storage` (or reload the page) before `throttleTime` elapses, you will see stale or missing data. If you need a guaranteed-flushed write (e.g. right before tearing down a tab), there is no `flush()` escape hatch in this implementation — your only lever is `throttleTime: 0`, which still defers to a `setTimeout(..., 0)` macrotask rather than writing synchronously.
+- **Calling `persistClient` faster than `throttleTime` and expecting every snapshot to land.** Only the most recent call's `persistedClient` in each throttle window is ever saved — intermediate snapshots are dropped, not queued. This is fine for "cache mirrors current state" use cases, but means you cannot rely on this persister for an audit log of every change.
+- **Forgetting the `retry` failure path is silent.** If `storage.setItem` throws (most commonly `QuotaExceededError` once `localStorage`'s ~5–10MB browser limit is hit) and you didn't pass `retry`, the write is dropped with zero feedback — no thrown error, no rejected promise, nothing in the console. If you care about quota failures, you must supply `retry` (even one that just logs and returns `undefined` to give up loudly via your own side effect).
+- **`deserialize` errors are not swallowed the way `setItem` errors are.** A corrupted or manually-edited storage value will make `restoreClient()` reject. Pair this persister with `persistQueryClient`'s `onError` (see [query-persist-client-core](../query-persist-client-core/01-overview)) rather than assuming restore always either succeeds or quietly returns `undefined`.
+- **SSR / no `window`.** Passing `storage: window.localStorage` directly on the server throws a `ReferenceError` before `createSyncStoragePersister` is even reached (the *reference* to `window` fails, not anything inside this package). Guard with `typeof window !== 'undefined' ? window.localStorage : null` — the `null` branch is exactly what this function expects for "do nothing."
+- **Non-serializable data with the default `serialize`.** `JSON.stringify` silently drops `undefined` values and functions, converts `Date` to an ISO string (not back to a `Date` on `deserialize`), and throws on circular references or `BigInt`. If your `clientState` can contain any of these, either sanitize it via `dehydrateOptions.serializeData` in `query-persist-client-core`, or supply a `serialize`/`deserialize` pair (e.g. SuperJSON) that round-trips them correctly — this package does not validate or transform the data for you.
+- **Racing `removeClient` against an in-flight throttled `persistClient`.** Because `removeClient` doesn't touch `throttleTimeout`/`pendingClient`, calling `removeClient()` right after `persistClient()` can result in the removed key reappearing once the pending timeout fires. If you need a hard "clear and stay clear," cancel/avoid pending `persistClient` calls yourself before removing.

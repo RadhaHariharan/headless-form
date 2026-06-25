@@ -1,0 +1,187 @@
+# timeoutManager
+
+**File:** `src/timeoutManager.ts`
+
+`timeoutManager` is a swappable indirection layer over `setTimeout`/`clearTimeout`/`setInterval`/`clearInterval`. Every internal timer in query-core — [Removable's GC scheduling](./18-removable), retry backoff, `refetchInterval` polling — goes through this single shared instance instead of calling the global timer functions directly, so the underlying implementation can be replaced wholesale (for non-browser/non-Node environments, or for deterministic tests with fake timers).
+
+```typescript
+import { timeoutManager, defaultTimeoutProvider, systemSetTimeoutZero } from '@headlesskit/query-core';
+import type { TimeoutManager, TimeoutProvider, TimeoutCallback, ManagedTimerId } from '@headlesskit/query-core';
+```
+
+## Signature
+
+```typescript
+type TimeoutCallback = (_: void) => void;
+type ManagedTimerId = number | { [Symbol.toPrimitive]: () => number };
+
+type TimeoutProvider<TTimerId extends ManagedTimerId = ManagedTimerId> = {
+  readonly setTimeout: (callback: TimeoutCallback, delay: number) => TTimerId;
+  readonly clearTimeout: (timeoutId: TTimerId | undefined) => void;
+  readonly setInterval: (callback: TimeoutCallback, delay: number) => TTimerId;
+  readonly clearInterval: (intervalId: TTimerId | undefined) => void;
+};
+
+const defaultTimeoutProvider: TimeoutProvider;
+
+class TimeoutManager implements Omit<TimeoutProvider, 'name'> {
+  setTimeoutProvider<TTimerId extends ManagedTimerId>(provider: TimeoutProvider<TTimerId>): void;
+  setTimeout(callback: TimeoutCallback, delay: number): ManagedTimerId;
+  clearTimeout(timeoutId: ManagedTimerId | undefined): void;
+  setInterval(callback: TimeoutCallback, delay: number): ManagedTimerId;
+  clearInterval(intervalId: ManagedTimerId | undefined): void;
+}
+
+const timeoutManager: TimeoutManager;
+
+function systemSetTimeoutZero(callback: TimeoutCallback): void;
+```
+
+| Export | Type | Description |
+|---|---|---|
+| `timeoutManager` | `TimeoutManager` (singleton instance) | The shared instance used throughout query-core |
+| `TimeoutManager` | class | `setTimeout`/`clearTimeout`/`setInterval`/`clearInterval` delegating to a swappable `#provider` |
+| `defaultTimeoutProvider` | `TimeoutProvider` | The out-of-the-box provider — thin wrapper around the global timer functions |
+| `setTimeoutProvider(provider)` | method | Swaps the underlying provider implementation |
+| `systemSetTimeoutZero(callback)` | function | Schedules `callback` via the **real global** `setTimeout(callback, 0)` — bypasses `timeoutManager` entirely |
+
+## Basic usage
+
+Most code never touches `timeoutManager` directly — it's used internally by `Removable`, retry logic, and interval-based refetching. Direct usage looks like a drop-in replacement for `setTimeout`/`clearTimeout`:
+
+```typescript
+import { timeoutManager } from '@headlesskit/query-core';
+
+const id = timeoutManager.setTimeout(() => {
+  console.log('fired');
+}, 1000);
+
+timeoutManager.clearTimeout(id);
+```
+
+## Advanced: swapping in a custom timer implementation
+
+`setTimeoutProvider` lets you replace the global-timer-backed default with anything implementing the four-method `TimeoutProvider` shape — useful for environments without global timers, or for tests that want deterministic, manually-advanced time instead of real wall-clock delays:
+
+```typescript
+import { timeoutManager } from '@headlesskit/query-core';
+import type { TimeoutProvider } from '@headlesskit/query-core';
+
+// A fake provider for deterministic tests
+function createFakeTimeoutProvider(): TimeoutProvider & { flush: () => void } {
+  const pending: Array<{ id: number; callback: () => void }> = [];
+  let nextId = 1;
+
+  return {
+    setTimeout: (callback) => {
+      const id = nextId++;
+      pending.push({ id, callback });
+      return id;
+    },
+    clearTimeout: (id) => {
+      const index = pending.findIndex((t) => t.id === id);
+      if (index !== -1) pending.splice(index, 1);
+    },
+    setInterval: (callback) => {
+      const id = nextId++;
+      pending.push({ id, callback });
+      return id;
+    },
+    clearInterval: (id) => {
+      const index = pending.findIndex((t) => t.id === id);
+      if (index !== -1) pending.splice(index, 1);
+    },
+    flush: () => {
+      pending.splice(0).forEach((t) => t.callback());
+    },
+  };
+}
+
+const fakeProvider = createFakeTimeoutProvider();
+timeoutManager.setTimeoutProvider(fakeProvider);
+
+// Now GC timeouts, retry delays, and refetchInterval polling all
+// run through `fakeProvider` instead of real setTimeout — call
+// `fakeProvider.flush()` in a test to fire them synchronously.
+```
+
+This is exactly the kind of swap the comment in `setTimeoutProvider` warns about — call it once, before any timers have actually been scheduled through the old provider, since switching mid-flight can "result in unexpected behavior" (timers already scheduled against the old provider are not migrated).
+
+## Method-by-method breakdown
+
+### `defaultTimeoutProvider`
+
+```typescript
+export const defaultTimeoutProvider: TimeoutProvider = {
+  setTimeout: (callback, delay) => setTimeout(callback, delay),
+  clearTimeout: (timeoutId) => clearTimeout(timeoutId as SystemTimerId | undefined),
+  setInterval: (callback, delay) => setInterval(callback, delay),
+  clearInterval: (intervalId) => clearInterval(intervalId as SystemTimerId | undefined),
+}
+```
+
+A direct pass-through to the global `setTimeout`/`clearTimeout`/`setInterval`/`clearInterval`. `SystemTimerId` is just `ReturnType<typeof setTimeout>` — the cast exists because `ManagedTimerId` is a broader type (`number | { [Symbol.toPrimitive]: () => number }`) than what the global functions actually return in a given runtime (a `number` in browsers, a `Timeout` object in Node).
+
+### `TimeoutManager` class
+
+Holds two private fields: `#provider` (defaults to `defaultTimeoutProvider`) and `#providerCalled` (a dev-mode-only flag).
+
+#### `setTimeoutProvider(provider)`
+
+```typescript
+setTimeoutProvider<TTimerId extends ManagedTimerId>(provider: TimeoutProvider<TTimerId>): void {
+  if (process.env['NODE_ENV'] !== 'production') {
+    if (this.#providerCalled && provider !== this.#provider) {
+      console.error(
+        `[timeoutManager]: Switching provider after calls to previous provider might result in unexpected behavior.`,
+        { previous: this.#provider, provider },
+      )
+    }
+  }
+  this.#provider = provider
+  if (process.env['NODE_ENV'] !== 'production') {
+    this.#providerCalled = false
+  }
+}
+```
+
+In non-production builds, if the *current* provider has already had `setTimeout`/`setInterval` called on it (`#providerCalled === true`) and you're switching to a genuinely different provider object, it logs a `console.error` warning — this guards against silently orphaning timers that were scheduled against the old provider (since the new provider has no way to know about or clear them). After swapping, `#providerCalled` is reset to `false` in dev builds so the warning logic re-arms for the new provider.
+
+#### `setTimeout(callback, delay)` / `setInterval(callback, delay)`
+
+Both mark `#providerCalled = true` (dev-mode only) before delegating to `this.#provider.setTimeout(...)` / `this.#provider.setInterval(...)` respectively, returning whatever `ManagedTimerId` the provider hands back.
+
+#### `clearTimeout(timeoutId)` / `clearInterval(intervalId)`
+
+Pure delegation to `this.#provider.clearTimeout(timeoutId)` / `this.#provider.clearInterval(intervalId)` — these do **not** set `#providerCalled`, since clearing doesn't create new outstanding timers.
+
+### `timeoutManager` (singleton)
+
+```typescript
+export const timeoutManager = new TimeoutManager()
+```
+
+The single shared instance every other query-core module imports — there is no per-query or per-client `TimeoutManager`; it's process/module-global.
+
+### `systemSetTimeoutZero(callback)`
+
+```typescript
+export function systemSetTimeoutZero(callback: TimeoutCallback): void {
+  setTimeout(callback, 0)
+}
+```
+
+Calls the **real, global** `setTimeout` directly — deliberately bypassing `timeoutManager` and any custom provider. Used for internal scheduling that must always run on the real event loop tick (e.g. micro-deferred callbacks), regardless of whether the app has swapped in a fake/custom timer provider for test or non-standard environments.
+
+## Common pitfalls
+
+- **Swapping providers after timers are already scheduled.** `setTimeoutProvider` doesn't migrate or cancel timers created under the old provider — they keep running against their original implementation, while new calls go to the new one. The dev-mode `console.error` exists specifically to flag this footgun; heed it.
+- **Expecting `systemSetTimeoutZero` to respect a custom provider.** It intentionally calls the global `setTimeout` directly, not `timeoutManager.setTimeout` — swapping providers has no effect on it. If you need *all* timer-like scheduling intercepted (e.g. in fake-timer tests), this function is an escape hatch you can't close from the outside.
+- **Treating `ManagedTimerId` as always a `number`.** The type is `number | { [Symbol.toPrimitive]: () => number }` to accommodate Node's `Timeout` object (which is primitive-coercible but not literally a `number`) — code that does strict `typeof id === 'number'` checks on a `ManagedTimerId` may behave unexpectedly under Node's default provider.
+- **Calling `clearTimeout`/`clearInterval` with `undefined`.** Both methods accept `| undefined` and delegate straight through — `defaultTimeoutProvider`'s wrappers likewise accept `undefined` (matching the global functions' tolerance for it), so this is safe, but a *custom* provider must handle the `undefined` case itself or it will throw.
+
+## See also
+
+- [Query Core overview](./01-overview)
+- [Removable](./18-removable)
+- [environmentManager](./19-environment-manager)

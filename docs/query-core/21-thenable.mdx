@@ -1,0 +1,173 @@
+# pendingThenable
+
+**File:** `src/thenable.ts`
+
+`thenable.ts` defines a custom "thenable" — a real `Promise` with an extra `status` field bolted on (`'pending' | 'fulfilled' | 'rejected'`) plus, while pending, externally-callable `resolve`/`reject` methods. This is the primitive behind the Suspense-friendly `observer.promise` API documented in the [overview](./01-overview#queryobserver) — it's what lets `QueryObserver` resolve/reject a promise from *outside* the promise's own executor, and lets framework adapters synchronously check `.status` to decide whether to throw the promise (Suspense) or render data.
+
+```typescript
+import { pendingThenable, tryResolveSync } from '@headlesskit/query-core';
+import type { Thenable, FulfilledThenable, RejectedThenable, PendingThenable } from '@headlesskit/query-core';
+```
+
+## Signature
+
+```typescript
+type FulfilledThenable<T> = Promise<T> & { status: 'fulfilled'; value: T };
+type RejectedThenable<T> = Promise<T> & { status: 'rejected'; reason: unknown };
+type PendingThenable<T> = Promise<T> & {
+  status: 'pending';
+  resolve: (value: T) => void;
+  reject: (reason: unknown) => void;
+};
+type Thenable<T> = FulfilledThenable<T> | RejectedThenable<T> | PendingThenable<T>;
+
+function pendingThenable<T>(): PendingThenable<T>;
+function tryResolveSync(
+  promise: Promise<unknown> | Thenable<unknown>,
+): { data: unknown } | undefined;
+```
+
+| Export | Type | Description |
+|---|---|---|
+| `pendingThenable<T>()` | `() => PendingThenable<T>` | Creates a real `Promise<T>` with `status: 'pending'` plus externally callable `resolve`/`reject` |
+| `tryResolveSync(promise)` | `(promise) => { data: unknown } \| undefined` | Attempts to read a promise's resolved value **synchronously**, returning `undefined` if it isn't already settled |
+| `Thenable<T>` | type | Union of all three states — `FulfilledThenable`, `RejectedThenable`, `PendingThenable` |
+
+## Basic usage
+
+```typescript
+import { pendingThenable } from '@headlesskit/query-core';
+
+const thenable = pendingThenable<string>();
+
+console.log(thenable.status); // 'pending'
+
+// Anything holding a reference to `thenable` can resolve it from outside
+thenable.resolve('done');
+
+console.log(thenable.status); // 'fulfilled'
+// thenable.value === 'done'
+
+// It's still a real Promise — awaitable as normal
+const value = await thenable;
+```
+
+If rejected instead:
+
+```typescript
+const failing = pendingThenable<never>();
+failing.reject(new Error('boom'));
+console.log(failing.status); // 'rejected'
+// failing.reason instanceof Error
+```
+
+## Advanced: Suspense-style synchronous status checks
+
+Because `pendingThenable` mutates the promise object itself with a `status` discriminant (rather than wrapping it), a Suspense-integrated framework adapter can synchronously branch on `.status` without `await`ing — exactly what React Suspense needs (throw the pending promise, or read `.value`/`.reason` immediately if already settled):
+
+```typescript
+function useSuspenseQuery<T>(thenable: Thenable<T>): T {
+  if (thenable.status === 'pending') {
+    throw thenable; // React Suspense catches this and shows a fallback
+  }
+  if (thenable.status === 'rejected') {
+    throw thenable.reason; // caught by the nearest error boundary
+  }
+  return thenable.value; // status === 'fulfilled'
+}
+```
+
+`query-core`'s own `retryer.ts` uses `pendingThenable<TData>()` internally as the underlying mechanism for a fetch's resolvable promise — `QueryObserver.promise` is built on the same primitive, so a component reading `observer.promise.status === 'fulfilled'` outside of Suspense can synchronously check whether data is already available.
+
+`tryResolveSync` complements this for the *plain* `Promise` case — e.g. checking whether `placeholderData` or `initialData` resolved synchronously already without forcing an `await`:
+
+```typescript
+import { tryResolveSync } from '@headlesskit/query-core';
+
+const result = tryResolveSync(Promise.resolve(42));
+// Synchronously: `.then` callbacks for an already-resolved promise
+// run as microtasks, so this only catches promises whose `.then`
+// callback already ran in a *prior* microtask flush — not brand-new promises.
+```
+
+## Method-by-method breakdown
+
+### `pendingThenable<T>()`
+
+```typescript
+export function pendingThenable<T>(): PendingThenable<T> {
+  let resolve: Pending<T>['resolve']
+  let reject: Pending<T>['reject']
+  const thenable = new Promise((_resolve, _reject) => {
+    resolve = _resolve
+    reject = _reject
+  }) as PendingThenable<T>
+
+  thenable.status = 'pending'
+  thenable.catch(() => {
+    // prevent unhandled rejection errors
+  })
+
+  function finalize(data: Fulfilled<T> | Rejected) {
+    Object.assign(thenable, data)
+    delete (thenable as Partial<PendingThenable<T>>).resolve
+    delete (thenable as Partial<PendingThenable<T>>).reject
+  }
+
+  thenable.resolve = (value) => {
+    finalize({ status: 'fulfilled', value })
+    resolve(value)
+  }
+  thenable.reject = (reason) => {
+    finalize({ status: 'rejected', reason })
+    reject(reason)
+  }
+
+  return thenable
+}
+```
+
+Step by step:
+1. Creates a normal `Promise` and captures its native `resolve`/`reject` executor callbacks into outer-scope variables.
+2. Casts the promise to `PendingThenable<T>` and sets `thenable.status = 'pending'`.
+3. **Immediately attaches a no-op `.catch(() => {})`** — this exists purely to prevent "unhandled promise rejection" warnings/crashes in environments that surface them, since the thenable may be rejected before anything else attaches a real handler.
+4. Defines a private `finalize` helper that `Object.assign`s the fulfilled/rejected status fields onto the thenable **and deletes `resolve`/`reject`** from it — once settled, a `PendingThenable` is no longer shaped like one; calling `.resolve()`/`.reject()` again afterward would call the now-stale closures harmlessly (the underlying native promise can only settle once anyway) but the public `resolve`/`reject` properties are gone, so TypeScript would catch further misuse since the type narrows away from `PendingThenable`.
+5. `thenable.resolve(value)` calls `finalize({ status: 'fulfilled', value })` then the captured native `resolve(value)` — finalize runs *first*, so `.status`/`.value` are observable synchronously, even though `.then` callbacks queued on the promise still resolve asynchronously per normal Promise semantics.
+6. `thenable.reject(reason)` is the mirror image with `status: 'rejected'` / `reason`.
+
+### `tryResolveSync(promise)`
+
+```typescript
+export function tryResolveSync(promise: Promise<unknown> | Thenable<unknown>) {
+  let data: unknown
+
+  promise
+    .then((result) => {
+      data = result
+      return result
+    }, noop)
+    ?.catch(noop)
+
+  if (data !== undefined) {
+    return { data }
+  }
+
+  return undefined
+}
+```
+
+Attaches a `.then(onFulfilled, noop)` (the second argument suppresses unhandled-rejection noise for the rejected path) followed by `?.catch(noop)`, then **immediately** (synchronously, on the same tick) checks whether `data` was set. This only works because `.then` callbacks on an **already-settled** promise are still queued as microtasks per spec — so in practice this can only "catch" a value if a prior microtask flush already ran the callback (e.g. the promise was created and settled in an earlier synchronous block, and some other code already awaited/flushed microtasks before `tryResolveSync` is called). For a promise that's settling for the first time inside this same call, `data` will still be `undefined` by the time the function returns, and it returns `undefined`.
+
+The `noop` import from `./utils` is used as the rejection handler so a rejected promise doesn't produce an unhandled rejection warning, and the result is `undefined` (the function gives up, doesn't differentiate "still pending" from "rejected").
+
+## Common pitfalls
+
+- **`tryResolveSync` cannot synchronously resolve a freshly-created promise.** `.then` callbacks are always deferred to a microtask in real JS engines — calling `tryResolveSync(somePromise)` right after creating `somePromise` will almost always return `undefined`, not the resolved value, regardless of how "instant" the promise's resolution is.
+- **`tryResolveSync` can't distinguish "still pending" from "rejected."** Both cases return `undefined` — if you need to know *why* there's no data, use a `Thenable`'s `.status` field via `pendingThenable` instead.
+- **Treating `.resolve`/`.reject` as always present.** After a `PendingThenable` settles, `finalize` deletes both methods — code that holds a long-lived reference and calls `.resolve()` again after the fact will hit `undefined is not a function` (or be caught at the type level if using the proper `Thenable<T>` union and narrowing on `.status` first).
+- **Calling `.resolve()`/`.reject()` more than once before settlement completes.** The native promise itself ignores extra `resolve`/`reject` calls (per Promise spec, first settlement wins), but `finalize` will still run again and re-`Object.assign` — harmless in practice since the underlying promise's value won't change, but avoid relying on it.
+
+## See also
+
+- [Query Core overview](./01-overview)
+- [QueryObserver](./05-query-observer)

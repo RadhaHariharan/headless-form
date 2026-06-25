@@ -1,0 +1,126 @@
+# experimental_createPersister
+
+**File:** `src/createPersister.ts`
+
+A *per-query* persister factory. Unlike [persist](./03-persist) (which snapshots the **entire** `QueryClient` at once), `experimental_createPersister` wraps a single query's `queryFn` so that each query reads and writes its own cache entry independently — useful when you only want to persist a handful of queries, or want different storage/`maxAge`/`buster` settings per query.
+
+```typescript
+import { experimental_createPersister } from '@headlesskit/query-persist-client-core';
+```
+
+## Signature
+
+```typescript
+function experimental_createPersister<T = unknown>(
+  options: PersisterOptions,
+): { persisterFn: (queryFn, context, query) => Promise<T> }
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `storage` | `AsyncStorage \| SyncStorage` | required | The storage backend to read/write to |
+| `key` | `string` | — | Declared in the option type but **not read anywhere in the implementation** — see [Common pitfalls](#common-pitfalls) |
+| `maxAge` | `number` | `1000 * 60 * 60 * 24` (24h) | Max age, in ms, before a stored entry is treated as expired |
+| `serialize` | `(persistedQuery) => string` | `JSON.stringify` | Serializer applied before `storage.setItem` |
+| `deserialize` | `(cached) => PersistedQuery` | `JSON.parse` | Deserializer applied after `storage.getItem` |
+| `prefix` | `string` | `'rq'` | Prepended to the per-query storage key |
+| `buster` | `string` | `''` | Version string — a mismatch invalidates the stored entry |
+
+**Returns:** an object with a single `persisterFn` property — a drop-in replacement wrapper you splice into how a query's `queryFn` is invoked.
+
+```typescript
+export interface PersisterOptions<TStorage extends Storage = Storage> {
+  storage: TStorage
+  key?: string
+  maxAge?: number
+  serialize?: (persistedQuery: PersistedQuery) => StorageValue
+  deserialize?: (cachedString: StorageValue) => PersistedQuery
+  prefix?: string
+  buster?: string
+}
+```
+
+`Storage` is a union of `AsyncStorage` (Promise-returning `getItem`/`setItem`/`removeItem`, e.g. React Native's `AsyncStorage`) and `SyncStorage` (synchronous, e.g. `localStorage`). Because `persisterFn` always `await`s the storage calls, a `SyncStorage` works transparently too — `await` on a non-Promise value just resolves immediately.
+
+## Internals: what `persisterFn` actually does
+
+`persisterFn` is `(queryFn, context, query) => Promise<T>`, matching the shape query-core invokes a query function with (`query` here is the internal `Query` instance, with `queryHash`, `queryKey`, `state`, and `setState`).
+
+1. **Build the storage key.** `` `${prefix}-${query.queryHash}` `` — every query gets its own key, keyed by its hash (which already encodes the query key's contents).
+2. **Try to read an existing entry.** `await storage.getItem(storageKey)`.
+3. **If something was stored**, attempt to `deserialize` it inside a `try`. On a parse error, the `catch` block silently swallows it (`// ignore parse errors`) and execution falls through to step 5 as if nothing were cached.
+4. **Validate the cached entry**, only if deserialization succeeded:
+   - `isExpired = Date.now() - persistedQuery.timestamp > maxAge`
+   - `isBusted = persistedQuery.buster !== buster`
+   - `persistedQuery.state.status === 'success'` — only a previously **successful** fetch is ever replayed from storage; a cached `error` or `pending` state is never returned.
+   - If **all three** checks pass (not expired, not busted, status was `'success'`), it calls `query.setState(queryState as any)` to push the cached `QueryState` directly into the live `Query` instance, then **returns `queryState.data` immediately** — `queryFn` is never invoked, so no network request happens at all.
+5. **Otherwise, run the real `queryFn`** (`await queryFn(context)`), exactly as if no persister were involved.
+6. **Persist the fresh result.** It builds a new `PersistedQuery`:
+   ```typescript
+   {
+     state: { ...query.state, data, status: 'success', dataUpdatedAt: Date.now() },
+     queryKey: query.queryKey,
+     queryHash: query.queryHash,
+     buster,
+     timestamp: Date.now(),
+   }
+   ```
+   then `await storage.setItem(storageKey, serialize(persistedQuery))` inside a `try`/`catch` that **silently ignores storage errors** (quota exceeded, serialization failure, etc.) — a write failure never surfaces to the caller or rejects the returned promise.
+7. **Return `data`**, the freshly fetched value, regardless of whether the write succeeded.
+
+Note that step 6 always writes `status: 'success'` and a fresh `dataUpdatedAt`, overwriting whatever `query.state` looked like before the fetch — it does **not** persist error states, in-flight states, or any other field your `queryFn` context might have mutated.
+
+## Basic usage
+
+```typescript
+import { experimental_createPersister } from '@headlesskit/query-persist-client-core';
+import { QueryObserver } from '@headlesskit/query-core';
+
+const persister = experimental_createPersister({
+  storage: window.localStorage,
+  maxAge: 1000 * 60 * 60, // 1 hour
+});
+
+// persisterFn must be wired into however your queryFn invocation
+// pipeline calls query functions — e.g. a custom queryFn wrapper:
+const wrappedQueryFn = (context: any, query: any) =>
+  persister.persisterFn(originalQueryFn, context, query);
+```
+
+> `experimental_createPersister` only returns the wrapper function — it does **not** automatically attach itself to a `QueryObserver` or `QueryClient`. You (or framework-adapter glue code) are responsible for calling `persisterFn` in place of the real `queryFn` and forwarding its three arguments (`queryFn`, `context`, `query`).
+
+## Advanced: per-query storage tiers with `buster` versioning
+
+A realistic use case: persist only a few expensive, rarely-changing queries (e.g. a product catalog) to `localStorage`, while leaving frequently-changing queries (e.g. notifications) unpersisted — and invalidate the catalog cache whenever you ship a schema change.
+
+```typescript
+import { experimental_createPersister } from '@headlesskit/query-persist-client-core';
+
+const catalogPersister = experimental_createPersister({
+  storage: window.localStorage,
+  prefix: 'catalog',
+  maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
+  buster: process.env.CATALOG_SCHEMA_VERSION, // bump this on breaking changes
+  serialize: (q) => JSON.stringify(q),
+  deserialize: (s) => JSON.parse(s),
+});
+
+// Wherever your fetching layer invokes queryFn for catalog queries:
+async function fetchCatalogPage(context: any, query: any) {
+  return catalogPersister.persisterFn(
+    () => fetch(`/api/catalog?page=${context.pageParam}`).then((r) => r.json()),
+    context,
+    query,
+  );
+}
+```
+
+Because `buster` is compared with strict inequality (`persistedQuery.buster !== buster`) and not parsed/compared as a version range, any change to the string — even an unrelated one — invalidates **every** previously stored entry for that persister instance the next time each query runs.
+
+## Common pitfalls
+
+- **`key` is accepted in `PersisterOptions` but is dead code.** The destructured options in `experimental_createPersister` are `{ storage, key, maxAge, serialize, deserialize, prefix, buster }`, but `key` is never referenced anywhere inside `persisterFn` — only `prefix` and `query.queryHash` build the storage key. Passing `key` has zero effect; don't rely on it to override the storage key.
+- **Parse and storage errors fail silently.** Both the `deserialize` call (reading) and the `storage.setItem` call (writing) are wrapped in empty `catch` blocks. If your storage is full, your JSON is corrupted, or `deserialize` throws for any reason, you get no error, no log, and no exception — the query simply behaves as a cache miss and refetches. Add your own logging inside custom `serialize`/`deserialize` functions if you need visibility.
+- **Only `status === 'success'` entries are ever replayed.** If a previous fetch errored, that error state is never written by step 6 in the first place (it always writes `status: 'success'`), so there's no scenario where a cached error gets replayed — but it also means you cannot use this persister to "remember" the last error across reloads.
+- **No `removeClient`-equivalent.** There's no exported way to evict a single persisted query's entry; you'd have to call `storage.removeItem(`${prefix}-${queryHash}`)` yourself, reconstructing the same key format the persister uses internally.
+- **This is a per-query, not per-client, mechanism.** It does not call `dehydrate`/`hydrate` from `@headlesskit/query-core` at all — compare with [persist](./03-persist), which is the whole-client equivalent and does use them. Mixing both on the same query is possible but redundant.
