@@ -1,4 +1,5 @@
 import type { ValidationRule } from '../types/validation.types.js';
+import { createStringValidator } from '../field-validators/string-validator.js';
 
 /**
  * A regexp that matches strings containing at least one non-whitespace, non-tag character.
@@ -10,6 +11,18 @@ const HTML_CONTENT_REGEX = /[^\s<>]/;
  * A regexp that strips all HTML tags.
  */
 const HTML_TAGS_REGEX = /<[^>]*>/g;
+
+/**
+ * The strip-tags-then-check-for-content logic, plugged in as a {@link createStringValidator}
+ * `customValidation` hook so the required/trim handling has one shared implementation.
+ */
+const notEmptyHtmlValidator = createStringValidator({
+  required: true,
+  customValidation: (trimmed) => {
+    const stripped = trimmed.replace(HTML_TAGS_REGEX, '');
+    return HTML_CONTENT_REGEX.test(stripped) ? null : 'Empty';
+  },
+});
 
 /**
  * Returns a validation rule that fails when the value is an HTML string with no visible content.
@@ -37,8 +50,6 @@ export function isNotEmptyHTML<TError = string>(
     if (typeof value !== 'string') {
       return error ?? (null as TError | null);
     }
-    const stripped = value.replace(HTML_TAGS_REGEX, '');
-    const isEmpty = !HTML_CONTENT_REGEX.test(stripped);
-    return isEmpty ? (error ?? (null as TError | null)) : null;
+    return notEmptyHtmlValidator(value, 'Value') === null ? null : (error ?? (null as TError | null));
   };
 }

@@ -12,6 +12,8 @@ function isJSONString<TError = string>(error?: TError): ValidationRule<unknown, 
 
 Attempts `JSON.parse(value)` inside a `try`/`catch` — valid JSON (including primitives like `'"hello"'`, `'42'`, `'null'`, since these are all technically valid JSON documents per the spec, not just objects/arrays) passes; anything that throws fails. Non-string values always fail outright (without attempting to parse).
 
+Internally, the `JSON.parse` attempt is plugged in as a `customValidation` hook on the [field-validator toolkit](../14-field-validators)'s `createStringValidator({ required: true, customValidation: ... })`, so the toolkit owns the required/trim handling and this file only supplies the JSON-specific parse check. The value handed to `customValidation` is the already-trimmed string.
+
 ```typescript
 isJSONString('Must be valid JSON')('{"a":1}', {}, 'config'); // null
 isJSONString('Must be valid JSON')('{a:1}', {}, 'config');    // error — invalid JSON

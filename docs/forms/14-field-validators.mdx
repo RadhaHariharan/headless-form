@@ -19,7 +19,11 @@ The second argument, `fieldName`, is interpolated into the default messages and 
 
 > These factories are distinct from the form-rule helpers. The helpers plug straight into a
 > form's `validate` object; the field validators are standalone and need a tiny adapter to do
-> the same (see [Using with a form](#using-with-a-form)).
+> the same (see [Using with a form](#using-with-a-form)). In fact, most of the built-ins
+> (`isNotEmpty`, `isEmail`, `hasLength`, `isInRange`, `matches`, `isJSONString`,
+> `isNotEmptyHTML`) are themselves now thin wrappers around `createStringValidator` /
+> `createNumberValidator` / `createArrayValidator` internally — only `matchesField` is fully
+> bespoke, since cross-field comparison doesn't fit the single-value factory signature.
 
 ---
 

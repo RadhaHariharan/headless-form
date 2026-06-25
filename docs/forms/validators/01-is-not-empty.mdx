@@ -4,6 +4,8 @@
 
 The most commonly used built-in [ValidationRule](../types/04-validation-types) factory — a generic "required" check.
 
+Internally, the string/array emptiness checks are delegated to the [field-validator toolkit](../14-field-validators)'s `createStringValidator({ required: true })` and `createArrayValidator({ required: true })` — so the trimming and length-counting rules for those two types have a single shared implementation. `null`, `undefined`, and `false` are still checked directly in this file, since the toolkit has no notion of those.
+
 ## Signature
 
 ```typescript

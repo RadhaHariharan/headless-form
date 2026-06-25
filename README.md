@@ -104,12 +104,49 @@ form.subscribe(() => {
 - **Zero dependencies** in `@headlesskit/forms`
 - **Controlled and uncontrolled** modes — uncontrolled causes **zero re-renders on typing**
 - **Deep path inference** — `form.getInputProps('user.address.city')` is fully typed
-- **8 built-in validators** — `isNotEmpty`, `isEmail`, `matches`, `matchesField`, `isInRange`, `hasLength`, `isJsonString`, `isNotEmptyHtml`
+- **8 built-in validators** — `isNotEmpty`, `isEmail`, `matches`, `matchesField`, `isInRange`, `hasLength`, `isJSONString`, `isNotEmptyHTML`
+- **Field-validator toolkit** — `createStringValidator`, `createNumberValidator`, `createDateValidator`, `createCheckboxValidator`, `createArrayValidator` for configurable, reusable, multi-rule validators; the 8 built-in validators above are themselves implemented on top of this toolkit, so both layers share one validation engine
 - **Standard Schema resolver** — Zod v4, Valibot, Arktype
 - **Async-first validation** — generation-guarded, abortable, debounced
 - **List helpers** — `insertListItem`, `removeListItem`, `replaceListItem`, `reorderListItem`
 - **Named forms** — global registry + `createFormActions`
 - **`useField` / `injectField`** — standalone single-field hooks
+
+### Built-in validators vs. the field-validator toolkit
+
+`isNotEmpty`, `isEmail`, `matches`, `isInRange`, `hasLength`, `isJSONString`, and `isNotEmptyHTML`
+are small, ready-to-use `ValidationRule`s for the most common single-field checks. Internally,
+each one delegates its pass/fail logic to the matching `create*Validator` factory from the
+field-validator toolkit (e.g. `isEmail` is `createStringValidator({ allowedCharacters: 'custom',
+customPattern: EMAIL_REGEX })` under the hood) — they just keep the simpler
+`(value, error?) => ValidationRule` shape instead of a config object, and always return the
+single `error` value you pass in regardless of which internal check failed.
+
+Reach for the toolkit directly — via `createStringValidator`, `createNumberValidator`,
+`createDateValidator`, `createCheckboxValidator`, `createArrayValidator`, and
+`toValidationRule` to adapt the result into a `validate` rule — when you need more than one
+rule on a field (e.g. `minLength` + `allowedCharacters` + `forbiddenWords` together), custom
+per-check error messages, or a validator you intend to reuse across many fields/forms:
+
+```typescript
+import { useForm, createStringValidator, toValidationRule } from '@headlesskit/forms-react';
+
+const usernameValidator = createStringValidator({
+  minLength: 3,
+  maxLength: 20,
+  allowedCharacters: 'alphanumeric',
+  messages: { minLength: '{fieldName} must be at least 3 characters' },
+});
+
+const form = useForm({
+  initialValues: { username: '' },
+  validate: { username: toValidationRule(usernameValidator, 'Username') },
+});
+```
+
+`matchesField` is the one built-in validator left as-is — it compares two fields against each
+other, which needs the whole form's `values`, outside what a single-field `create*Validator`
+can see.
 
 ## Development
 

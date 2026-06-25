@@ -20,6 +20,8 @@ interface IsInRangeSpec {
 
 Requires the value to be a `number` (not a numeric string — no coercion happens here, unlike [createNumberValidator](../field-validators/03-number-validator)) and, if numeric, within `[min, max]` inclusive (either bound optional). `NaN` always fails.
 
+Internally, the non-number/`NaN` guard is checked directly in this file first; once a value is confirmed to be a real number, the actual `min`/`max` comparison is fully delegated to the [field-validator toolkit](../14-field-validators)'s `createNumberValidator({ required: false, min, max })`, so the range-comparison logic itself has a single shared implementation.
+
 ```typescript
 isInRange({ min: 0, max: 120 }, 'Age must be 0–120')(45, {}, 'age');  // null
 isInRange({ min: 0, max: 120 }, 'Age must be 0–120')(-5, {}, 'age');  // error

@@ -1,4 +1,6 @@
 import type { ValidationRule } from '../types/validation.types.js';
+import { createStringValidator } from '../field-validators/string-validator.js';
+import { createArrayValidator } from '../field-validators/array-validator.js';
 
 /**
  * Length range specification for {@link hasLength} when an exact count is not desired.
@@ -18,6 +20,12 @@ export interface HasLengthRangeSpec {
  * Pass a plain `number` for an exact length requirement, or `{ min?, max? }` for a range.
  * Non-string / non-array values always fail.
  *
+ * The min/max comparison itself is delegated to {@link createStringValidator} /
+ * {@link createArrayValidator} (with `required: false`, since `hasLength` — unlike
+ * `isNotEmpty` — has no opinion on emptiness by itself); a zero-length value is compared
+ * against `min`/`max` directly here, since the field-validator toolkit's `required: false`
+ * path short-circuits before reaching its own length checks.
+ *
  * @param lengthSpec - An exact length (`number`) or a `{ min?, max? }` range.
  * @param error - The error to return on failure. When omitted, marks invalid with no message.
  * @returns A `ValidationRule`.
@@ -34,26 +42,37 @@ export function hasLength<TError = string>(
   lengthSpec: number | HasLengthRangeSpec,
   error?: TError,
 ): ValidationRule<unknown, unknown, TError> {
-  return (value) => {
-    const fail = (): TError | null => error ?? (null as TError | null);
+  const min = typeof lengthSpec === 'number' ? lengthSpec : lengthSpec.min;
+  const max = typeof lengthSpec === 'number' ? lengthSpec : lengthSpec.max;
 
-    let length: number;
+  const stringValidator = createStringValidator({
+    required: false,
+    ...(min !== undefined ? { minLength: min } : {}),
+    ...(max !== undefined ? { maxLength: max } : {}),
+  });
+  const arrayValidator = createArrayValidator({
+    required: false,
+    ...(min !== undefined ? { minItems: min } : {}),
+    ...(max !== undefined ? { maxItems: max } : {}),
+  });
 
-    if (typeof value === 'string') {
-      length = value.trim().length;
-    } else if (Array.isArray(value)) {
-      length = value.length;
-    } else {
-      return fail();
-    }
-
-    if (typeof lengthSpec === 'number') {
-      return length === lengthSpec ? null : fail();
-    }
-
-    const { min, max } = lengthSpec;
-    if (min !== undefined && length < min) return fail();
-    if (max !== undefined && length > max) return fail();
+  const fail = (): TError | null => error ?? (null as TError | null);
+  const checkZeroLength = (): TError | null => {
+    if (min !== undefined && 0 < min) return fail();
+    if (max !== undefined && 0 > max) return fail();
     return null;
+  };
+
+  return (value) => {
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (trimmed.length === 0) return checkZeroLength();
+      return stringValidator(value, 'Value') === null ? null : fail();
+    }
+    if (Array.isArray(value)) {
+      if (value.length === 0) return checkZeroLength();
+      return arrayValidator(value, 'Value') === null ? null : fail();
+    }
+    return fail();
   };
 }

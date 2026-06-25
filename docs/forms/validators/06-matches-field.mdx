@@ -12,7 +12,7 @@ function matchesField<TError = string>(otherFieldPath: string, error?: TError): 
 
 ## Behavior
 
-Reads `otherFieldPath` out of the full `values` object (via [getPath](../utils/05-get-path), so nested paths work) and compares with strict equality (`===`) against the field's own value.
+Reads `otherFieldPath` out of the full `values` object (via [getPath](../utils/05-get-path), so nested paths work) and compares with strict equality (`===`) against the field's own value. Unlike the other validators in this folder, `matchesField` does **not** delegate to the [field-validator toolkit](../14-field-validators) — it needs the whole form's `values` to compare two fields, which the toolkit's single-value `(value, fieldName) => ...` signature can't express.
 
 ```typescript
 matchesField('password', 'Passwords do not match')('secret123', { password: 'secret123' }, 'confirmPassword'); // null

@@ -17,6 +17,8 @@ matches(/^\d{10}$/, 'Invalid phone number')('5551234567', {}, 'phone'); // null
 matches(/^\d{10}$/, 'Invalid phone number')('555-1234', {}, 'phone');    // error
 ```
 
+Internally, this is built on the [field-validator toolkit](../14-field-validators)'s `createStringValidator({ required: true, allowedCharacters: 'custom', customPattern: regexp })`. As with [isEmail](./02-is-email), this means the regex is tested against the **trimmed** value, not the raw one — a previously-failing value with leading/trailing whitespace (e.g. `' 5551234567 '` against `/^\d{10}$/`) now **passes**, since the surrounding whitespace is stripped before the pattern runs.
+
 ## Basic usage
 
 ```typescript
@@ -46,3 +48,4 @@ validate: {
 
 - **Calling `matches(regexp)` with no `error` argument never reports a failure** — same shared root cause as every validator in this folder. Always pass an explicit error.
 - **Forgetting `^`/`$` anchors makes the pattern match a substring anywhere in the value**, not the whole value — `matches(/\d{10}/, '...')` would pass for `'abc5551234567xyz'` since the regex finds a matching substring; anchor your patterns (`^...$`) unless a substring match is genuinely what you intend.
+- **Surrounding whitespace is silently trimmed before the pattern is tested** — same root cause as [isEmail](./02-is-email)'s pitfall, since both delegate to the same `createStringValidator` mechanism. If you need to reject untrimmed input outright, check `value !== value.trim()` yourself before calling `matches`.

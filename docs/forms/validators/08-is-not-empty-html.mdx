@@ -14,6 +14,8 @@ function isNotEmptyHTML<TError = string>(error?: TError): ValidationRule<unknown
 
 Strips all HTML tags (`/<[^>]*>/g`), then checks whether anything non-whitespace remains (`/[^\s<>]/`). A string is considered "empty HTML" when, after stripping tags, only whitespace is left.
 
+Internally, the strip-tags-then-check-for-content logic is plugged in as a `customValidation` hook on the [field-validator toolkit](../14-field-validators)'s `createStringValidator({ required: true, customValidation: ... })`, so the required/trim handling has one shared implementation with the other validators in this folder.
+
 ```typescript
 isNotEmptyHTML('Bio cannot be empty')('<p><br></p>', {}, 'bio');     // error — no visible content
 isNotEmptyHTML('Bio cannot be empty')('<p>Hello</p>', {}, 'bio');     // null — has content

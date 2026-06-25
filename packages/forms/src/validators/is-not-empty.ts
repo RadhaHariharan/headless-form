@@ -1,4 +1,13 @@
 import type { ValidationRule } from '../types/validation.types.js';
+import { createStringValidator } from '../field-validators/string-validator.js';
+import { createArrayValidator } from '../field-validators/array-validator.js';
+
+/**
+ * String/array "is it empty" checks, delegated to the field-validator toolkit's own
+ * `required` gate so the trimming/length-counting rules have one implementation.
+ */
+const requiredString = createStringValidator({ required: true });
+const requiredArray = createArrayValidator({ required: true });
 
 /**
  * Returns a validation rule that fails when the value is empty.
@@ -22,15 +31,16 @@ import type { ValidationRule } from '../types/validation.types.js';
 export function isNotEmpty<TError = string>(
   error?: TError,
 ): ValidationRule<unknown, unknown, TError> {
+  const fail = () => error ?? (null as TError | null);
   return (value) => {
     if (value === null || value === undefined || value === false) {
-      return error ?? (null as TError | null);
+      return fail();
     }
-    if (typeof value === 'string' && value.trim().length === 0) {
-      return error ?? (null as TError | null);
+    if (typeof value === 'string') {
+      return requiredString(value, 'Value') === null ? null : fail();
     }
-    if (Array.isArray(value) && value.length === 0) {
-      return error ?? (null as TError | null);
+    if (Array.isArray(value)) {
+      return requiredArray(value, 'Value') === null ? null : fail();
     }
     return null;
   };

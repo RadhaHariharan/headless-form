@@ -1,4 +1,5 @@
 import type { ValidationRule } from '../types/validation.types.js';
+import { createNumberValidator } from '../field-validators/number-validator.js';
 
 /**
  * Numeric range specification for {@link isInRange}.
@@ -14,7 +15,9 @@ export interface IsInRangeSpec {
  * Returns a validation rule that fails when the value is not a number within the given range.
  *
  * @remarks
- * Non-numeric values (including strings that are not parseable numbers) always fail.
+ * Non-numeric values (including strings that are not parseable numbers) always fail — checked
+ * here directly, before delegating the actual min/max comparison to
+ * {@link createNumberValidator}.
  * Both `min` and `max` are inclusive.
  *
  * @param spec - An object with optional `min` and/or `max`.
@@ -30,17 +33,15 @@ export function isInRange<TError = string>(
   spec: IsInRangeSpec,
   error?: TError,
 ): ValidationRule<unknown, unknown, TError> {
+  const validator = createNumberValidator({
+    required: false,
+    ...(spec.min !== undefined ? { min: spec.min } : {}),
+    ...(spec.max !== undefined ? { max: spec.max } : {}),
+  });
   return (value) => {
     if (typeof value !== 'number' || Number.isNaN(value)) {
       return error ?? (null as TError | null);
     }
-    const { min, max } = spec;
-    if (min !== undefined && value < min) {
-      return error ?? (null as TError | null);
-    }
-    if (max !== undefined && value > max) {
-      return error ?? (null as TError | null);
-    }
-    return null;
+    return validator(value, 'Value') === null ? null : (error ?? (null as TError | null));
   };
 }

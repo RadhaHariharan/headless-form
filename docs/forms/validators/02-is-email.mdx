@@ -18,6 +18,8 @@ const EMAIL_REGEX = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-
 
 This is a pragmatic, RFC-5322-inspired pattern — it rejects most malformed addresses and accepts the overwhelming majority of real-world ones, but (like virtually every regex-based email validator) isn't a fully spec-compliant email-address parser. For genuinely strict validation, pair this with a server-side check (e.g. actually attempting delivery / a verification email).
 
+Internally, the regex test is run through the [field-validator toolkit](../14-field-validators)'s `createStringValidator({ required: true, allowedCharacters: 'custom', customPattern: EMAIL_REGEX })`, rather than testing the pattern directly. One consequence worth knowing: `createStringValidator` tests the **trimmed** value, so a string with leading/trailing whitespace around an otherwise-valid address (e.g. `' user@example.com '`) now **passes** — previously this would have failed, since the old bespoke implementation tested the raw, untrimmed string.
+
 ## Basic usage
 
 ```typescript
@@ -48,3 +50,4 @@ validate: {
 
 - **Calling `isEmail()` with no `error` argument never reports a failure** — same root cause as [isNotEmpty](./01-is-not-empty)'s pitfall: the failure branch returns `error ?? null`, which is `null` (valid) when `error` is omitted. Always pass an explicit message.
 - **A non-string value (e.g. `null`, a number) always fails this check**, even with `withError: false`-style "no error yet" semantics elsewhere in the library — if a field can legitimately be `null` before the user interacts with it, combine this with [isNotEmpty](./01-is-not-empty) deliberately (as shown above) rather than relying on `isEmail` alone to also handle the "empty" case gracefully.
+- **Surrounding whitespace is silently trimmed before the pattern is tested** — `isEmail()(' user@example.com ')` passes, since the underlying `createStringValidator` always tests the trimmed value. If you need to reject untrimmed input outright, check `value !== value.trim()` yourself before calling `isEmail`.

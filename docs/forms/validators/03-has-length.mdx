@@ -25,6 +25,8 @@ hasLength(4, 'Must be exactly 4 characters')('1234', {}, 'pin'); // null — exa
 hasLength({ min: 3, max: 20 }, 'Must be 3–20 characters')('ab', {}, 'username'); // error — too short
 ```
 
+Internally, the actual min/max comparison is delegated to the [field-validator toolkit](../14-field-validators)'s `createStringValidator`/`createArrayValidator`, configured with `required: false` (since `hasLength`, unlike `isNotEmpty`, has no opinion on emptiness by itself — a zero-length value should be checked against `min`/`max` like any other length, not auto-pass or auto-fail). The one piece that **couldn't** be delegated: the toolkit's `required: false` path short-circuits and returns `null` (valid) for any empty value *before* it reaches its own `minLength`/`maxLength` checks — so a zero-length value would always pass the delegated validator regardless of `min`/`max`. `hasLength` therefore checks the zero-length case manually first (comparing `0` against `min`/`max` directly) and only calls into the toolkit once it knows the value is non-empty.
+
 ## Basic usage
 
 ```typescript
