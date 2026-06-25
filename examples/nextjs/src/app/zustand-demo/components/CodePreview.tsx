@@ -10,19 +10,19 @@ import typescriptCode from "../resources/typescript-code";
 interface CodePreviewStore {
   lang: string;
   setLang: (lang: string) => void;
-  getCode: () => string;
 }
 
-const useStore = create<CodePreviewStore>()((set, get) => ({
+const useStore = create<CodePreviewStore>()((set) => ({
   lang: "javascript",
   setLang: (lang) => set(() => ({ lang })),
-  getCode: () =>
-    get().lang === "javascript" ? javascriptCode : typescriptCode,
 }));
 
 export default function CodePreview() {
-  const { lang, setLang, getCode } = useStore();
-  const code = getCode();
+  const { lang, setLang } = useStore();
+  // Derived directly from `lang` (a tracked reactive value) rather than via a
+  // store getter method — the React Compiler can't see through a closure-based
+  // getter to know its result depends on `lang`, and will incorrectly memoize it.
+  const code = lang === "javascript" ? javascriptCode : typescriptCode;
 
   return (
     <Highlight code={code} language="tsx" theme={undefined}>

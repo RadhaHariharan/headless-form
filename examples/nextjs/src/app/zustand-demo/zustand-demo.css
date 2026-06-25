@@ -95,7 +95,6 @@
   background: transparent;
   color: white;
   cursor: pointer;
-  font: inherit;
 }
 
 .zustandDemoPage .code-container pre[class*='language-'] {
