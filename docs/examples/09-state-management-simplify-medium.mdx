@@ -1,0 +1,615 @@
+# State Management Simplify — Medium Examples
+
+Thirty examples combining basic concepts from [Basic](./08-state-management-simplify-basic.mdx) into realistic patterns — slices, middleware, and cross-cutting concerns.
+
+---
+
+## 1. The slices pattern
+
+```typescript
+const createCounterSlice = (set: SetState) => ({
+  count: 0,
+  increment: () => set((s: Store) => ({ count: s.count + 1 })),
+});
+
+const createUserSlice = (set: SetState) => ({
+  user: null as User | null,
+  login: (user: User) => set({ user }),
+});
+
+const useStore = create<ReturnType<typeof createCounterSlice> & ReturnType<typeof createUserSlice>>((set, get, api) => ({
+  ...createCounterSlice(set),
+  ...createUserSlice(set),
+}));
+```
+
+**How it works:** because the initializer just returns a plain object, "slices" are nothing more than separate functions each producing a fragment of that object — spreading them together in the top-level `create` call merges all their state and actions into one flat store. Every slice's actions still call the *same* top-level `set`, so an action in `createUserSlice` can update `count` too if it needs to (slices don't enforce isolation, they're purely an authoring convenience).
+
+## 2. Persisting state to `localStorage`
+
+```typescript
+import { createStore, persist } from '@headlesskit/state-management-simplify';
+
+const useSettingsStore = createStore<{ theme: string; setTheme: (t: string) => void }>()(
+  persist(
+    (set) => ({ theme: 'light', setTheme: (theme) => set({ theme }) }),
+    { name: 'settings-store' },
+  ),
+);
+```
+
+**How it works:** `persist` wraps your initializer, intercepting every `set` call to also write the (possibly filtered — see next example) state to storage, and on store creation it synchronously reads back whatever was last saved under `name` to use as the initial state instead of your initializer's defaults. Note the **curried** `createStore<T>()(initializer)` call here rather than `createStore<T>(initializer)` — this two-call form helps TypeScript infer the middleware-wrapped generics correctly; both forms exist for exactly this reason (see [`vanilla.ts`](../state-management-simplify/01-overview.mdx)).
+
+## 3. Persisting only some fields (`partialize`)
+
+```typescript
+persist(
+  (set) => ({ theme: 'light', draftText: '', setTheme: (theme) => set({ theme }) }),
+  { name: 'settings', partialize: (state) => ({ theme: state.theme }) },
+);
+```
+
+**How it works:** `partialize` runs before every write to storage, letting you exclude fields that shouldn't survive a reload (large/sensitive/derived data, or anything that doesn't serialize meaningfully, like a function or a `Map`) — `draftText` here stays in memory for the session but is never persisted, even though it's part of the live store.
+
+## 4. Migrating a persisted shape across versions
+
+```typescript
+persist(initializer, {
+  name: 'settings',
+  version: 2,
+  migrate: (persistedState, version) => {
+    if (version === 1) return { ...(persistedState as object), theme: (persistedState as any).darkMode ? 'dark' : 'light' };
+    return persistedState;
+  },
+});
+```
+
+**How it works:** `version` is stored alongside the persisted state; on load, if the stored version doesn't match the current one, `migrate` runs first with the *old* shape and the *old* version number, letting you transform a previous release's persisted data (here, converting a boolean `darkMode` flag into a `theme` string) before it becomes the live state — without this, users upgrading would either crash on an unexpected shape or silently lose their settings.
+
+## 5. Wiring up the time-travel Inspector
+
+```typescript
+import { create } from '@headlesskit/state-management-simplify-react';
+import { devtools } from '@headlesskit/state-management-simplify';
+import { installDevtools } from '@headlesskit/state-management-devtools';
+
+installDevtools(); // populates window.__HEADLESSKIT_DEVTOOLS_EXTENSION__ — call this first
+
+const useCounterStore = create<CounterStore>()(
+  devtools((set) => ({ count: 0, increment: () => set((s) => ({ count: s.count + 1 })) }), { name: 'counter' }),
+);
+```
+
+**How it works:** `devtools` looks for `window.__HEADLESSKIT_DEVTOOLS_EXTENSION__` at store-creation time — `installDevtools()` must run first so that global exists. From there, every `set` call is recorded into [the Inspector's lifted-state history](../state-management-devtools/01-overview.mdx#two-replay-strategies-one-engine) using patch-based replay (this package has no reducer to replay through), and time-travel commands from the [`Inspector`](../state-management-devtools-react/03-inspector.mdx) UI get pushed back into this exact store via `devtools`'s own message handling.
+
+## 6. `combine` for simple, state-only-first stores
+
+```typescript
+import { combine } from '@headlesskit/state-management-simplify';
+
+const useStore = create(
+  combine({ count: 0 }, (set) => ({
+    increment: () => set((s) => ({ count: s.count + 1 })),
+  })),
+);
+```
+
+**How it works:** `combine(initialState, additionalStateCreator)` is a small ergonomic helper for the common case of "plain initial data, plus some actions that reference it" — it lets TypeScript infer the state type from the first argument alone, rather than needing an explicit type parameter on `create<T>` as in the earlier examples.
+
+## 7. `subscribeWithSelector` for fine-grained subscriptions
+
+```typescript
+import { subscribeWithSelector } from '@headlesskit/state-management-simplify';
+
+const store = createStore<Store>()(subscribeWithSelector((set) => ({ count: 0, name: '' })));
+
+store.subscribe(
+  (state) => state.count,                 // selector
+  (count, prevCount) => console.log(count, prevCount), // only called when count itself changes
+);
+```
+
+**How it works:** without this middleware, `subscribe`'s listener fires on every state change regardless of which field moved (see [Basic #3](./08-state-management-simplify-basic.mdx#3-subscribing-to-every-change-vanilla)); `subscribeWithSelector` overloads `subscribe` to optionally accept a selector + comparator, so a listener watching `count` specifically is skipped entirely when only `name` changes — useful outside React, where there's no hook-level selector doing this for you automatically.
+
+## 8. Using `shallow` manually outside a selector hook
+
+```typescript
+import { shallow } from '@headlesskit/state-management-simplify';
+
+let lastResult: { x: number; y: number } | undefined;
+function getPosition(state: Store) {
+  const next = { x: state.x, y: state.y };
+  if (lastResult && shallow(lastResult, next)) return lastResult;
+  return (lastResult = next);
+}
+```
+
+**How it works:** `shallow(a, b)` is the equality function `useShallow`/`createWithEqualityFn` use internally, exported standalone for cases outside a selector hook — here, manually caching a derived object and reusing the cached reference whenever a shallow-equal one would've been produced, avoiding downstream consumers (e.g. a `subscribeWithSelector` listener) re-triggering on a value that's effectively unchanged.
+
+## 9. A custom equality function via `createWithEqualityFn`
+
+```typescript
+import { createWithEqualityFn } from '@headlesskit/state-management-simplify-react';
+import deepEqual from 'fast-deep-equal';
+
+const useStore = createWithEqualityFn<Store>((set) => ({ filters: { tags: [], minPrice: 0 } }), {
+  equalityFn: deepEqual,
+});
+
+const filters = useStore((state) => state.filters, deepEqual);
+```
+
+**How it works:** the default per-selector equality is `Object.is` (reference equality); `createWithEqualityFn`'s store-level `equalityFn` option (or a third argument at each call site) swaps that comparison for anything you provide — a deep-equal check here means a selector returning a *new* `filters` object with identical contents still counts as "unchanged," at the cost of a more expensive comparison than the built-in `useShallow`'s one-level check.
+
+## 10. Async actions
+
+```typescript
+const useUserStore = create<{ user: User | null; loading: boolean; fetchUser: (id: string) => Promise<void> }>(
+  (set, get) => ({
+    user: null,
+    loading: false,
+    fetchUser: async (id) => {
+      set({ loading: true });
+      const user = await api.getUser(id);
+      if (get().loading) set({ user, loading: false }); // guard against a stale response
+    },
+  }),
+);
+```
+
+**How it works:** there's no special "async action" API — `fetchUser` is just an `async` function stored as a field, free to call `set` multiple times across `await` boundaries. The `get().loading` guard before the final `set` is a common defensive pattern: if a *newer* `fetchUser` call (or an explicit cancel) already flipped `loading` back to `false`, this older call's result is discarded instead of overwriting fresher state.
+
+## 11. A computed/derived selector function
+
+```typescript
+const selectFullName = (state: Store) => `${state.firstName} ${state.lastName}`;
+
+function NameTag() {
+  const fullName = useStore(selectFullName);
+  return <span>{fullName}</span>;
+}
+```
+
+**How it works:** "derived state" in this package is never stored — it's recomputed from real state fields by a selector every time the hook runs, exactly like a memo-less `useMemo`. For a selector cheap enough to recompute on every relevant render (string concatenation, simple filters), this is preferable to storing `fullName` as its own field and remembering to keep it in sync on every `set` that touches `firstName`/`lastName`.
+
+## 12. One store reading another store's state
+
+```typescript
+const useAuthStore = create<{ token: string | null }>(() => ({ token: null }));
+const useApiStore = create<{ request: (path: string) => Promise<Response> }>(() => ({
+  request: (path) => fetch(path, { headers: { Authorization: `Bearer ${useAuthStore.getState().token}` } }),
+}));
+```
+
+**How it works:** the hook returned by `create` carries the underlying vanilla `StoreApi` methods (`getState`, `setState`, `subscribe`) as static properties on the hook function itself — so `useApiStore`'s `request` action can read `useAuthStore.getState().token` directly, entirely outside React's render cycle, without needing to be a React component or receive the auth token as an argument.
+
+## 13. Updating an array of objects nested two levels deep, plain-spread vs. immer
+
+```typescript
+interface BoardStore {
+  board: { columns: { id: string; tasks: { id: string; done: boolean }[] }[] };
+  toggleTask: (columnId: string, taskId: string) => void;
+}
+
+// Plain spread — every level between the root and the changed leaf needs spreading
+const useBoardStorePlain = create<BoardStore>((set) => ({
+  board: { columns: [{ id: 'c1', tasks: [{ id: 't1', done: false }] }] },
+  toggleTask: (columnId, taskId) =>
+    set((state) => ({
+      board: {
+        ...state.board,
+        columns: state.board.columns.map((c) =>
+          c.id !== columnId
+            ? c
+            : { ...c, tasks: c.tasks.map((t) => (t.id === taskId ? { ...t, done: !t.done } : t)) },
+        ),
+      },
+    })),
+}));
+
+// immer-middleware — write the mutation as if the array were mutable
+import { immer } from '@headlesskit/state-management-simplify';
+
+const useBoardStoreImmer = create<BoardStore>()(
+  immer((set) => ({
+    board: { columns: [{ id: 'c1', tasks: [{ id: 't1', done: false }] }] },
+    toggleTask: (columnId, taskId) =>
+      set((state) => {
+        const column = state.board.columns.find((c) => c.id === columnId);
+        const task = column?.tasks.find((t) => t.id === taskId);
+        if (task) task.done = !task.done;
+      }),
+  })),
+);
+```
+
+**How it works:** the plain-spread version has to thread three nested levels (`board` → `columns` array → one column's `tasks` array) through `.map`/spread by hand, recreating every ancestor of the changed leaf so `setState`'s top-level shallow merge doesn't silently drop siblings (the bug from [Basic #13](./08-state-management-simplify-basic.mdx#13-a-shallow-merge-gotcha-with-nested-objects)). The `immer` version (see [Advanced #2](./10-state-management-simplify-advanced.mdx#2-the-immer-middleware-for-ergonomic-nested-updates)) instead hands the updater a mutable `Draft` proxy — `task.done = !task.done` records the mutation against the proxy, and Immer diffs it against the original to produce the same structurally-shared result the spread version built by hand, with none of the manual `.map`/spread plumbing.
+
+## 14. `persist`'s `partialize` selecting one nested sub-path
+
+```typescript
+interface AppStore {
+  user: { name: string; email: string; sessionToken: string };
+  cart: { items: Item[] };
+}
+
+const useAppStore = create<AppStore>()(
+  persist(
+    (set) => ({
+      user: { name: '', email: '', sessionToken: '' },
+      cart: { items: [] },
+    }),
+    {
+      name: 'app-store',
+      partialize: (state) => ({
+        user: { name: state.user.name, email: state.user.email },
+      }),
+    },
+  ),
+);
+```
+
+**How it works:** `partialize`'s return type doesn't have to mirror the live state's shape — here it returns an object with a `user` key holding *fewer* fields than the real `user`, and omits `cart` entirely. Because the default `merge` (see [Advanced #21](./10-state-management-simplify-advanced.mdx#21-a-composite-settings-panel-tying-persist-and-devtools-together)) only shallow-merges at the top level, on reload `user` is replaced wholesale by whatever `partialize` saved — meaning `sessionToken`, even though it was never persisted, ends up `undefined` after rehydration unless a custom `merge` reconstructs it.
+
+## 15. `persist` with a `migrate` function bumping a nested schema
+
+```typescript
+interface SettingsStoreV2 {
+  display: { theme: string; fontSize: number };
+}
+
+const useSettingsStore = create<SettingsStoreV2>()(
+  persist(
+    (set) => ({ display: { theme: 'light', fontSize: 14 } }),
+    {
+      name: 'settings',
+      version: 2,
+      migrate: (persisted, version) => {
+        const old = persisted as { theme?: string; fontSizePx?: number };
+        if (version === 1) {
+          // v1 stored theme/fontSizePx flat; v2 nests them under `display`
+          return { display: { theme: old.theme ?? 'light', fontSize: old.fontSizePx ?? 14 } };
+        }
+        return persisted as SettingsStoreV2;
+      },
+    },
+  ),
+);
+```
+
+**How it works:** `migrate` receives the *raw, untyped* `persistedState` exactly as it was stored under the old version — here a v1 record with flat `theme`/`fontSizePx` keys — and must produce something matching the *current* shape, including reaching into and re-nesting fields under `display`. This runs once, before the migrated result is handed to `merge` and then `set`, so by the time any component reads `state.display.theme` the nested restructuring has already happened; getting `migrate` wrong for a nested shape (e.g. forgetting a field) silently corrupts every user's persisted data on their next reload.
+
+## 16. `combine` merging nested initial state with nested action creators
+
+```typescript
+import { combine } from '@headlesskit/state-management-simplify';
+
+const useStore = create(
+  combine(
+    { profile: { name: '', bio: '' }, stats: { followers: 0, following: 0 } },
+    (set) => ({
+      updateBio: (bio: string) =>
+        set((state) => ({ profile: { ...state.profile, bio } })),
+      incrementFollowers: () =>
+        set((state) => ({ stats: { ...state.stats, followers: state.stats.followers + 1 } })),
+    }),
+  ),
+);
+```
+
+**How it works:** `combine(initialState, additionalStateCreator)` infers the full state type purely from `initialState`'s shape (here, two nested objects, `profile` and `stats`) without an explicit `create<T>()` type parameter — the second function only needs to return the *actions*, and each action still independently has to spread its own nested section (`profile` or `stats`) to avoid the shallow-merge gotcha, exactly as if `combine` weren't involved at all; `combine` only saves you writing out the initial values' type, not the update logic.
+
+## 17. Composing two middleware on one nested-state store, and why order matters
+
+```typescript
+import { persist, subscribeWithSelector } from '@headlesskit/state-management-simplify';
+
+interface CartStore {
+  cart: { items: Item[]; discountCode: string | null };
+}
+
+const useCartStore = create<CartStore>()(
+  subscribeWithSelector(
+    persist(
+      (set) => ({ cart: { items: [], discountCode: null } }),
+      { name: 'cart', partialize: (s) => ({ cart: s.cart }) },
+    ),
+  ),
+);
+```
+
+**How it works:** `persist` is innermost here, so it's the layer that sees the *original* `set`/initializer and intercepts it to also write to storage; `subscribeWithSelector` wraps the *result* of that, so it only ever sees state that has already passed through `persist`'s rehydration logic. Composing them in the opposite order (`persist(subscribeWithSelector(...))`) would still work for plain reads/writes, but `persist`'s synchronous rehydration on creation would run *after* `subscribeWithSelector` has already patched `api.subscribe`, which is harmless here since neither middleware reaches into the other's internals — the meaningful ordering rule is specifically [Advanced #1](./10-state-management-simplify-advanced.mdx#1-the-full-middleware-stack-composed-together)'s `devtools` outermost, `persist`/`subscribeWithSelector` inside it.
+
+## 18. `subscribeWithSelector` on one nested leaf, ignoring unrelated nested changes
+
+```typescript
+interface DashboardStore {
+  user: { name: string; lastSeen: number };
+  widgets: { id: string; visible: boolean }[];
+}
+
+const store = createStore<DashboardStore>()(
+  subscribeWithSelector(() => ({
+    user: { name: 'Ada', lastSeen: Date.now() },
+    widgets: [],
+  })),
+);
+
+store.subscribe(
+  (state) => state.user.name,                      // selector reaches one nested leaf
+  (name, prevName) => console.log('name changed:', prevName, '->', name),
+);
+
+store.setState((state) => ({ widgets: [...state.widgets, { id: 'w1', visible: true }] }));
+// listener does NOT fire — widgets changed, user.name didn't
+```
+
+**How it works:** the selector passed to `subscribeWithSelector`'s `subscribe` overload runs on *every* state update internally, but the listener only fires when its return value (`state.user.name`) fails the `Object.is` comparison against the previous call's return value — updating `widgets` produces a brand-new top-level state object (so a plain `subscribe` listener would fire), but `user` itself is an untouched reference, so `state.user.name` is bit-for-bit the same value both times and the comparison short-circuits.
+
+## 19. `createWithEqualityFn` with a custom comparator for nested objects
+
+```typescript
+import { createWithEqualityFn } from '@headlesskit/state-management-simplify-react';
+
+function shallowEqualIgnoringOrder(a: { tags: string[] }, b: { tags: string[] }) {
+  return a.tags.length === b.tags.length && a.tags.every((t) => b.tags.includes(t));
+}
+
+interface FilterStore {
+  filters: { tags: string[]; minPrice: number };
+  setTags: (tags: string[]) => void;
+}
+
+const useFilterStore = createWithEqualityFn<FilterStore>((set) => ({
+  filters: { tags: [], minPrice: 0 },
+  setTags: (tags) => set((state) => ({ filters: { ...state.filters, tags } })),
+}));
+
+const tagsView = useFilterStore(
+  (state) => ({ tags: state.filters.tags }),
+  (a, b) => shallowEqualIgnoringOrder(a, b),
+);
+```
+
+**How it works:** `createWithEqualityFn`'s second argument is a *default* equality function applied to every selector call site that doesn't supply its own (as shown here, per-call as a third argument); for a nested array field where you only care about membership, not order, a custom comparator like `shallowEqualIgnoringOrder` treats `['a','b']` and `['b','a']` as equal — something neither the built-in `Object.is` nor `useShallow`'s one-level reference check can express, since both would see two different array references with elements in a different order as "changed."
+
+## 20. `useShallow` selecting several nested fields from different branches at once
+
+```tsx
+import { useShallow } from '@headlesskit/state-management-simplify-react';
+
+interface DashboardStore {
+  user: { name: string };
+  cart: { itemCount: number };
+  notifications: { unreadCount: number };
+}
+
+function HeaderSummary() {
+  const { name, itemCount, unreadCount } = useDashboardStore(
+    useShallow((state) => ({
+      name: state.user.name,
+      itemCount: state.cart.itemCount,
+      unreadCount: state.notifications.unreadCount,
+    })),
+  );
+  return <span>{name} · {itemCount} items · {unreadCount} unread</span>;
+}
+```
+
+**How it works:** the selector reaches into three independent nested branches and flattens them into one new object literal every render — without `useShallow` this object's fresh reference would fail `Object.is` on every single store update regardless of which branch changed (the same problem as [Basic #9](./08-state-management-simplify-basic.mdx#9-useshallow-to-select-multiple-fields-at-once), just with the source fields living deeper). `useShallow`'s one-level comparison is sufficient here because every selected value (`name`, `itemCount`, `unreadCount`) is itself a primitive by the time it lands in the flattened object, even though each one came from a different level of nesting in the real state tree.
+
+## 21. Two actions racing to update the same nested field
+
+```typescript
+interface InventoryStore {
+  warehouse: { stock: Record<string, number> };
+  reserve: (sku: string, qty: number) => void;
+  restock: (sku: string, qty: number) => void;
+}
+
+const useInventoryStore = create<InventoryStore>((set, get) => ({
+  warehouse: { stock: { sku1: 10 } },
+  reserve: (sku, qty) =>
+    set((state) => ({
+      warehouse: { ...state.warehouse, stock: { ...state.warehouse.stock, [sku]: state.warehouse.stock[sku] - qty } },
+    })),
+  restock: (sku, qty) =>
+    set((state) => ({
+      warehouse: { ...state.warehouse, stock: { ...state.warehouse.stock, [sku]: state.warehouse.stock[sku] + qty } },
+    })),
+}));
+```
+
+**How it works:** both actions use the updater-function form of `set`, which always receives the *current* state at the moment `set` actually runs — not a value captured when `reserve`/`restock` was called — so calling `reserve('sku1', 3)` immediately followed by `restock('sku1', 1)` correctly nets out to `8`, because the second call's updater reads the result of the first one's write rather than a stale closure. Using a plain object instead of an updater function for either action (`set({ warehouse: { ...} })` computed from a variable captured earlier) would reintroduce a classic lost-update race if anything else could run between the read and the `set` call.
+
+## 22. Deriving a nested computed value without storing it
+
+```typescript
+interface OrderStore {
+  order: { items: { price: number; qty: number }[] };
+}
+
+const selectOrderTotal = (state: OrderStore) =>
+  state.order.items.reduce((sum, item) => sum + item.price * item.qty, 0);
+
+function OrderTotal() {
+  const total = useOrderStore(selectOrderTotal);
+  return <strong>${total.toFixed(2)}</strong>;
+}
+```
+
+**How it works:** `selectOrderTotal` walks the nested `order.items` array fresh on every call rather than the store keeping a `total` field in sync via every action that touches `items` — the same "derived state isn't stored" principle as [Example 11](#11-a-computed-derived-selector-function), but applied to an aggregate over a nested array instead of a single string concatenation; correctness here is automatic (no action can forget to update `total`) at the cost of recomputing the reduce on every render where any part of `order.items` changed.
+
+## 23. Resetting one nested section back to its initial value
+
+```typescript
+interface FormStore {
+  draft: { title: string; body: string; tags: string[] };
+  resetDraft: () => void;
+}
+
+const useFormStore = create<FormStore>((set, get, api) => ({
+  draft: { title: '', body: '', tags: [] },
+  resetDraft: () => set({ draft: api.getInitialState().draft }),
+}));
+```
+
+**How it works:** rather than reaching for [Basic #11](./08-state-management-simplify-basic.mdx#11-resetting-to-the-original-initial-state)'s whole-store reset (`setState(getInitialState(), true)`), `resetDraft` only replaces the `draft` key — `getInitialState().draft` is the exact nested object captured the first time the initializer ran, and `set({ draft: ... })`'s top-level shallow merge leaves every *other* section of the store (e.g. a logged-in user, unrelated UI state) completely untouched, which a full-replace reset would have wiped out too.
+
+## 24. Batching multiple nested updates into a single `set` call
+
+```typescript
+interface CheckoutStore {
+  cart: { items: Item[] };
+  shipping: { address: string | null };
+  payment: { method: string | null };
+  completeCheckout: (address: string, method: string) => void;
+}
+
+const useCheckoutStore = create<CheckoutStore>((set) => ({
+  cart: { items: [] },
+  shipping: { address: null },
+  payment: { method: null },
+  completeCheckout: (address, method) =>
+    set((state) => ({
+      cart: { items: [] },
+      shipping: { ...state.shipping, address },
+      payment: { ...state.payment, method },
+    })),
+}));
+```
+
+**How it works:** `completeCheckout` updates three independent top-level sections in *one* `set` call rather than three separate calls — since `setState` notifies subscribers once per call, batching them means components selecting any of `cart`/`shipping`/`payment` re-render exactly once for this whole operation instead of up to three times, and any `subscribeWithSelector` listener watching a derived combination of these fields sees one consistent final state rather than transient intermediate ones.
+
+## 25. A nested-state store consumed by both a vanilla module and a React component
+
+```typescript
+// cart-store.ts — no React import at all
+export const cartStore = createStore<{ cart: { items: Item[] } }>(() => ({ cart: { items: [] } }));
+
+// analytics.ts — a plain module, not a component
+cartStore.subscribe((state, prev) => {
+  if (state.cart.items.length !== prev.cart.items.length) track('cart_size_changed');
+});
+
+// CartView.tsx
+import { useStore } from '@headlesskit/state-management-simplify-react';
+
+function CartView() {
+  const itemCount = useStore(cartStore, (state) => state.cart.items.length);
+  return <span>{itemCount}</span>;
+}
+```
+
+**How it works:** `useStore` (re-exported from `-react`, distinct from `create`) takes an *existing* vanilla store plus a selector, letting a store built once with the vanilla `createStore` — and already wired into plain-JS consumers like `analytics.ts`'s `subscribe` call — be read reactively from a component without ever being recreated as a hook; this is the inverse of [Basic #24](./08-state-management-simplify-basic.mdx#24-calling-an-action-from-outside-react-entirely), which goes from a hook *to* its underlying vanilla API instead.
+
+## 26. Comparing nested-field selectors against a `useShallow`'d parent object
+
+```tsx
+function Granular() {
+  // two separate selector subscriptions, each on a primitive leaf
+  const city = useProfileStore((state) => state.address.city);
+  const zip = useProfileStore((state) => state.address.zip);
+  return <p>{city}, {zip}</p>;
+}
+
+function Coarser() {
+  // one subscription, shallow-compared on the whole nested object
+  const { city, zip } = useProfileStore(useShallow((state) => state.address));
+  return <p>{city}, {zip}</p>;
+}
+```
+
+**How it works:** `Granular` makes two independent hook calls, each comparing one primitive by `Object.is` — cheap, and immune to any sibling field on `address` changing. `Coarser` makes one call but needs `useShallow` because `state.address` is itself a nested object the selector returns directly: without it, a brand-new `address` reference (even with identical `city`/`zip`) would re-render the component on every update to *any* field on `address`, including ones `Coarser` doesn't display, like a hypothetical `country` — `useShallow`'s one-level comparison fixes that for this two-field case but stops protecting you the moment `address` itself nests another object inside it.
+
+## 27. A nested toggle that reads its own previous value through `get`, not `state`
+
+```typescript
+interface PanelStore {
+  panels: Record<string, { open: boolean }>;
+  toggle: (id: string) => void;
+}
+
+const usePanelStore = create<PanelStore>((set, get) => ({
+  panels: {},
+  toggle: (id) => {
+    const current = get().panels[id]?.open ?? false;
+    set((state) => ({ panels: { ...state.panels, [id]: { open: !current } } }));
+  },
+}));
+```
+
+**How it works:** `current` is read once via `get()` *before* the `set` call, then closed over inside the updater — functionally equivalent here to reading `state.panels[id]?.open` inside the updater itself, but this shape is useful when the "decide what to do" logic (e.g. validating `current`, logging it, computing something expensive from it) needs to happen *before* you know what to pass to `set`, rather than inline inside the updater's return expression.
+
+## 28. Splitting one big nested store into two smaller ones that reference each other
+
+```typescript
+interface CartStore {
+  items: Item[];
+  addItem: (item: Item) => void;
+}
+const useCartStore = create<CartStore>((set) => ({
+  items: [],
+  addItem: (item) => set((state) => ({ items: [...state.items, item] })),
+}));
+
+interface CheckoutStore {
+  placeOrder: () => void;
+}
+const useCheckoutStore = create<CheckoutStore>(() => ({
+  placeOrder: () => {
+    const items = useCartStore.getState().items; // cross-store read, see Example 12
+    api.submitOrder(items).then(() => useCartStore.setState({ items: [] }));
+  },
+}));
+```
+
+**How it works:** rather than nesting `cart` and `checkout` inside one combined store (as in [Example 19 of Basic](./08-state-management-simplify-basic.mdx#19-a-store-with-two-independent-nested-sections)), this keeps them as two fully separate stores that reach across to each other only through `getState`/`setState` — the same cross-store technique as [Example 12](#12-one-store-reading-another-stores-state), but used deliberately as an architectural seam: `CheckoutStore` depends on `CartStore`'s shape, but `CartStore` has zero knowledge `CheckoutStore` exists, which is a one-directional dependency a single combined nested store can't express as cleanly.
+
+## 29. Validating a nested update before committing it
+
+```typescript
+interface BudgetStore {
+  budget: { categories: Record<string, number>; total: number };
+  setCategory: (name: string, amount: number) => boolean;
+}
+
+const useBudgetStore = create<BudgetStore>((set, get) => ({
+  budget: { categories: {}, total: 1000 },
+  setCategory: (name, amount) => {
+    const { budget } = get();
+    const nextTotal = Object.values({ ...budget.categories, [name]: amount }).reduce((a, b) => a + b, 0);
+    if (nextTotal > budget.total) return false; // reject — over budget
+    set((state) => ({
+      budget: { ...state.budget, categories: { ...state.budget.categories, [name]: amount } },
+    }));
+    return true;
+  },
+}));
+```
+
+**How it works:** the validation step computes what the *resulting* nested state would look like (`nextTotal`) using `get()`, entirely before calling `set` — if the check fails, `set` is never called at all, so the store is left completely untouched and the caller gets a `boolean` back to decide how to react (e.g. show a form error). This pattern — compute the prospective next state, validate it, only then commit via `set` — generalizes to any nested invariant the type system can't enforce on its own (e.g. "categories must sum to no more than total").
+
+## 30. A nested store where one action depends on another action's result
+
+```typescript
+interface WizardStore {
+  wizard: { step: number; data: Record<string, unknown> };
+  saveStepData: (data: Record<string, unknown>) => void;
+  nextStep: () => void;
+  submitIfComplete: () => void;
+}
+
+const useWizardStore = create<WizardStore>((set, get) => ({
+  wizard: { step: 0, data: {} },
+  saveStepData: (data) =>
+    set((state) => ({ wizard: { ...state.wizard, data: { ...state.wizard.data, ...data } } })),
+  nextStep: () => set((state) => ({ wizard: { ...state.wizard, step: state.wizard.step + 1 } })),
+  submitIfComplete: () => {
+    get().saveStepData({ confirmedAt: Date.now() });
+    if (get().wizard.step >= 3) api.submitWizard(get().wizard.data);
+  },
+}));
+```
+
+**How it works:** `submitIfComplete` calls `get().saveStepData(...)` — another action on the very same store — synchronously, then immediately calls `get()` *again* afterward to read the state that action just wrote, rather than trying to predict what `saveStepData` will produce. Because `set` inside this package is synchronous (no batching delay to wait out), this read-after-write-via-another-action pattern is safe here in a way it would not be in a framework where state updates are deferred to a later tick.

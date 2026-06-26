@@ -1,0 +1,300 @@
+# Query Core — Basic Examples
+
+Twenty-five examples covering one concept each, using [`@headlesskit/query-core`](../query-core/01-overview.mdx)'s framework-agnostic `QueryClient`, `QueryObserver`, and `MutationObserver`. This package has **no React hooks** — `QueryObserver`/`MutationObserver` plus `.subscribe()` are the primitives that `useQuery`/`useMutation`-style hooks in any framework are built on top of. See [Examples overview](./01-overview.mdx) for how to read these, and the [Query Core overview](../query-core/01-overview.mdx) for the full option/result shape reference.
+
+---
+
+## 1. Constructing a `QueryClient`
+
+```ts
+import { QueryClient } from '@headlesskit/query-core';
+
+const queryClient = new QueryClient();
+```
+
+**How it works:** the constructor wires up a `QueryCache` and a `MutationCache` (creating default ones if you don't supply your own) and initializes empty `Map`s for per-key query/mutation defaults. No network activity, timers, or subscriptions happen yet — a bare `QueryClient` is just a coordination object until something calls `mount()`, builds an observer, or calls `fetchQuery`.
+
+## 2. Constructing a `QueryClient` with `defaultOptions`
+
+```ts
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: { staleTime: 60_000, retry: 3, gcTime: 5 * 60_000 },
+    mutations: { retry: 1 },
+  },
+});
+```
+
+**How it works:** `defaultOptions.queries` is the lowest-precedence layer in `defaultQueryOptions` — it's spread first, then per-key defaults (`setQueryDefaults`), then the options you pass to a specific `QueryObserver`/`fetchQuery` call, which always win. Set broad policy here and override narrowly at the call site rather than repeating `staleTime`/`retry` everywhere.
+
+## 3. `mount()` and `unmount()`
+
+```ts
+queryClient.mount();
+// ... app runs, focus/online listeners are now active ...
+queryClient.unmount();
+```
+
+**How it works:** `mount()` increments an internal reference count; only the very first call (count `0` → `1`) actually subscribes to `focusManager`/`onlineManager`, so window-focus and online/offline events can trigger `refetchOnWindowFocus`/`refetchOnReconnect`. `unmount()` decrements the count and only tears down those subscriptions once it returns to `0` — nested mount/unmount pairs from multiple parts of an app are safe.
+
+## 4. A single GET query via `QueryObserver`
+
+```ts
+import { QueryObserver } from '@headlesskit/query-core';
+
+const observer = new QueryObserver(queryClient, {
+  queryKey: ['posts'],
+  queryFn: () => fetch('/api/posts').then((r) => r.json()),
+});
+
+const unsubscribe = observer.subscribe((result) => {
+  console.log(result.status, result.data);
+});
+```
+
+**How it works:** the constructor calls `setOptions`, which builds (or finds) a `Query` instance in the `QueryCache` keyed by a hash of `['posts']`. Nothing fetches until `subscribe` is called — `onSubscribe` only runs its body for the *first* listener, and that's the point where the observer decides (via `shouldFetchOnMount`) whether to kick off the initial request.
+
+## 5. Reading `status`
+
+```ts
+observer.subscribe((result) => {
+  // 'pending' | 'success' | 'error'
+  console.log(result.status);
+});
+```
+
+**How it works:** `status` reflects the underlying `Query`'s data lifecycle, not network activity — a query that has cached data from a previous fetch reports `status: 'success'` immediately on subscribe even while a background refetch is in flight. For network activity, see `fetchStatus` below; the two are deliberately orthogonal.
+
+## 6. Reading `fetchStatus`
+
+```ts
+observer.subscribe((result) => {
+  // 'fetching' | 'paused' | 'idle'
+  console.log(result.fetchStatus);
+});
+```
+
+**How it works:** `fetchStatus: 'fetching'` means a request is actually in flight right now; `'paused'` means a fetch wants to run but `networkMode` is blocking it (e.g. offline with the default `'online'` mode); `'idle'` means nothing is happening. A query can be `status: 'success'` and `fetchStatus: 'fetching'` simultaneously — that's a background refetch of already-cached data.
+
+## 7. Reading `isLoading` vs `isFetching`
+
+```ts
+observer.subscribe((result) => {
+  console.log(result.isLoading); // true only on the very first fetch, no data yet
+  console.log(result.isFetching); // true any time a request is in flight
+});
+```
+
+**How it works:** `isLoading` is derived as "pending and currently fetching" — it's specifically the *first-ever* load state, useful for showing a full-page spinner exactly once. `isFetching` is true for that initial load **and** every subsequent background refetch, which is why a "refreshing…" indicator should usually key off `isFetching`, not `isLoading`.
+
+## 8. Reading `isPending`/`isSuccess`/`isError`
+
+```ts
+observer.subscribe((result) => {
+  if (result.isPending) return; // no data yet, status === 'pending'
+  if (result.isError) return console.error(result.error);
+  if (result.isSuccess) console.log(result.data);
+});
+```
+
+**How it works:** these three booleans are mutually exclusive views of `status` — exactly one is true at any moment (mirroring the three-way `QueryStatus` union). Branching on them instead of comparing `status === '...'` strings directly reads more naturally and is what `createResult` computes for you on every recomputation.
+
+## 9. Reading `data`/`error`/`dataUpdatedAt`/`errorUpdatedAt`
+
+```ts
+observer.subscribe((result) => {
+  console.log(result.data, result.dataUpdatedAt);
+  console.log(result.error, result.errorUpdatedAt);
+});
+```
+
+**How it works:** `dataUpdatedAt`/`errorUpdatedAt` are timestamps (`Date.now()` at the moment the corresponding state transition committed), not booleans — useful for "last updated 3 minutes ago" UI without re-deriving it from `staleTime` math yourself. `data` retains its last successful value even while a later fetch is `isError` (see `isRefetchError` in the [QueryObserver docs](../query-core/05-query-observer.mdx)), so a transient error doesn't blank out previously-shown content.
+
+## 10. A basic POST via `MutationObserver.mutate`
+
+```ts
+import { MutationObserver } from '@headlesskit/query-core';
+
+const createPost = new MutationObserver(queryClient, {
+  mutationFn: (newPost: { title: string; body: string }) =>
+    fetch('/api/posts', {
+      method: 'POST',
+      body: JSON.stringify(newPost),
+    }).then((r) => r.json()),
+});
+
+createPost.subscribe((result) => console.log(result.status));
+
+createPost.mutate({ title: 'Hello', body: 'World' });
+```
+
+**How it works:** every call to `mutate()` builds a brand-new `Mutation` instance in the `MutationCache` — unlike `QueryObserver`, there's no key-based lookup/reuse. `mutate()` doesn't return the result directly; it returns a `Promise<TData>` while the *result* (status/data/error) flows to whoever called `subscribe`.
+
+## 11. `mutateAsync` for awaiting the result directly
+
+```ts
+try {
+  const created = await createPost.mutate({ title: 'Hi', body: 'There' });
+  console.log('created with id', created.id);
+} catch (err) {
+  console.error('mutation failed', err);
+}
+```
+
+**How it works:** `mutate()` itself returns the promise from `Mutation.execute()` — it rejects if `mutationFn` throws/rejects (after any configured retries are exhausted), so `await`-ing it directly is equivalent to the `mutateAsync` convention popularized by framework hooks. There's no separate fire-and-forget vs. awaited variant at this layer; both styles use the same returned promise.
+
+## 12. Reading mutation `status`/`isPending`/`isSuccess`/`isError`/`isIdle`
+
+```ts
+createPost.subscribe((result) => {
+  console.log(result.status); // 'idle' | 'pending' | 'success' | 'error'
+  console.log(result.isIdle, result.isPending, result.isSuccess, result.isError);
+});
+```
+
+**How it works:** a fresh `MutationObserver` starts `isIdle: true` synchronously at construction time (`#updateResult()` runs in the constructor against a literal default state) — you don't need to subscribe first to know the initial state. Once `mutate()` is called, it flips to `isPending`, then settles into exactly one of `isSuccess`/`isError`.
+
+## 13. `staleTime` basics
+
+```ts
+const observer = new QueryObserver(queryClient, {
+  queryKey: ['posts'],
+  queryFn: fetchPosts,
+  staleTime: 30_000, // fresh for 30 seconds after a successful fetch
+});
+```
+
+**How it works:** `staleTime` controls how long data is considered fresh after `dataUpdatedAt` — within that window, a new `QueryObserver` subscribing to the same key reuses cached data with no network request at all. Once the window elapses, the query becomes "stale," which is what `refetchOnMount`/`refetchOnWindowFocus`/`refetchOnReconnect` actually check before deciding to refetch (they don't refetch *stale-or-not* queries unconditionally unless set to `'always'`).
+
+## 14. `gcTime` basics
+
+```ts
+const observer = new QueryObserver(queryClient, {
+  queryKey: ['posts', 42],
+  queryFn: () => fetchPost(42),
+  gcTime: 10 * 60_000, // keep cached 10 minutes after the last observer unsubscribes
+});
+```
+
+**How it works:** `gcTime` only starts counting down once a `Query` has **zero** observers — it's "how long to keep unused data around," not a TTL on the data itself. Unmounting and quickly remounting a component (within `gcTime`) reuses the still-cached `Query` instance instead of losing the data and refetching from scratch.
+
+## 15. `enabled` flag
+
+```ts
+const observer = new QueryObserver(queryClient, {
+  queryKey: ['user', userId],
+  queryFn: () => fetchUser(userId),
+  enabled: userId != null,
+});
+```
+
+**How it works:** `enabled: false` prevents automatic fetches on mount, refetch-on-focus, and refetch-on-reconnect — `shouldFetchOn` returns `false` immediately whenever the resolved `enabled` value is falsy, before even checking staleness. A manual `observer.refetch()` call still works regardless of `enabled`; the flag only suppresses *automatic* fetch triggers, not explicit ones.
+
+## 16. `select` to transform cached data
+
+```ts
+const observer = new QueryObserver(queryClient, {
+  queryKey: ['posts'],
+  queryFn: fetchPosts,
+  select: (posts) => posts.map((p) => p.title),
+});
+```
+
+**How it works:** `select` runs on every recomputation, but `createResult` memoizes its output — if the underlying `state.data` reference and the `select` function reference are both unchanged since the previous result, the prior selected value is reused verbatim rather than re-running `select`. This means multiple observers on the same query key can each apply a *different* `select` without fighting over a shared cached projection — selection is observer-local.
+
+## 17. `initialData`
+
+```ts
+const observer = new QueryObserver(queryClient, {
+  queryKey: ['posts'],
+  queryFn: fetchPosts,
+  initialData: [],
+});
+```
+
+**How it works:** `initialData` seeds the query's cache as if a fetch had already succeeded with that value — `status` is `'success'` from the very first render, with no `isLoading` flash. Unlike `placeholderData`, this value is written into the actual cache (`dataUpdatedAt` gets set), so it participates in `staleTime` calculations as real data, not a placeholder that gets discarded the moment real data arrives.
+
+## 18. `placeholderData`
+
+```ts
+const observer = new QueryObserver(queryClient, {
+  queryKey: ['posts', page],
+  queryFn: () => fetchPosts(page),
+  placeholderData: (previousData) => previousData,
+});
+```
+
+**How it works:** unlike `initialData`, placeholder data is never written to the cache — `createResult` reports `status: 'success'` and `isPlaceholderData: true` while the real fetch is pending, but `dataUpdatedAt` stays untouched. The function form receiving `previousData` (the last query's data before the key changed) is the classic "keep showing the old page while the new page loads" pattern — see `keepPreviousData` in [medium pagination examples](./15-query-medium.mdx).
+
+## 19. Basic `refetch()`
+
+```ts
+const result = await observer.refetch();
+console.log(result.data);
+```
+
+**How it works:** `refetch()` is a thin wrapper around the protected `fetch()` method, which defaults `cancelRefetch: true` — calling it while a previous fetch for the same query is in flight cancels that one and starts fresh rather than letting both race. It returns the same `QueryObserverResult` shape you'd get from `subscribe`, so you can act on the outcome without waiting for the next notification.
+
+## 20. `reset()` on a `QueryObserver`
+
+Querying the result after `reset()` is rare in practice (more common on mutations), but the mechanism matters for testing:
+
+```ts
+observer.refetch();
+// later, force the observer back to its current query's initial state by removing it:
+queryClient.getQueryCache().remove(observer.getCurrentQuery());
+```
+
+**How it works:** `QueryObserver` itself has no `reset()` method (unlike `MutationObserver`) — to truly reset a query's state you operate on the cache: `removeQueries`/`resetQueries` on the `QueryClient`, or reach the `Query` directly via `getCurrentQuery()`. This is a deliberate asymmetry worth knowing before reaching for a `reset()` call that doesn't exist on this class.
+
+## 21. `reset()` on a `MutationObserver`
+
+```ts
+await createPost.mutate({ title: 'x', body: 'y' });
+// ... later, clear the success/error state back to idle ...
+createPost.reset();
+```
+
+**How it works:** `reset()` sets the observer's internal `#currentMutation` reference to `undefined` and recomputes the result against the literal idle default — it does **not** cancel or roll back the underlying `Mutation` if one is still in flight, it just detaches the observer's view of it. Useful for clearing a "saved!" success banner without affecting any unrelated in-flight request.
+
+## 22. Query keys as arrays
+
+```ts
+const listKey = ['posts'];
+const detailKey = ['posts', 42];
+const filteredKey = ['posts', { status: 'published', page: 1 }];
+```
+
+**How it works:** keys are always arrays, hashed deterministically via `hashKey` (object keys inside a key segment are sorted before hashing, so `{ page: 1, status: 'x' }` and `{ status: 'x', page: 1 }` hash identically). This array structure is also what makes prefix-based invalidation work — `invalidateQueries({ queryKey: ['posts'] })` matches `['posts', 42]` and `['posts', { page: 1 }]` alike because of `partialMatchKey` semantics (see [medium examples](./15-query-medium.mdx)).
+
+## 23. `setQueryData` / `getQueryData`
+
+```ts
+queryClient.setQueryData(['posts', 42], { id: 42, title: 'Updated' });
+const cached = queryClient.getQueryData(['posts', 42]);
+```
+
+**How it works:** `setQueryData` only writes into an *existing* `Query` in the cache — if no query with that hash has ever been built (e.g. via a prior fetch or observer), the call computes and returns the value but creates nothing. `getQueryData` is a pure read with no side effects; calling it for a key that was never fetched simply returns `undefined`, it never triggers a fetch.
+
+## 24. `client.fetchQuery` for a one-shot fetch
+
+```ts
+const posts = await queryClient.fetchQuery({
+  queryKey: ['posts'],
+  queryFn: () => fetch('/api/posts').then((r) => r.json()),
+});
+```
+
+**How it works:** `fetchQuery` checks staleness first — if the cached data for that key is still fresh (`isStaleByTime` is false), it resolves immediately with the cached `state.data` and makes no network request at all. Only a stale-or-absent cache entry triggers an actual fetch. Note `fetchQuery` forces `retry: false` when `retry` is otherwise `undefined`, unlike observer-driven fetches.
+
+## 25. `client.prefetchQuery`
+
+```ts
+// e.g. on hover, before navigating to a detail page
+queryClient.prefetchQuery({
+  queryKey: ['posts', 42],
+  queryFn: () => fetchPost(42),
+});
+```
+
+**How it works:** `prefetchQuery` is `fetchQuery(...).then(noop).catch(noop)` — a fire-and-forget wrapper that discards both the resolved value and any error. It exists purely to warm the cache as a side effect; by the time the user actually navigates and a real `QueryObserver` subscribes to `['posts', 42]`, the data may already be sitting there fresh, skipping the loading state entirely.

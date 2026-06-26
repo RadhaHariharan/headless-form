@@ -1,0 +1,640 @@
+# State Management Toolkit — Medium Examples
+
+Thirty examples combining two or three concepts from [`@headlesskit/state-management-toolkit`](../state-management-toolkit/01-overview.mdx) into realistic patterns — matcher-based cross-cutting reducers, tag-based cache invalidation, auth headers, dynamic middleware, and normalized relational state. See [Examples overview](./01-overview.mdx) and [11-state-management-toolkit-basic](./11-state-management-toolkit-basic.mdx) for the fundamentals these build on.
+
+---
+
+## 1. The `reducers` callback-creator form with `create.preparedReducer`
+
+```tsx
+import { createSlice } from '@headlesskit/state-management-toolkit';
+
+const todosSlice = createSlice({
+  name: 'todos',
+  initialState: { items: [] as { id: string; text: string }[] },
+  reducers: (create) => ({
+    add: create.preparedReducer(
+      (text: string) => ({ payload: { id: crypto.randomUUID(), text } }),
+      (state, action) => {
+        state.items.push(action.payload);
+      },
+    ),
+    clear: create.reducer((state) => {
+      state.items = [];
+    }),
+  }),
+});
+
+todosSlice.actions.add('Buy milk'); // id is generated inside `prepare`, caller never supplies it
+```
+
+**How it works:** `create.preparedReducer` decouples what the *caller* passes in (`text: string`) from what the *reducer* receives as `action.payload` (`{ id, text }`) — the `prepare` callback runs once per dispatch to compute the full payload shape, so the reducer itself never has to know how IDs get generated, and callers can never accidentally supply their own `id` and break uniqueness.
+
+## 2. `create.asyncThunk` defined inline inside a slice
+
+```tsx
+import { createSlice } from '@headlesskit/state-management-toolkit';
+
+interface Todo { id: string; text: string }
+
+const todosSlice = createSlice({
+  name: 'todos',
+  initialState: { items: [] as Todo[], status: 'idle' as 'idle' | 'loading' | 'failed' },
+  reducers: (create) => ({
+    fetchTodos: create.asyncThunk(
+      async (userId: string) => {
+        const res = await fetch(`/api/users/${userId}/todos`);
+        return (await res.json()) as Todo[];
+      },
+      {
+        pending: (state) => { state.status = 'loading'; },
+        fulfilled: (state, action) => {
+          state.status = 'idle';
+          state.items = action.payload;
+        },
+        rejected: (state) => { state.status = 'failed'; },
+      },
+    ),
+  }),
+});
+
+export const { fetchTodos } = todosSlice.actions;
+```
+
+**How it works:** this is equivalent to manually creating the thunk with `createAsyncThunk` and then wiring its three lifecycle actions via `extraReducers` — but co-located, so the loading-state logic lives right next to the thunk that triggers it instead of in a separate `extraReducers` block elsewhere in the file. `fetchTodos` dispatches and behaves exactly like any other `createAsyncThunk` result (`.pending`/`.fulfilled`/`.rejected` matchers all still work).
+
+## 3. `isAnyOf` combining two thunks into one matcher
+
+```tsx
+import { createReducer, isAnyOf } from '@headlesskit/state-management-toolkit';
+import { fetchUser, fetchPosts } from './thunks';
+
+const isUserOrPostsLoading = isAnyOf(fetchUser.pending, fetchPosts.pending);
+
+const uiReducer = createReducer({ globalSpinner: false }, (builder) => {
+  builder.addMatcher(isUserOrPostsLoading, (state) => {
+    state.globalSpinner = true;
+  });
+});
+```
+
+**How it works:** `isAnyOf` accepts anything with a `.match()` method, including `.pending` lifecycle action creators — the resulting predicate returns `true` if *either* thunk's pending action fires, letting one matcher drive a single "something important is loading" flag without needing to track each thunk's status independently and OR them together by hand.
+
+## 4. `isFulfilled`/`isRejected` for a generic request-tracking reducer
+
+```tsx
+import { createReducer, isFulfilled, isRejected, isPending } from '@headlesskit/state-management-toolkit';
+
+interface RequestState { loading: boolean; error: string | null }
+
+const requestReducer = createReducer<RequestState>({ loading: false, error: null }, (builder) => {
+  builder
+    .addMatcher(isPending, (state) => { state.loading = true; state.error = null; })
+    .addMatcher(isFulfilled, (state) => { state.loading = false; })
+    .addMatcher(isRejected, (state, action) => {
+      state.loading = false;
+      state.error = action.error.message ?? 'Unknown error';
+    });
+});
+```
+
+**How it works:** called with zero arguments, `isPending`/`isFulfilled`/`isRejected` match *any* async thunk's lifecycle action in the entire app, detected structurally via `action.meta.requestStatus` rather than by checking against specific thunk instances — this single reducer can track a global loading/error flag without importing or knowing about every thunk that might ever be dispatched.
+
+## 5. `addMatcher` + `addDefaultCase` together
+
+```tsx
+import { createReducer, isRejected } from '@headlesskit/state-management-toolkit';
+
+const notificationsReducer = createReducer({ lastMessage: '' }, (builder) => {
+  builder
+    .addCase('app/messageReceived', (state, action: any) => {
+      state.lastMessage = action.payload;
+    })
+    .addMatcher(isRejected, (state, action) => {
+      state.lastMessage = `Error: ${action.error.message}`;
+    })
+    .addDefaultCase((state) => state);
+});
+```
+
+**How it works:** `addCase` is checked first (exact type match), then every `addMatcher` predicate runs in registration order, and `addDefaultCase` only fires if *nothing* else matched — it's the fallback "no-op, return unchanged state" path, useful for documenting intent ("yes, we considered other actions, they're deliberately ignored") rather than silently relying on the implicit default.
+
+## 6. Full CRUD via entity adapter combined with a slice's own fields
+
+```tsx
+import { createSlice, createEntityAdapter, type PayloadAction } from '@headlesskit/state-management-toolkit';
+
+interface Post { id: string; title: string; body: string }
+
+const postsAdapter = createEntityAdapter<Post>();
+
+const postsSlice = createSlice({
+  name: 'posts',
+  initialState: postsAdapter.getInitialState({ status: 'idle' as 'idle' | 'loading' }),
+  reducers: {
+    postAdded: postsAdapter.addOne,
+    postUpdated: postsAdapter.updateOne,
+    postRemoved: postsAdapter.removeOne,
+    allPostsReplaced: postsAdapter.setAll,
+    loadingStarted(state) {
+      state.status = 'loading';
+    },
+  },
+});
+
+export const postsSelectors = postsAdapter.getSelectors(
+  (state: { posts: ReturnType<typeof postsSlice.getInitialState> }) => state.posts,
+);
+```
+
+**How it works:** the adapter's CRUD methods and the slice's own hand-written reducer (`loadingStarted`) both operate on the *same* Immer draft within the same `createReducer` call — `state.status = 'loading'` and `postsAdapter.addOne(state, action)` are just two different mutations against one object, so there's never a scenario where the entity collection and the extra `status` field get out of sync from a partial update.
+
+## 7. `rejectWithValue` with a typed rejected payload
+
+```tsx
+import { createAsyncThunk } from '@headlesskit/state-management-toolkit';
+
+interface ApiError { code: string; message: string }
+
+export const login = createAsyncThunk<
+  { token: string },
+  { email: string; password: string },
+  { rejectValue: ApiError }
+>('auth/login', async (credentials, { rejectWithValue }) => {
+  const res = await fetch('/api/login', { method: 'POST', body: JSON.stringify(credentials) });
+  if (!res.ok) {
+    const error: ApiError = await res.json();
+    return rejectWithValue(error);
+  }
+  return res.json();
+});
+```
+
+**How it works:** returning `rejectWithValue(error)` instead of throwing puts `error` on `action.payload` (typed as `ApiError` via the third type parameter), while still dispatching the `rejected` action — `action.error` on that same action stays the generic `SerializedError` shape. This split lets a reducer distinguish "the server told us validation failed, here's why" from "something unexpected blew up," which a plain `throw` can't express with the same precision.
+
+## 8. Reacting to `rejectWithValue` specifically with `isRejectedWithValue`
+
+```tsx
+import { createReducer, isRejectedWithValue } from '@headlesskit/state-management-toolkit';
+import { login } from './thunks';
+
+const authReducer = createReducer({ formError: null as string | null }, (builder) => {
+  builder.addMatcher(isRejectedWithValue(login), (state, action) => {
+    state.formError = action.payload.code;
+  });
+});
+```
+
+**How it works:** `isRejectedWithValue` only matches rejections where `rejectWithValue` was explicitly called — internally it's `isAllOf(isRejected(login), (action) => action.meta.rejectedWithValue === true)`. This means a *different* kind of failure (e.g. a thrown network error with no `rejectWithValue` call) is still a `login.rejected` action but does **not** match here, so `action.payload` is safely typed as `ApiError` inside this matcher without an `undefined` check.
+
+## 9. PATCH mutation with `invalidatesTags` scoped to one entity
+
+```tsx
+import { createApi, fetchBaseQuery } from '@headlesskit/state-management-toolkit/query';
+
+interface Post { id: number; title: string; body: string }
+
+export const api = createApi({
+  reducerPath: 'api',
+  baseQuery: fetchBaseQuery({ baseUrl: '/api' }),
+  tagTypes: ['Post'],
+  endpoints: (build) => ({
+    updatePost: build.mutation<Post, { id: number; changes: Partial<Post> }>({
+      query: ({ id, changes }) => ({ url: `posts/${id}`, method: 'PATCH', body: changes }),
+      invalidatesTags: (result, error, arg) => [{ type: 'Post', id: arg.id }],
+    }),
+  }),
+});
+
+// usage:
+const result = await store.dispatch(
+  api.endpoints.updatePost.initiate({ id: 1, changes: { title: 'Updated title' } }),
+).unwrap();
+console.log(result); // the updated Post
+```
+
+**How it works:** `invalidatesTags` as a function receives `(result, error, arg)` and returns tags computed from the *call arguments*, not just a static list — invalidating `{ type: 'Post', id: arg.id }` only marks queries that `provide` that specific post's tag as stale, leaving unrelated posts' cached data untouched, instead of invalidating every `'Post'`-tagged query in the app.
+
+## 10. PUT mutation for a full resource replace
+
+```tsx
+endpoints: (build) => ({
+  replacePost: build.mutation<Post, Post>({
+    query: (post) => ({ url: `posts/${post.id}`, method: 'PUT', body: post }),
+    invalidatesTags: (result, error, arg) => [{ type: 'Post', id: arg.id }],
+  }),
+}),
+
+// usage:
+const result = await store.dispatch(
+  api.endpoints.replacePost.initiate({ id: 1, title: 'Replaced', body: 'New content' }),
+).unwrap();
+console.log(result); // the replaced Post
+```
+
+**How it works:** the only functional difference from the PATCH example above is the HTTP method and that the full `Post` object is sent as `body` — `fetchBaseQuery` treats `PUT` no differently from `PATCH` internally (both just become `RequestInit.method`), so the semantic distinction between "replace everything" and "merge these fields" is entirely a server-side contract your `query` function's argument type should make clear at the call site.
+
+## 11. DELETE mutation invalidating the list tag
+
+```tsx
+endpoints: (build) => ({
+  deletePost: build.mutation<{ id: number }, number>({
+    query: (id) => ({ url: `posts/${id}`, method: 'DELETE' }),
+    invalidatesTags: (result, error, id) => [{ type: 'Post', id }, { type: 'Post', id: 'LIST' }],
+  }),
+}),
+
+// usage:
+await store.dispatch(api.endpoints.deletePost.initiate(1)).unwrap();
+```
+
+**How it works:** invalidating both the specific entity's tag *and* `{ type: 'Post', id: 'LIST' }` covers two different kinds of cached query: a `getPostById(id)`-style query that provided just that entity's tag, and a `getPosts()`-style list query that provided the shared `'LIST'` tag — without the second tag, a deleted post would vanish from any single-post cache but linger in a previously-fetched list view until something else happened to trigger a refetch.
+
+## 12. The `{ type, id: 'LIST' }` provides-tags pattern for a list query
+
+```tsx
+endpoints: (build) => ({
+  getPosts: build.query<Post[], void>({
+    query: () => 'posts',
+    providesTags: (result) =>
+      result
+        ? [...result.map(({ id }) => ({ type: 'Post' as const, id })), { type: 'Post', id: 'LIST' }]
+        : [{ type: 'Post', id: 'LIST' }],
+  }),
+}),
+
+// usage:
+await store.dispatch(api.endpoints.getPosts.initiate()).unwrap();
+const { data: posts } = api.endpoints.getPosts.select()(store.getState());
+```
+
+**How it works:** tagging every individual returned post *and* a synthetic `'LIST'` tag means this query is invalidated either by a mutation targeting one specific post's ID (e.g. an update) or by a mutation that only knows to invalidate the general "the list shape itself changed" tag (e.g. a create, where the new post's ID didn't exist in any previous result to tag in the first place). Tagging only individual IDs would mean a newly-created post never triggers this list query to refetch, since no previously-fetched tag could possibly match an ID that didn't exist yet.
+
+## 13. `fetchBaseQuery` with `prepareHeaders` for an auth token
+
+```tsx
+import { fetchBaseQuery } from '@headlesskit/state-management-toolkit/query';
+import type { RootState } from './store';
+
+const baseQuery = fetchBaseQuery({
+  baseUrl: '/api',
+  prepareHeaders: (headers, { getState }) => {
+    const token = (getState() as RootState).auth.token;
+    if (token) headers.set('authorization', `Bearer ${token}`);
+    return headers;
+  },
+});
+```
+
+**How it works:** `prepareHeaders` runs once per request, just before it fires, with read-only access to `getState()` — it deliberately has no `dispatch`, since attaching a header is meant to be a synchronous read of already-available state, not an opportunity to kick off a side effect like a token refresh. Every endpoint using this `baseQuery` automatically gets the header without each individual `query()` function needing to know about authentication at all.
+
+## 14. `createDynamicMiddleware` adding middleware after store creation
+
+```tsx
+import { createDynamicMiddleware, configureStore } from '@headlesskit/state-management-toolkit';
+import rootReducer from './rootReducer';
+
+const dynamicMiddleware = createDynamicMiddleware();
+
+export const store = configureStore({
+  reducer: rootReducer,
+  middleware: (getDefaultMiddleware) => getDefaultMiddleware().concat(dynamicMiddleware.middleware),
+});
+
+// later, e.g. when a lazy-loaded analytics feature module initializes:
+import { analyticsMiddleware } from './features/analytics/middleware';
+dynamicMiddleware.addMiddleware(analyticsMiddleware);
+```
+
+**How it works:** only `dynamicMiddleware.middleware` — a single "container" middleware — is registered at store-creation time. `addMiddleware` pushes new middleware into an internal map that the container composes together on every dispatch, so a code-split feature module can register its own middleware the moment it loads without ever calling `configureStore` again or rebuilding the store.
+
+## 15. Listener `effect` using `dispatch`/`getState`/`condition`
+
+```tsx
+import { createListenerMiddleware } from '@headlesskit/state-management-toolkit';
+import { checkoutStarted, inventoryChecked } from './checkoutSlice';
+
+const listenerMiddleware = createListenerMiddleware();
+
+listenerMiddleware.startListening({
+  actionCreator: checkoutStarted,
+  effect: async (action, listenerApi) => {
+    const cartTotal = listenerApi.getState().cart.total;
+    if (cartTotal === 0) return;
+
+    const wasInventoryConfirmed = await listenerApi.condition(
+      (a) => inventoryChecked.match(a),
+      10_000,
+    );
+    if (wasInventoryConfirmed) {
+      listenerApi.dispatch({ type: 'checkout/proceed' });
+    }
+  },
+});
+```
+
+**How it works:** `getState()` gives a synchronous read of current state to decide whether the effect should even continue; `condition(predicate, timeout)` then suspends the effect (without blocking the rest of the app) until some *future* dispatched action satisfies the predicate, or the timeout elapses — this is the building block for "wait for an async confirmation, then act" without manually wiring up a one-off subscription and unsubscribing it yourself.
+
+## 16. Listener `effect` using `take`
+
+```tsx
+listenerMiddleware.startListening({
+  actionCreator: paymentSubmitted,
+  effect: async (_action, listenerApi) => {
+    const result = await listenerApi.take(
+      (a) => paymentSucceeded.match(a) || paymentFailed.match(a),
+      30_000,
+    );
+    if (result === null) {
+      listenerApi.dispatch(checkoutTimedOut());
+      return;
+    }
+    const [resultAction] = result;
+    if (paymentSucceeded.match(resultAction)) {
+      listenerApi.dispatch(orderConfirmed());
+    }
+  },
+});
+```
+
+**How it works:** `take` is `condition`'s sibling — instead of resolving to a boolean, it resolves to the `[action, state, prevState]` tuple of whichever action actually satisfied the predicate, letting the effect branch on *which* of two possible outcomes occurred without a second lookup. A `null` result specifically means the timeout elapsed with no matching action, distinguishing "gave up waiting" from "the predicate matched."
+
+## 17. Nested/normalized entity state: posts referencing authors by id
+
+```tsx
+import { createEntityAdapter, createSlice } from '@headlesskit/state-management-toolkit';
+
+interface Author { id: string; name: string }
+interface Post { id: string; title: string; authorId: string }
+
+const authorsAdapter = createEntityAdapter<Author>();
+const postsAdapter = createEntityAdapter<Post>();
+
+interface BlogState {
+  authors: ReturnType<typeof authorsAdapter.getInitialState>;
+  posts: ReturnType<typeof postsAdapter.getInitialState>;
+}
+
+const blogSlice = createSlice({
+  name: 'blog',
+  initialState: {
+    authors: authorsAdapter.getInitialState(),
+    posts: postsAdapter.getInitialState(),
+  } as BlogState,
+  reducers: {
+    blogDataLoaded(state, action: { payload: { authors: Author[]; posts: Post[] } }) {
+      authorsAdapter.setAll(state.authors, action.payload.authors);
+      postsAdapter.setAll(state.posts, action.payload.posts);
+    },
+  },
+});
+
+const authorsSelectors = authorsAdapter.getSelectors((s: { blog: BlogState }) => s.blog.authors);
+const postsSelectors = postsAdapter.getSelectors((s: { blog: BlogState }) => s.blog.posts);
+
+function selectPostWithAuthor(state: { blog: BlogState }, postId: string) {
+  const post = postsSelectors.selectById(state, postId);
+  return post ? { ...post, author: authorsSelectors.selectById(state, post.authorId) } : undefined;
+}
+```
+
+**How it works:** posts store `authorId` rather than a nested author object — this is the normalized-state pattern: each entity type lives in its own adapter-managed collection, and relationships are just IDs, not duplicated copies of the related entity. `selectPostWithAuthor` joins them on read, so updating an author's name in one place is instantly reflected everywhere that author is referenced, with no risk of stale duplicated author data inside individual post records.
+
+## 18. Thunk cancellation via `AbortSignal`
+
+```tsx
+import { createAsyncThunk } from '@headlesskit/state-management-toolkit';
+
+export const fetchSearchResults = createAsyncThunk(
+  'search/fetch',
+  async (query: string, { signal }) => {
+    const res = await fetch(`/api/search?q=${query}`, { signal });
+    return res.json();
+  },
+);
+
+// in a component effect:
+const promise = dispatch(fetchSearchResults('react'));
+// on unmount, or when a newer search supersedes this one:
+promise.abort('superseded by newer search');
+```
+
+**How it works:** `signal` is wired to the dispatched promise's `.abort()` method — passing it straight into `fetch`'s `RequestInit` means calling `.abort()` actually cancels the in-flight network request itself, not just the thunk's bookkeeping. Without explicitly threading `signal` through to `fetch`, calling `.abort()` would still resolve a `rejected` action with `meta.aborted: true`, but the underlying request would keep running to completion uselessly in the background.
+
+## 19. Optimistic update via `util.updateQueryData`-style manual cache patch
+
+```tsx
+endpoints: (build) => ({
+  toggleTodoDone: build.mutation<Todo, { id: string; done: boolean }>({
+    query: ({ id, done }) => ({ url: `todos/${id}`, method: 'PATCH', body: { done } }),
+    async onQueryStarted({ id, done }, { dispatch, queryFulfilled, getCacheEntry }) {
+      const patchResult = dispatch(
+        api.util.updateQueryData('getTodos', undefined, (draft) => {
+          const todo = draft.find((t) => t.id === id);
+          if (todo) todo.done = done;
+        }),
+      );
+      try {
+        await queryFulfilled;
+      } catch {
+        patchResult.undo();
+      }
+    },
+  }),
+}),
+
+// usage:
+await store.dispatch(api.endpoints.toggleTodoDone.initiate({ id: '1', done: true })).unwrap();
+```
+
+**How it works:** `util.updateQueryData` lets you write an Immer-style mutation directly against an already-cached query result, applying the change to the UI *before* the server has confirmed it — `patchResult.undo()` rolls that speculative edit back if the mutation's promise (`queryFulfilled`) ultimately rejects, giving the snappy "instant" feel of an optimistic update with a built-in rollback path if the optimism turns out to be wrong.
+
+## 20. `setupListeners` for `refetchOnFocus`/`refetchOnReconnect`
+
+```tsx
+import { configureStore } from '@headlesskit/state-management-toolkit';
+import { setupListeners } from '@headlesskit/state-management-toolkit/query';
+import { api } from './api';
+
+export const store = configureStore({
+  reducer: { [api.reducerPath]: api.reducer },
+  middleware: (getDefaultMiddleware) => getDefaultMiddleware().concat(api.middleware),
+});
+
+setupListeners(store.dispatch);
+```
+
+**How it works:** `refetchOnFocus`/`refetchOnReconnect` (set per-`createApi` or per-endpoint) only actually trigger if `setupListeners` has wired up the underlying `window` focus/`online` event listeners — without this call, those options are configured but inert, since nothing is listening for the browser events that would otherwise drive them.
+
+## 21. `prefetch` warming the cache before navigation
+
+```tsx
+import { store } from './store';
+import { api } from './api';
+
+function onPostListItemHover(postId: number) {
+  store.dispatch(api.util.prefetch('getPostById', postId, { ifOlderThan: 30 }));
+}
+```
+
+**How it works:** `prefetch` triggers the same cache-populating fetch a real `initiate()` call would, but `ifOlderThan: 30` skips it entirely if a fresh-enough (less than 30 seconds old) cache entry already exists — useful for "fetch on hover, before the user actually clicks," where firing a redundant request on every hover would be wasteful if the data was just fetched moments ago.
+
+## 22. Combining `createAsyncThunk` with `condition` to dedupe in-flight requests
+
+```tsx
+import { createAsyncThunk } from '@headlesskit/state-management-toolkit';
+import type { RootState } from './store';
+
+export const fetchTodosIfNeeded = createAsyncThunk(
+  'todos/fetchIfNeeded',
+  async (_arg, { signal }) => {
+    const res = await fetch('/api/todos', { signal });
+    return res.json();
+  },
+  {
+    condition: (_arg, { getState }) => {
+      const { todos } = getState() as RootState;
+      return todos.status !== 'loading';
+    },
+  },
+);
+```
+
+**How it works:** `condition` runs synchronously *before* `pending` is even dispatched — returning `false` here means a second `dispatch(fetchTodosIfNeeded())` call while one is already in flight does nothing at all (no `pending`/`fulfilled`/`rejected` dispatched by default), which is a much cheaper way to dedupe identical in-flight requests than dispatching the thunk and discarding its result after the fact.
+
+## 23. Reading `.meta.requestId` to correlate a specific dispatch's lifecycle
+
+```tsx
+import { fetchUser } from './thunks';
+import { store } from './store';
+
+const promise = store.dispatch(fetchUser('user-1'));
+const requestId = promise.requestId;
+
+// later, inside a reducer or listener:
+function handleFulfilled(action: ReturnType<typeof fetchUser.fulfilled>) {
+  if (action.meta.requestId === requestId) {
+    console.log('this is the response to that specific dispatch call');
+  }
+}
+```
+
+**How it works:** `requestId` is freshly generated on every dispatch, even for the exact same thunk and argument — all three lifecycle actions (`pending`/`fulfilled`/`rejected`) from one specific call share that one ID in their `meta`, which is the mechanism that lets you distinguish "the response to *this* call" from "a response to some other overlapping call to the same thunk" when multiple calls race.
+
+## 24. `isAllOf` narrowing a broad matcher with an extra condition
+
+```tsx
+import { isAllOf, isFulfilled } from '@headlesskit/state-management-toolkit';
+import { fetchOrder } from './thunks';
+
+const isOrderFulfilledForCurrentUser = isAllOf(
+  isFulfilled(fetchOrder),
+  (action: ReturnType<typeof fetchOrder.fulfilled>) => action.meta.arg.userId === 'current-user-id',
+);
+```
+
+**How it works:** `isAllOf` only returns `true` if *every* supplied matcher accepts the action — combining the broad "any fulfilled `fetchOrder`" check with a narrower closure over `action.meta.arg` lets you scope a reducer's reaction to a specific call's arguments, without writing a one-off bespoke predicate function that duplicates `isFulfilled`'s own thunk-detection logic.
+
+## 25. `addListener`/`removeListener` dispatched from inside a thunk
+
+```tsx
+import { addListener, removeListener } from '@headlesskit/state-management-toolkit';
+import { createAsyncThunk } from '@headlesskit/state-management-toolkit';
+
+export const startWatchingInventory = createAsyncThunk(
+  'inventory/startWatching',
+  async (_arg, { dispatch }) => {
+    dispatch(
+      addListener({
+        actionCreator: stockChanged,
+        effect: (action, listenerApi) => {
+          listenerApi.dispatch(refreshInventoryBadge());
+        },
+      }),
+    );
+  },
+);
+```
+
+**How it works:** `addListener`/`removeListener` are dispatchable actions that achieve the exact same registration `listenerMiddleware.startListening` does directly — useful here because the thunk only has `dispatch`, not a direct reference to the `listenerMiddleware` instance itself (which typically lives in a separate store-setup module). The listener middleware intercepts these specific action types before they reach any reducer.
+
+## 26. A query endpoint with `transformResponse` reshaping the server payload
+
+```tsx
+endpoints: (build) => ({
+  getPosts: build.query<Post[], void>({
+    query: () => 'posts',
+    transformResponse: (response: { data: Post[]; meta: unknown }) => response.data,
+  }),
+}),
+
+// usage:
+await store.dispatch(api.endpoints.getPosts.initiate()).unwrap();
+const { data: posts } = api.endpoints.getPosts.select()(store.getState());
+console.log(posts); // Post[] — the unwrapped envelope, never { data, meta }
+```
+
+**How it works:** `transformResponse` runs once, right after the base query resolves successfully, before the result is written into the cache — consumers of `getPosts` only ever see `Post[]`, never the server's actual `{ data, meta }` envelope. This keeps the "this API wraps everything in an envelope" detail confined to one place instead of leaking into every selector/component that reads this endpoint's data.
+
+## 27. Listener `predicate` form comparing previous and current state
+
+```tsx
+listenerMiddleware.startListening({
+  predicate: (action, currentState: RootState, previousState: RootState) =>
+    currentState.cart.total !== previousState.cart.total,
+  effect: (action, listenerApi) => {
+    localStorage.setItem('cartTotal', String(listenerApi.getState().cart.total));
+  },
+});
+```
+
+**How it works:** unlike `actionCreator`/`type`/`matcher` (which only look at the action), `predicate` additionally receives the state *before* and *after* the reducer ran for this action — this is the only way to write "fire only when this specific derived value actually changed," as opposed to "fire on every dispatch of this action type" even when the action turned out to be a no-op for this particular slice of state.
+
+## 28. A query argument object that changes the cache key
+
+```tsx
+endpoints: (build) => ({
+  getPostsByTag: build.query<Post[], { tag: string; sort: 'asc' | 'desc' }>({
+    query: ({ tag, sort }) => ({ url: 'posts', params: { tag, sort } }),
+    providesTags: ['Post'],
+  }),
+}),
+
+// two distinct cache entries:
+dispatch(api.endpoints.getPostsByTag.initiate({ tag: 'react', sort: 'asc' }));
+dispatch(api.endpoints.getPostsByTag.initiate({ tag: 'react', sort: 'desc' }));
+```
+
+**How it works:** the default `serializeQueryArgs` derives the cache key from a stable serialization of the entire argument object, so `{ tag: 'react', sort: 'asc' }` and `{ tag: 'react', sort: 'desc' }` are two completely independent cache entries even though they share most of their fields — each is fetched, cached, and garbage-collected on its own schedule, not treated as "the same query, different page" the way an infinite query would.
+
+## 29. `getDefaultMiddleware().prepend(...)` ordering a listener middleware first
+
+```tsx
+import { configureStore, createListenerMiddleware } from '@headlesskit/state-management-toolkit';
+import rootReducer from './rootReducer';
+
+const listenerMiddleware = createListenerMiddleware();
+
+export const store = configureStore({
+  reducer: rootReducer,
+  middleware: (getDefaultMiddleware) =>
+    getDefaultMiddleware().prepend(listenerMiddleware.middleware),
+});
+```
+
+**How it works:** `.prepend` (rather than `.concat`) places the listener middleware *before* the default thunk middleware in the chain — this matters because listener effects need to observe the action as it's dispatched, and prepending guarantees the listener middleware sees every action (including thunks themselves, before they're "unwrapped") rather than only plain object actions that have already passed through the thunk middleware.
+
+## 30. `isAsyncThunkAction` for a catch-all "any thunk lifecycle action" matcher
+
+```tsx
+import { createReducer, isAsyncThunkAction } from '@headlesskit/state-management-toolkit';
+
+const actionLogReducer = createReducer({ recentThunkActions: [] as string[] }, (builder) => {
+  builder.addMatcher(isAsyncThunkAction, (state, action) => {
+    state.recentThunkActions.push(action.type);
+    if (state.recentThunkActions.length > 20) state.recentThunkActions.shift();
+  });
+});
+```
+
+**How it works:** `isAsyncThunkAction` matches `pending` **or** `fulfilled` **or** `rejected` from *any* thunk — broader than any single one of `isPending`/`isFulfilled`/`isRejected` alone, useful for a generic activity log or debugging panel that wants to see every async-thunk-driven action flowing through the store without separately registering three matchers for the same purpose.

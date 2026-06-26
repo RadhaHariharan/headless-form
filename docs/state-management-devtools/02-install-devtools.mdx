@@ -1,0 +1,60 @@
+# installDevtools
+
+**File:** `src/install-devtools.ts`
+
+The main entry point — populates the connector globals and returns the stores a UI renders.
+
+```typescript
+import { installDevtools } from '@headlesskit/state-management-devtools';
+```
+
+## Signature
+
+```typescript
+function installDevtools(options?: InstallDevtoolsOptions): DevtoolsInstance
+
+interface InstallDevtoolsOptions {
+  maxActionsPerConnection?: number; // default 200
+  dock?: {
+    isOpen?: boolean;   // default false
+    position?: 'bottom' | 'top' | 'left' | 'right'; // default 'bottom'
+    size?: number;      // default 320
+  };
+}
+
+interface DevtoolsInstance {
+  inspectorStore: InspectorStore;
+  dockStore: DockStore;
+}
+```
+
+## What it actually does
+
+1. Creates a fresh `InspectorStore` (via [`createInspectorStore`](./03-create-inspector-store.mdx)) and `DockStore` (via [`createDockStore`](./04-create-dock-store.mdx)).
+2. If `window` exists, builds the connector pair (via [`createDevtoolsExtension`](./05-create-devtools-extension.mdx)) and assigns it to `window.__HEADLESSKIT_DEVTOOLS_EXTENSION__` and `window.__HEADLESSKIT_DEVTOOLS_EXTENSION_COMPOSE__`.
+3. Returns `{ inspectorStore, dockStore }`.
+
+On the server (no `window`), step 2 is skipped — `installDevtools()` still returns working stores, they just never receive any history (there's no `window` for a store to find the connector on anyway).
+
+## Basic usage
+
+```typescript
+// devtools-setup.ts — import this before creating any store
+import { installDevtools } from '@headlesskit/state-management-devtools';
+
+export const { inspectorStore, dockStore } = installDevtools();
+```
+
+## Advanced: custom history size and starting dock state
+
+```typescript
+export const { inspectorStore, dockStore } = installDevtools({
+  maxActionsPerConnection: 500,
+  dock: { isOpen: true, position: 'right', size: 400 },
+});
+```
+
+## Common pitfalls
+
+- **Call it exactly once, before any store is created.** Calling it again later replaces the connector globals with a fresh, empty inspector store — any store already connected to the old one keeps recording into history nothing renders anymore.
+- **The returned `inspectorStore`/`dockStore` are the same objects the connector writes into** — pass them directly to a UI (e.g. `@headlesskit/state-management-devtools-react`'s `DevtoolsPanel`) rather than re-deriving your own.

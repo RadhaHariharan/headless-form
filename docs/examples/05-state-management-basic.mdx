@@ -1,0 +1,361 @@
+# State Management — Basic Examples
+
+Twenty-five examples covering one concept each from [`@headlesskit/state-management`](../state-management/01-overview.mdx), a small, dependency-free Redux-style store: pure reducers, a single `dispatch`, and a `subscribe`-based notification model.
+
+---
+
+## 1. A minimal counter store
+
+```typescript
+import { createStore } from '@headlesskit/state-management';
+
+function counterReducer(state = { count: 0 }, action: { type: string }) {
+  switch (action.type) {
+    case 'increment': return { count: state.count + 1 };
+    case 'decrement': return { count: state.count - 1 };
+    default: return state;
+  }
+}
+
+const store = createStore(counterReducer);
+store.dispatch({ type: 'increment' });
+console.log(store.getState()); // { count: 1 }
+```
+
+**How it works:** `createStore` calls your reducer once immediately with `(undefined, { type: '@@redux/INIT' })` to compute the initial state (which is why the `state = { count: 0 }` default parameter matters — it's what runs on that very first call). Every `dispatch` after that calls `reducer(currentState, action)` synchronously and replaces the stored state with whatever comes back — there's no merging, no immer, no proxies; the reducer is responsible for returning a *new* object when something changes.
+
+## 2. Combining two reducers into one store
+
+```typescript
+import { createStore, combineReducers } from '@headlesskit/state-management';
+
+const rootReducer = combineReducers({ counter: counterReducer, user: userReducer });
+const store = createStore(rootReducer);
+
+store.getState(); // { counter: {...}, user: {...} }
+```
+
+**How it works:** `combineReducers` builds one reducer whose job is purely dispatching: every action goes to *every* slice reducer, each returns its own next slice (or the same reference if nothing changed for it), and the results are reassembled into one object keyed by the names you gave it (`counter`, `user`). Each slice reducer has no idea the others exist — it only ever sees its own slice of state.
+
+## 3. Subscribing to every state change
+
+```typescript
+const unsubscribe = store.subscribe(() => {
+  console.log('new state:', store.getState());
+});
+
+store.dispatch({ type: 'increment' });
+// logs: new state: { count: 1 }
+```
+
+**How it works:** `subscribe` takes a listener with *no arguments* — by design, you always re-read `store.getState()` yourself inside the callback rather than receiving the new state as a parameter, which keeps the store's notification contract simple and is exactly how UI bindings (`useSyncExternalStore`, React-Redux, etc.) wire a store up to a framework.
+
+## 4. Action creators as plain functions
+
+```typescript
+const increment = () => ({ type: 'increment' });
+const setCount = (count: number) => ({ type: 'setCount', count });
+
+store.dispatch(increment());
+store.dispatch(setCount(10));
+```
+
+**How it works:** there's nothing magic about an "action creator" — it's just a function that returns a plain `{ type, ... }` object, useful purely so you don't repeat the literal `{ type: 'increment' }` shape (and its string) at every call site. `dispatch` doesn't know or care whether you built the object inline or via a function.
+
+## 5. A `switch`-based reducer with several action types
+
+```typescript
+function todosReducer(state: Todo[] = [], action: TodoAction): Todo[] {
+  switch (action.type) {
+    case 'todos/add': return [...state, action.todo];
+    case 'todos/remove': return state.filter((t) => t.id !== action.id);
+    case 'todos/toggle': return state.map((t) => (t.id === action.id ? { ...t, done: !t.done } : t));
+    default: return state;
+  }
+}
+```
+
+**How it works:** the `default: return state` branch is doing real work, not just satisfying TypeScript — for *every* action your store doesn't recognize, the reducer must return the exact same `state` reference unchanged, so unrelated dispatches (another slice's actions, in a `combineReducers` setup) don't cause this slice to "change" and trigger spurious re-renders downstream.
+
+## 6. Updating one field of an array item by id
+
+```typescript
+function todosReducer(state: Todo[] = [], action: TodoAction): Todo[] {
+  switch (action.type) {
+    case 'todos/rename':
+      return state.map((t) => (t.id === action.id ? { ...t, text: action.text } : t));
+    default: return state;
+  }
+}
+```
+
+**How it works:** `.map` always returns a brand-new array, but each *element* in it is only a new object when its callback explicitly builds one — here every todo except the matching one is passed through by reference unchanged (`t`), while the matching todo gets a fresh `{ ...t, text: action.text }` object. This is the standard "copy the array, copy the one item that changed" idiom for arrays of objects without mutating anything.
+
+## 7. Adding and removing items from an array in state
+
+```typescript
+function todosReducer(state: Todo[] = [], action: TodoAction): Todo[] {
+  switch (action.type) {
+    case 'todos/add': return [...state, action.todo];
+    case 'todos/remove': return state.filter((t) => t.id !== action.id);
+    case 'todos/clear': return [];
+    default: return state;
+  }
+}
+```
+
+**How it works:** `[...state, action.todo]` builds a new array with every existing element plus one more at the end — it never calls `.push` on the original array, which would mutate it in place and break any code still holding a reference to the old array. `.filter` has the same "always returns new" property: even `state.filter(() => true)` (keep everything) returns a different array reference, which is why filters used as no-ops still cause a state "change" if you're not careful with memoized selectors.
+
+## 8. Updating a nested object one level deep
+
+```typescript
+interface UserState { name: string; address: { city: string; zip: string } }
+
+function userReducer(state: UserState = { name: '', address: { city: '', zip: '' } }, action: UserAction): UserState {
+  switch (action.type) {
+    case 'user/setCity':
+      return { ...state, address: { ...state.address, city: action.city } };
+    default: return state;
+  }
+}
+```
+
+**How it works:** updating `address.city` requires spreading at *both* levels — `{ ...state, address: {...} }` keeps every other top-level field (like `name`) untouched while replacing `address` entirely, and `{ ...state.address, city: action.city }` keeps every other address field (like `zip`) while replacing just `city`. Skipping the inner spread and writing `state.address.city = action.city` directly would mutate the original nested object — see the next example for why that's a real bug, not just a style preference.
+
+## 9. The classic nested-mutation bug — what NOT to do
+
+```typescript
+// BUG: mutates the nested `address` object in place
+function userReducer(state: UserState, action: UserAction): UserState {
+  switch (action.type) {
+    case 'user/setCity':
+      state.address.city = action.city; // mutates the existing object!
+      return { ...state };              // new top-level reference, but `address` is the SAME object
+    default: return state;
+  }
+}
+```
+
+**How it works:** `{ ...state }` does create a new top-level object, so naive checks like `prevState !== nextState` pass — but `nextState.address` is still the *exact same reference* as `prevState.address`, because the spread only copies one level of keys (a shallow copy), and the line above it already mutated that shared object before the spread ever ran. Any selector or memoized component comparing `prevState.address !== nextState.address` (the recommended way to detect nested changes) sees no change and skips re-rendering, even though `city` did change — and because the mutation happened synchronously, by the time anyone inspects `prevState.address.city` it has *also* already changed, making the bug confusing to even reproduce in a debugger.
+
+## 10. The correct version of the nested update
+
+```typescript
+function userReducer(state: UserState, action: UserAction): UserState {
+  switch (action.type) {
+    case 'user/setCity':
+      return { ...state, address: { ...state.address, city: action.city } };
+    default: return state;
+  }
+}
+```
+
+**How it works:** every object on the path from the root to the changed field gets its own fresh copy — `state` itself, and `state.address` — while every object *not* on that path (siblings of `address`, if there were any) keeps its original reference. This is what makes reference-equality checks (`prevState.address !== nextState.address`) a reliable, cheap way to detect "did this nested slice change" without deep-equality scanning the whole tree.
+
+## 11. Reading nested state after `combineReducers`
+
+```typescript
+const state = store.getState();
+state.counter.count;     // this slice's field
+state.user.name;         // a sibling slice's field
+```
+
+**How it works:** the shape of `getState()`'s return value mirrors the keys you passed to `combineReducers` exactly — there's no extra nesting or nomalization step, so `state.counter` is precisely whatever `counterReducer` returned, and nothing else.
+
+## 12. Unsubscribing a listener
+
+```typescript
+const unsubscribe = store.subscribe(render);
+// later, e.g. when a component unmounts:
+unsubscribe();
+```
+
+**How it works:** `subscribe` returns the unsubscribe function directly rather than requiring you to pass the original listener back to an `unsubscribe(listener)` method — this is the same ergonomic pattern `addEventListener`-style APIs increasingly use, and it composes cleanly with a `useEffect(() => store.subscribe(...), [])` cleanup return in React.
+
+## 13. Dispatching several actions in sequence
+
+```typescript
+store.dispatch({ type: 'todos/add', todo: { id: 1, text: 'Write docs', done: false } });
+store.dispatch({ type: 'todos/add', todo: { id: 2, text: 'Ship it', done: false } });
+store.dispatch({ type: 'todos/toggle', id: 1 });
+```
+
+**How it works:** `dispatch` is fully synchronous — by the time the third call returns, all three reducer runs and all subscriber notifications from the first two have already completed. There's no batching or microtask deferral at this layer (a UI framework binding on top might add its own batching for render purposes, but the store itself notifies immediately on every single dispatch).
+
+## 14. `legacy_createStore` vs. `createStore`
+
+```typescript
+import { legacy_createStore } from '@headlesskit/state-management';
+
+const store = legacy_createStore(rootReducer); // identical behavior, no deprecation warning
+```
+
+**How it works:** both functions do exactly the same thing — `legacy_createStore` exists purely so codebases that intentionally keep using a single root store (rather than, say, multiple independent stores or a more modular architecture) have a way to say so explicitly without a "consider an alternative" warning attached to the name `createStore` in some tooling/ecosystems. Functionally, pick whichever name reads better in your codebase.
+
+## 15. Typing actions with a union
+
+```typescript
+type CounterAction = { type: 'increment' } | { type: 'decrement' } | { type: 'setCount'; count: number };
+
+function counterReducer(state = { count: 0 }, action: CounterAction) {
+  switch (action.type) {
+    case 'setCount': return { count: action.count }; // action.count is typed here
+    // ...
+  }
+}
+```
+
+**How it works:** inside each `case`, TypeScript narrows `action` to exactly the union member whose `type` literal matches — so `action.count` is only accessible (and type-checked) in the `'setCount'` branch, not in `'increment'`/`'decrement'`. This is plain TypeScript discriminated-union narrowing; the store itself only requires `{ type: string }` (`UnknownAction`) at its boundary, leaving you free to type individual reducers as strictly as you want.
+
+## 16. Replacing the reducer at runtime
+
+```typescript
+store.replaceReducer(newRootReducer);
+```
+
+**How it works:** swaps which reducer function future dispatches run, *without* recreating the store or losing subscribers — existing state is kept as-is and handed to the new reducer on the very next dispatch (some apps dispatch a no-op action immediately after to force the new reducer to run once). This is the primitive code-splitting / hot-module-reloading tools build on, by lazily combining in a new slice reducer when its module first loads.
+
+## 17. A store with no reducer logic at all (state passthrough)
+
+```typescript
+const identityStore = createStore((state = { ready: true }) => state);
+identityStore.dispatch({ type: 'anything' });
+identityStore.getState(); // still { ready: true } — nothing changes it
+```
+
+**How it works:** there's nothing special-cased about a "no-op" reducer — it's the same contract as any other reducer, just one that always returns its input unchanged. Useful as a placeholder while scaffolding a slice you haven't implemented yet, or to confirm in a test that dispatching into a slice never mutates it.
+
+## 18. A two-level-deep nested object update
+
+```typescript
+interface AppState {
+  user: { profile: { name: string; email: string }; settings: { theme: string; notifications: boolean } };
+}
+
+function userReducer(state: AppState['user'], action: UserAction): AppState['user'] {
+  switch (action.type) {
+    case 'user/setName':
+      return { ...state, profile: { ...state.profile, name: action.name } };
+    case 'user/setTheme':
+      return { ...state, settings: { ...state.settings, theme: action.theme } };
+    default: return state;
+  }
+}
+```
+
+**How it works:** each action only spreads the branch of the tree it actually changes — `setName` rebuilds `profile` but reuses the exact same `settings` reference, and `setTheme` does the opposite. This matters for performance and correctness downstream: a component or selector reading only `state.user.settings` won't think anything changed when a `setName` action fires, because `state.user.settings` really is the same object reference as before.
+
+## 19. Three-level-deep nested update, spread at every level
+
+```typescript
+interface AppState {
+  user: {
+    profile: { name: string; email: string };
+    settings: { theme: string; notifications: { email: boolean; sms: boolean } };
+  };
+}
+
+function userReducer(state: AppState['user'], action: { type: 'user/setSmsNotifications'; enabled: boolean }) {
+  switch (action.type) {
+    case 'user/setSmsNotifications':
+      return {
+        ...state,
+        settings: {
+          ...state.settings,
+          notifications: { ...state.settings.notifications, sms: action.enabled },
+        },
+      };
+    default: return state;
+  }
+}
+```
+
+**How it works:** the spread chain mirrors the path to the changed field exactly: `state` → `settings` → `notifications`, three objects, three spreads, each one keeping its siblings (`profile` at the top, `theme` next to `notifications`, `email` next to `sms`) by reference. Every additional level of nesting in your state shape adds one more spread you must remember — this is precisely the tedium that motivates [a small `updateNestedField` helper](./06-state-management-medium.mdx) or, at the toolkit layer, Immer-backed `createSlice`.
+
+## 20. Initializing nested default state correctly
+
+```typescript
+function userReducer(
+  state: AppState['user'] = {
+    profile: { name: '', email: '' },
+    settings: { theme: 'light', notifications: { email: true, sms: false } },
+  },
+  action: UserAction,
+) {
+  // ...
+  return state;
+}
+```
+
+**How it works:** the default parameter is evaluated fresh on *every call* where `state` is `undefined` — but in practice that's only the very first `@@INIT` dispatch, because every subsequent dispatch passes the previously-returned state back in. It's worth writing the full nested shape out explicitly here rather than `{}` so that `state.settings.notifications.sms` never throws on an early read before any action has set it.
+
+## 21. A boolean toggle reducer
+
+```typescript
+function uiReducer(state = { sidebarOpen: false }, action: { type: string }) {
+  switch (action.type) {
+    case 'ui/toggleSidebar': return { ...state, sidebarOpen: !state.sidebarOpen };
+    default: return state;
+  }
+}
+```
+
+**How it works:** `!state.sidebarOpen` reads the *current* value out of the state passed into this exact call — there's no risk of a stale closure here because the reducer never captures `state` outside its own function body; every dispatch gets a fresh call with whatever the store's current state actually is at that moment.
+
+## 22. Resetting a slice back to its initial state
+
+```typescript
+const initialTodosState: Todo[] = [];
+
+function todosReducer(state: Todo[] = initialTodosState, action: TodoAction): Todo[] {
+  switch (action.type) {
+    case 'todos/reset': return initialTodosState;
+    case 'todos/add': return [...state, action.todo];
+    default: return state;
+  }
+}
+```
+
+**How it works:** returning the *same* `initialTodosState` constant (rather than a fresh `[]` literal each time) means repeated `'todos/reset'` dispatches in a row produce the same reference every time, which is a minor but real win for any selector memoizing on `state.todos` — `prevState.todos === nextState.todos` stays true if you reset twice without adding anything in between, correctly signaling "nothing meaningfully changed."
+
+## 23. Guarding against unrelated actions mutating the wrong slice
+
+```typescript
+function cartReducer(state = { items: [] }, action: { type: string }) {
+  if (!action.type.startsWith('cart/')) return state;
+  switch (action.type) {
+    case 'cart/clear': return { items: [] };
+    default: return state;
+  }
+}
+```
+
+**How it works:** the early-return guard is a stricter, more explicit version of the usual `default: return state` — instead of relying on every unhandled `case` falling through, it rejects anything outside this slice's own action-type namespace up front. This is purely a style choice (the `switch`'s `default` branch already does the right thing), but some teams prefer it as a visible guard against accidentally adding a `case` for another slice's action type by copy-paste mistake.
+
+## 24. A reducer that ignores its action entirely (derived only from time)
+
+```typescript
+function timestampReducer(state = Date.now(), action: { type: string }) {
+  switch (action.type) {
+    case 'app/tick': return Date.now();
+    default: return state;
+  }
+}
+```
+
+**How it works:** nothing about the reducer contract requires the next state to be *derived from* the action's payload — `Date.now()` ignores `action` completely and still satisfies `(state, action) => state`. The only rule that matters is purity in the sense of "no side effects and no reading of outside mutable state inside the function body other than its own arguments" being relaxed here deliberately (reading the clock), which is fine for a value like a timestamp that's expected to differ on every call by design.
+
+## 25. Comparing two states for a shallow "did anything change" check
+
+```typescript
+function shallowEqual(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+  if (a === b) return true;
+  const aKeys = Object.keys(a);
+  if (aKeys.length !== Object.keys(b).length) return false;
+  return aKeys.every((key) => a[key] === b[key]);
+}
+
+shallowEqual(prevState.user, nextState.user); // true only if every top-level field is reference-equal
+```
+
+**How it works:** this checks one level deep only — `a.profile === b.profile` compares the *nested object reference*, not its contents, so `shallowEqual` correctly returns `false` the moment any nested object got a fresh spread (as in examples 8–19), without needing to recursively walk the whole tree. This exact one-level reference comparison is what most "did this slice change" UI-binding code (and naive `React.memo` prop comparisons) actually does under the hood.

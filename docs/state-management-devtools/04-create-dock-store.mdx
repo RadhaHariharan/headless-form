@@ -1,0 +1,46 @@
+# createDockStore
+
+**File:** `src/create-dock-store.ts`
+
+Builds a small, framework-agnostic store of dock panel UI state (open/closed, position, size) — unrelated to the lifted-state engine, just the chrome around it.
+
+```typescript
+import { createDockStore } from '@headlesskit/state-management-devtools';
+```
+
+## Signature
+
+```typescript
+function createDockStore(options?: CreateDockStoreOptions): DockStore
+
+interface CreateDockStoreOptions {
+  isOpen?: boolean;                                // default false
+  position?: 'bottom' | 'top' | 'left' | 'right';  // default 'bottom'
+  size?: number;                                   // default 320
+}
+
+interface DockStore {
+  getSnapshot(): DockStateSnapshot;
+  subscribe(listener: () => void): () => void;
+  toggle(): void;
+  open(): void;
+  close(): void;
+  setPosition(position: DockPosition): void;
+  setSize(size: number): void;
+}
+```
+
+## Basic usage
+
+```typescript
+const dockStore = createDockStore({ isOpen: false, position: 'bottom', size: 320 });
+
+dockStore.open();
+dockStore.setPosition('right');
+```
+
+[`installDevtools`](./02-install-devtools.mdx) creates one of these for you and passes its options through from `InstallDevtoolsOptions['dock']`.
+
+## Common pitfalls
+
+- **This store has nothing to do with the action history.** Clearing or resetting an `InspectorStore` connection doesn't touch dock state, and vice versa — they're deliberately independent so a UI can persist panel position/size across reloads without also persisting history.

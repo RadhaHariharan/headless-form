@@ -1,0 +1,33 @@
+# useInspectorSnapshot and useDockSnapshot
+
+**Files:** `src/use-inspector-snapshot.ts`, `src/use-dock-snapshot.ts`
+
+Thin `useSyncExternalStore` wrappers — the only React-specific glue most custom UIs built on this package's stores actually need.
+
+```typescript
+import { useInspectorSnapshot, useDockSnapshot } from '@headlesskit/state-management-devtools-react';
+```
+
+## Signature
+
+```typescript
+function useInspectorSnapshot(inspectorStore: InspectorStore): InspectorSnapshot
+function useDockSnapshot(dockStore: DockStore): DockStateSnapshot
+```
+
+Both subscribe via `useSyncExternalStore(store.subscribe, store.getSnapshot)` — the calling component re-renders whenever the underlying store's snapshot reference changes, and never on anything else (both stores' `getSnapshot()` return a cached, stable reference until an actual mutation occurs, so this can't loop).
+
+## Basic usage
+
+```tsx
+function CustomPanel({ inspectorStore }: { inspectorStore: InspectorStore }) {
+  const snapshot = useInspectorSnapshot(inspectorStore);
+  return <pre>{JSON.stringify(snapshot, null, 2)}</pre>;
+}
+```
+
+[`Inspector`](./03-inspector.mdx) and [`DockMonitor`](./08-dock-monitor.mdx) already call these for you — reach for them directly only when building a custom UI against the same stores.
+
+## Common pitfalls
+
+- **These hooks don't memoize or select a subset of the snapshot** — every change to any connection re-renders every component calling `useInspectorSnapshot` on that store. For a large number of connections with frequent dispatches, consider deriving a memoized slice (e.g. just the active connection's `LiftedState`) in your own component rather than re-deriving it on every render.

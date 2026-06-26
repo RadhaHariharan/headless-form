@@ -1,0 +1,44 @@
+# ActionList
+
+**File:** `src/action-list.tsx`
+
+The filterable, clickable list of recorded actions — the left-hand sidebar of [`Inspector`](./03-inspector.mdx).
+
+```tsx
+import { ActionList } from '@headlesskit/state-management-devtools-react';
+```
+
+## Signature
+
+```typescript
+interface ActionListProps {
+  liftedState: LiftedState;
+  onSelectIndex: (index: number) => void;     // -1 selects the @@INIT baseline
+  onToggleAction: (actionId: number) => void;
+}
+
+function ActionList(props: ActionListProps): JSX.Element
+```
+
+## Behavior
+
+- Always renders one `@@INIT` row first (selecting it calls `onSelectIndex(-1)`), then one row per `liftedState.stagedActionIds`, in order.
+- A row's label is `action.type` when the recorded action is an object with a `type` field, otherwise `JSON.stringify(action)`.
+- The filter input matches against that label, case-insensitively, as a substring.
+- The row matching `liftedState.currentStateIndex` is highlighted.
+- A row whose action is currently skipped renders with strikethrough text; a row whose computed state errored renders in red.
+- Each non-baseline row has a checkbox (checked = included, unchecked = skipped) that calls `onToggleAction(actionId)` without also selecting the row (the checkbox's click event is stopped from bubbling to the row).
+
+## Basic usage
+
+```tsx
+<ActionList
+  liftedState={liftedState}
+  onSelectIndex={(index) => inspectorStore.jumpToState(connectionName, index)}
+  onToggleAction={(id) => inspectorStore.toggleAction(connectionName, id)}
+/>
+```
+
+## Common pitfalls
+
+- **The filter only matches the displayed label**, not the full action payload — filtering for a value nested inside the action object won't find it.

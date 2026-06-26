@@ -1,0 +1,45 @@
+# Inspector
+
+**File:** `src/inspector.tsx`
+
+The full devtools UI: connection picker (via [`InspectorToolbar`](./04-inspector-toolbar.mdx)), an [`ActionList`](./05-action-list.mdx), and an Action/State/Diff/Test tabbed panel with Tree/Raw view modes.
+
+```tsx
+import { Inspector } from '@headlesskit/state-management-devtools-react';
+```
+
+## Signature
+
+```typescript
+interface InspectorProps {
+  inspectorStore: InspectorStore;
+}
+
+function Inspector(props: InspectorProps): JSX.Element
+```
+
+## Behavior
+
+- Subscribes to `inspectorStore` via [`useInspectorSnapshot`](./09-hooks.mdx) — re-renders on every change to any connection.
+- Defaults to the first connection (by registration order) and the **State** tab in **Tree** view; both are local component state, not persisted.
+- For the currently viewed index (`liftedState.currentStateIndex`), computes:
+  - **Action tab** — the entry's recorded action (or `{ type: '@@INIT' }` for the baseline).
+  - **State tab** — `computedStates[index].state`, or `committedState` for the baseline.
+  - **Diff tab** — `computeDiff(previousState, currentState)`, where `previousState` is the state one index back (or `committedState` at index `0`).
+  - **Test tab** — a plain-text snippet: `prevState`/`action`/`expect(nextState).toEqual(...)`, generated from the same three values. This is a starting point for a regression test, not a runnable assertion — there's no test-runner integration.
+- If `computedStates[index].error` is set (the reducer threw while computing this state — see [lifted-state](../state-management-devtools/06-lifted-state.mdx)), shows a red banner above the tab content but still renders the last good state.
+- Clicking a row in the action list calls `inspectorStore.jumpToState(name, index)`; toggling a row's checkbox calls `inspectorStore.toggleAction(name, actionId)`.
+
+## Basic usage
+
+```tsx
+import { Inspector } from '@headlesskit/state-management-devtools-react';
+import { inspectorStore } from './devtools-setup';
+
+<Inspector inspectorStore={inspectorStore} />
+```
+
+## Common pitfalls
+
+- **Renders a "No store has connected yet." placeholder** until at least one connection registers — this is expected immediately after `installDevtools()` runs and before any store dispatches.
+- **The selected tab and view mode are independent of which connection is active** — switching connections keeps your place instead of resetting to State/Tree.

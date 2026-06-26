@@ -1,0 +1,1278 @@
+# State Management Toolkit — Advanced Examples
+
+Fifty examples covering deeply nested normalized state, the full RTK-Query CRUD + pagination +
+infinite-pagination surface, advanced listener-middleware orchestration, dynamic middleware,
+isolated reducer testing, devtools wiring, and the remaining `createApi`/`createSlice`/
+`createAsyncThunk` options not yet shown, using
+[`@headlesskit/state-management-toolkit`](../state-management-toolkit/01-overview.mdx) — an
+RTK-equivalent layer on top of [`@headlesskit/state-management`](../state-management/01-overview.mdx).
+See [Examples overview](./01-overview.mdx),
+[11-state-management-toolkit-basic](./11-state-management-toolkit-basic.mdx), and
+[12-state-management-toolkit-medium](./12-state-management-toolkit-medium.mdx) for the
+fundamentals these build on.
+
+---
+
+## 1. Two-level nested slice state: a settings object updated via dot-path mutation
+
+```tsx
+import { createSlice, type PayloadAction } from '@headlesskit/state-management-toolkit';
+
+interface SettingsState {
+  profile: { displayName: string; avatarUrl: string };
+  notifications: { email: boolean; push: boolean };
+}
+
+const settingsSlice = createSlice({
+  name: 'settings',
+  initialState: {
+    profile: { displayName: '', avatarUrl: '' },
+    notifications: { email: true, push: false },
+  } as SettingsState,
+  reducers: {
+    displayNameChanged(state, action: PayloadAction<string>) {
+      state.profile.displayName = action.payload;
+    },
+    notificationToggled(state, action: PayloadAction<keyof SettingsState['notifications']>) {
+      state.notifications[action.payload] = !state.notifications[action.payload];
+    },
+  },
+});
+```
+
+**How it works:** `state.profile.displayName = ...` reaches two levels deep into the Immer draft tree — Immer only proxies the objects you actually touch, so accessing `state.notifications` while mutating `state.profile` never triggers a draft for the untouched branch, and the slice's other field (`notifications`) keeps its old object reference, letting a selector reading only `state.notifications` skip re-running.
+
+## 2. Three-level nested state: projects containing tasks containing comments
+
+```tsx
+import { createSlice, type PayloadAction } from '@headlesskit/state-management-toolkit';
+
+interface Comment { id: string; text: string }
+interface Task { id: string; title: string; comments: Comment[] }
+interface Project { id: string; name: string; tasks: Record<string, Task> }
+
+interface ProjectsState {
+  byId: Record<string, Project>;
+}
+
+const projectsSlice = createSlice({
+  name: 'projects',
+  initialState: { byId: {} } as ProjectsState,
+  reducers: {
+    commentAdded(
+      state,
+      action: PayloadAction<{ projectId: string; taskId: string; comment: Comment }>,
+    ) {
+      const { projectId, taskId, comment } = action.payload;
+      state.byId[projectId].tasks[taskId].comments.push(comment);
+    },
+  },
+});
+```
+
+**How it works:** the single `.push()` call walks three nested levels (`byId[projectId]` → `.tasks[taskId]` → `.comments`) of the Immer draft in one statement — Immer creates a proxy at each level lazily as the property-access chain executes, then finalizes all three into new immutable objects on commit. The two sibling tasks under the same project never get new object references, since neither was read or written.
+
+## 3. Nested state updated via `extraReducers` reaching into a sub-object from an outside action
+
+```tsx
+import { createSlice } from '@headlesskit/state-management-toolkit';
+import { workspaceCleared } from './workspaceSlice';
+
+interface Project { id: string; name: string; tasks: { byId: Record<string, { id: string; title: string }>; allIds: string[] } }
+
+interface ProjectsState { byId: Record<string, Project> }
+
+const projectsSlice = createSlice({
+  name: 'projects',
+  initialState: { byId: {} } as ProjectsState,
+  reducers: {
+    taskAdded(state, action: { payload: { projectId: string; task: { id: string; title: string } } }) {
+      const { projectId, task } = action.payload;
+      state.byId[projectId].tasks.byId[task.id] = task;
+      state.byId[projectId].tasks.allIds.push(task.id);
+    },
+  },
+  extraReducers: (builder) => {
+    builder.addCase(workspaceCleared, (state) => {
+      for (const project of Object.values(state.byId)) {
+        project.tasks.byId = {};
+        project.tasks.allIds = [];
+      }
+    });
+  },
+});
+```
+
+**How it works:** `workspaceCleared`'s case reducer iterates every project in the nested `byId` map and reassigns each one's `tasks.byId`/`tasks.allIds` to empty values — Immer still tracks this as a draft mutation per project even though the loop body looks like ordinary object reassignment, so every project that had at least one task gets a new object reference for its `tasks` field, while a project that was already empty is left referentially unchanged since Immer skips producing a new copy for a property set to a value structurally different but the loop still touches it (an empty-to-empty reassignment is detected as a no-op only when the references already match).
+
+## 4. Four-level nested state: normalized projects → tasks → subtasks with `allIds`/`byId`
+
+```tsx
+import { createSlice, type PayloadAction } from '@headlesskit/state-management-toolkit';
+
+interface Subtask { id: string; text: string; done: boolean }
+interface TaskState { byId: Record<string, Subtask>; allIds: string[] }
+
+interface ProjectsState {
+  byId: Record<string, { id: string; tasks: TaskState }>;
+  allIds: string[];
+}
+
+const projectsSlice = createSlice({
+  name: 'projects',
+  initialState: { byId: {}, allIds: [] } as ProjectsState,
+  reducers: {
+    subtaskAdded(
+      state,
+      action: PayloadAction<{ projectId: string; subtask: Subtask }>,
+    ) {
+      const { projectId, subtask } = action.payload;
+      const tasks = state.byId[projectId].tasks;
+      tasks.byId[subtask.id] = subtask;
+      tasks.allIds.push(subtask.id);
+    },
+    subtaskToggled(
+      state,
+      action: PayloadAction<{ projectId: string; subtaskId: string }>,
+    ) {
+      const subtask = state.byId[action.payload.projectId].tasks.byId[action.payload.subtaskId];
+      subtask.done = !subtask.done;
+    },
+  },
+});
+```
+
+**How it works:** `state.byId[projectId].tasks` is itself the same `{ byId, allIds }` shape used for top-level normalization, nested one level deeper — this is the normalized-state pattern applied recursively, so `subtaskToggled` mutates exactly one leaf `Subtask` object via direct property access (`subtask.done = ...`) rather than rebuilding an array via `.map()`, which would require a linear scan even though only one item changed.
+
+## 5. Five-level nested state: workspace → project → task → subtask → assignee, with a single reducer touching the leaf
+
+```tsx
+import { createSlice, type PayloadAction } from '@headlesskit/state-management-toolkit';
+
+interface WorkspaceState {
+  byId: Record<
+    string,
+    {
+      projects: Record<
+        string,
+        {
+          tasks: Record<
+            string,
+            {
+              subtasks: Record<string, { assigneeId: string | null }>;
+            }
+          >;
+        }
+      >;
+    }
+  >;
+}
+
+const workspaceSlice = createSlice({
+  name: 'workspace',
+  initialState: { byId: {} } as WorkspaceState,
+  reducers: {
+    subtaskReassigned(
+      state,
+      action: PayloadAction<{
+        workspaceId: string;
+        projectId: string;
+        taskId: string;
+        subtaskId: string;
+        assigneeId: string | null;
+      }>,
+    ) {
+      const { workspaceId, projectId, taskId, subtaskId, assigneeId } = action.payload;
+      state.byId[workspaceId].projects[projectId].tasks[taskId].subtasks[subtaskId].assigneeId =
+        assigneeId;
+    },
+  },
+});
+```
+
+**How it works:** every intermediate object in this five-level chain is read but not reassigned — Immer only produces a new object reference for nodes on the *path* from root to the mutated leaf (`byId`, the one workspace, its `projects`, the one project, its `tasks`, the one task, its `subtasks`, the one subtask), while every sibling workspace, project, task, and subtask keeps its original reference. This is what makes deeply nested Immer updates cheap rather than O(total tree size).
+
+## 6. A basic resource GET-list query with full prop coverage
+
+```tsx
+import { createApi, fetchBaseQuery } from '@headlesskit/state-management-toolkit/query';
+
+interface Product { id: string; name: string; price: number }
+
+export const productsApi = createApi({
+  reducerPath: 'productsApi',
+  baseQuery: fetchBaseQuery({ baseUrl: '/api' }),
+  tagTypes: ['Product'],
+  endpoints: (build) => ({
+    getProducts: build.query<Product[], void>({
+      query: () => 'products',
+      providesTags: (result) =>
+        result
+          ? [...result.map(({ id }) => ({ type: 'Product' as const, id })), { type: 'Product', id: 'LIST' }]
+          : [{ type: 'Product', id: 'LIST' }],
+    }),
+  }),
+});
+
+// usage:
+await store.dispatch(productsApi.endpoints.getProducts.initiate()).unwrap();
+const { data: products } = productsApi.endpoints.getProducts.select()(store.getState());
+```
+
+**How it works:** this is the GET-list half of a full CRUD suite — `providesTags` tags both each returned product's own ID and the synthetic `'LIST'` tag, so this query can be invalidated either by a mutation on one specific product or by a mutation (like create) that only knows to invalidate the shared list tag. The remaining CRUD operations for this same `Product` resource follow as their own dedicated endpoints below.
+
+## 7. GET-by-id query, tagged for single-entity invalidation
+
+```tsx
+endpoints: (build) => ({
+  getProductById: build.query<Product, string>({
+    query: (id) => `products/${id}`,
+    providesTags: (result, error, id) => [{ type: 'Product', id }],
+  }),
+}),
+
+// usage:
+await store.dispatch(productsApi.endpoints.getProductById.initiate('p1')).unwrap();
+const { data: product } = productsApi.endpoints.getProductById.select('p1')(store.getState());
+```
+
+**How it works:** unlike the list query, this endpoint only ever provides one tag — `{ type: 'Product', id }` — derived from the call argument rather than the response, which matters because it must still tag correctly even on a failed or empty response. Any mutation that invalidates this exact `{ type: 'Product', id }` tag refetches this cache entry without touching `getProducts`' list-level cache entry for a different product's id.
+
+## 8. POST-create mutation invalidating only the list tag
+
+```tsx
+endpoints: (build) => ({
+  createProduct: build.mutation<Product, { name: string; price: number }>({
+    query: (body) => ({ url: 'products', method: 'POST', body }),
+    invalidatesTags: [{ type: 'Product', id: 'LIST' }],
+  }),
+}),
+
+// usage:
+const created = await store.dispatch(
+  productsApi.endpoints.createProduct.initiate({ name: 'Widget', price: 9.99 }),
+).unwrap();
+```
+
+**How it works:** a newly created product has no prior cache entry anywhere, so there's no specific `{ type: 'Product', id }` tag worth invalidating — only `'LIST'` is invalidated, which refetches `getProducts` (and any other list-shaped query providing that same tag) so the new product appears, while every already-cached `getProductById` entry for *other* products is left untouched.
+
+## 9. PATCH partial-update mutation invalidating the specific entity tag
+
+```tsx
+endpoints: (build) => ({
+  patchProduct: build.mutation<Product, { id: string; changes: Partial<Product> }>({
+    query: ({ id, changes }) => ({ url: `products/${id}`, method: 'PATCH', body: changes }),
+    invalidatesTags: (result, error, { id }) => [{ type: 'Product', id }],
+  }),
+}),
+
+// usage:
+await store.dispatch(
+  productsApi.endpoints.patchProduct.initiate({ id: 'p1', changes: { price: 12.99 } }),
+).unwrap();
+```
+
+**How it works:** invalidating just `{ type: 'Product', id }` (not `'LIST'`) is deliberate — a partial update changes that one product's fields but never changes *which* products exist, so any cached `getProducts` list result is still structurally valid; only `getProductById(id)` for this specific product needs to refetch to pick up the patched fields.
+
+## 10. PUT full-replace mutation invalidating both the entity and list tags
+
+```tsx
+endpoints: (build) => ({
+  replaceProduct: build.mutation<Product, Product>({
+    query: (product) => ({ url: `products/${product.id}`, method: 'PUT', body: product }),
+    invalidatesTags: (result, error, product) => [
+      { type: 'Product', id: product.id },
+      { type: 'Product', id: 'LIST' },
+    ],
+  }),
+}),
+
+// usage:
+await store.dispatch(
+  productsApi.endpoints.replaceProduct.initiate({ id: 'p1', name: 'Widget Pro', price: 14.99 }),
+).unwrap();
+```
+
+**How it works:** a `PUT` full replace is treated more conservatively than the `PATCH` above — invalidating `'LIST'` too, on the assumption a full replace might change fields a list view also renders (e.g. `name`), whereas the narrower `PATCH` example assumed the changed fields never appear in the list view. Which tags to invalidate is always a judgment call about what the list query's `result` actually displays, not something the cache can infer automatically.
+
+## 11. DELETE mutation invalidating the entity and list tags together
+
+```tsx
+endpoints: (build) => ({
+  deleteProduct: build.mutation<{ id: string }, string>({
+    query: (id) => ({ url: `products/${id}`, method: 'DELETE' }),
+    invalidatesTags: (result, error, id) => [{ type: 'Product', id }, { type: 'Product', id: 'LIST' }],
+  }),
+}),
+
+// usage:
+await store.dispatch(productsApi.endpoints.deleteProduct.initiate('p1')).unwrap();
+```
+
+**How it works:** invalidating the specific id's tag clears any single-entity cache entry for the now-deleted product (so a stale `getProductById` doesn't keep returning data for something that no longer exists), while invalidating `'LIST'` forces any list view to refetch and stop rendering the deleted row — omitting either one leaves a different stale view depending on which page the user is on.
+
+## 12. Classic offset/limit pagination via a plain `build.query` keyed by page args
+
+```tsx
+interface PagedResult<T> { items: T[]; total: number }
+
+endpoints: (build) => ({
+  getProductsPage: build.query<PagedResult<Product>, { offset: number; limit: number }>({
+    query: ({ offset, limit }) => ({ url: 'products', params: { offset, limit } }),
+    providesTags: (result) =>
+      result ? result.items.map(({ id }) => ({ type: 'Product' as const, id })) : [],
+  }),
+}),
+
+// component/loader code:
+dispatch(productsApi.endpoints.getProductsPage.initiate({ offset: 0, limit: 20 }));
+dispatch(productsApi.endpoints.getProductsPage.initiate({ offset: 20, limit: 20 }));
+```
+
+**How it works:** because the default `serializeQueryArgs` derives the cache key from the entire argument object, `{ offset: 0, limit: 20 }` and `{ offset: 20, limit: 20 }` are two fully independent cache entries — each page is fetched, cached, and garbage-collected on its own, so navigating back to a previously-viewed page within `keepUnusedDataFor` seconds re-renders instantly from cache instead of refetching.
+
+## 13. Page-number pagination via a plain `build.query` keyed by page number
+
+```tsx
+interface PagedResult<T> { items: T[]; page: number; totalPages: number }
+
+endpoints: (build) => ({
+  getProductsByPage: build.query<PagedResult<Product>, number>({
+    query: (page) => ({ url: 'products', params: { page } }),
+    providesTags: (result) =>
+      result ? result.items.map(({ id }) => ({ type: 'Product' as const, id })) : [],
+  }),
+}),
+
+dispatch(productsApi.endpoints.getProductsByPage.initiate(1));
+dispatch(productsApi.endpoints.getProductsByPage.initiate(2));
+```
+
+**How it works:** the query argument here is a bare `number` rather than an object, which still serializes to a distinct cache key per page — this is the simplest possible pagination shape, suited to UIs with explicit "Page 1, 2, 3..." controls where the user can jump directly to an arbitrary page number, unlike infinite scrolling which only ever appends the *next* page.
+
+## 14. Infinite pagination with a numeric cursor
+
+```tsx
+import { createApi, fetchBaseQuery } from '@headlesskit/state-management-toolkit/query';
+
+interface Product { id: string; name: string }
+interface ProductPage { items: Product[]; nextOffset: number | null }
+
+export const productsApi = createApi({
+  reducerPath: 'productsApi',
+  baseQuery: fetchBaseQuery({ baseUrl: '/api' }),
+  endpoints: (build) => ({
+    getInfiniteProducts: build.infiniteQuery<ProductPage, void, number>({
+      infiniteQueryOptions: {
+        initialPageParam: 0,
+        getNextPageParam: (lastPage) => lastPage.nextOffset,
+      },
+      query: ({ pageParam }) => ({ url: 'products', params: { offset: pageParam, limit: 20 } }),
+    }),
+  }),
+});
+
+// usage:
+import { store } from './store';
+
+// fetch the first page:
+await store.dispatch(productsApi.endpoints.getInfiniteProducts.initiate()).unwrap();
+
+// "Load more" — fetch the next page only if one exists:
+const state = productsApi.endpoints.getInfiniteProducts.select()(store.getState());
+if (state.hasNextPage && !state.isFetchingNextPage) {
+  store.dispatch(productsApi.endpoints.getInfiniteProducts.initiate(undefined, { direction: 'forward' }));
+}
+
+console.log(state.data?.pages.flat()); // flattened items across all loaded pages
+```
+
+**How it works:** `pageParam` starts at `initialPageParam` (here, `0`) and is threaded into the `query` function on every fetch — after each page resolves, `getNextPageParam` inspects the *last fetched page* to compute the next `pageParam` (here, the server-supplied `nextOffset`), returning `null`/`undefined` once there's nothing left, which is what `hasNextPage` on the selector result reflects. Dispatching `initiate(arg)` with no `direction` fetches (or refetches) from scratch; passing `{ direction: 'forward' }` fetches the next page and appends it to the cached `pages` array instead.
+
+## 15. Infinite pagination with an opaque token cursor
+
+```tsx
+interface ProductPage { items: Product[]; nextCursor: string | null }
+
+endpoints: (build) => ({
+  getInfiniteProductsByCursor: build.infiniteQuery<ProductPage, void, string | null>({
+    infiniteQueryOptions: {
+      initialPageParam: null,
+      getNextPageParam: (lastPage) => lastPage.nextCursor,
+    },
+    query: ({ pageParam }) => ({ url: 'products', params: pageParam ? { cursor: pageParam } : {} }),
+  }),
+}),
+
+// usage:
+await store.dispatch(productsApi.endpoints.getInfiniteProductsByCursor.initiate()).unwrap();
+
+const state = productsApi.endpoints.getInfiniteProductsByCursor.select()(store.getState());
+if (state.hasNextPage && !state.isFetchingNextPage) {
+  store.dispatch(
+    productsApi.endpoints.getInfiniteProductsByCursor.initiate(undefined, { direction: 'forward' }),
+  );
+}
+```
+
+**How it works:** unlike the numeric-offset version, the cursor here is an opaque server-issued string with no arithmetic meaning to the client — the client never computes the next page param itself, it only ever forwards whatever `nextCursor` the server returned in the previous page's response, which is the correct approach for cursor-based pagination APIs where page boundaries can shift between requests (e.g. due to concurrent inserts) in a way offset math can't account for.
+
+## 16. Infinite pagination with `getPreviousPageParam` for bidirectional scrolling
+
+```tsx
+endpoints: (build) => ({
+  getInfiniteMessages: build.infiniteQuery<ProductPage, void, number>({
+    infiniteQueryOptions: {
+      initialPageParam: 0,
+      getNextPageParam: (lastPage) => lastPage.nextOffset,
+      getPreviousPageParam: (firstPage, allPages, firstPageParam) =>
+        firstPageParam > 0 ? firstPageParam - 20 : undefined,
+    },
+    query: ({ pageParam }) => ({ url: 'messages', params: { offset: pageParam, limit: 20 } }),
+  }),
+}),
+
+// usage:
+// initial fetch — most recent window of messages:
+await dispatch(productsApi.endpoints.getInfiniteMessages.initiate()).unwrap();
+
+const state = productsApi.endpoints.getInfiniteMessages.select()(getState());
+
+// scroll up — fetch an older page above the currently-loaded window:
+if (state.hasPreviousPage && !state.isFetchingPreviousPage) {
+  dispatch(productsApi.endpoints.getInfiniteMessages.initiate(undefined, { direction: 'backward' }));
+}
+
+// scroll down — fetch a newer page below the currently-loaded window:
+if (state.hasNextPage && !state.isFetchingNextPage) {
+  dispatch(productsApi.endpoints.getInfiniteMessages.initiate(undefined, { direction: 'forward' }));
+}
+```
+
+**How it works:** `getPreviousPageParam` mirrors `getNextPageParam` but inspects the *first* fetched page instead of the last, computing a page param for content that comes *before* what's already loaded — paired with `initiate(arg, { direction: 'backward' })`, this is what a chat-style UI uses to load older messages above the visible window, as opposed to `getNextPageParam`'s `'forward'` direction which appends below. The selector's `hasPreviousPage`/`hasNextPage` flags are computed for you from whatever `getPreviousPageParam`/`getNextPageParam` last returned, so you never need to call those functions yourself to decide whether to dispatch another page.
+
+## 17. Infinite pagination with `maxPages` capping the cached window
+
+```tsx
+endpoints: (build) => ({
+  getInfiniteFeedCapped: build.infiniteQuery<ProductPage, void, number>({
+    infiniteQueryOptions: {
+      initialPageParam: 0,
+      maxPages: 3,
+      getNextPageParam: (lastPage) => lastPage.nextOffset,
+      getPreviousPageParam: (firstPage, allPages, firstPageParam) =>
+        firstPageParam > 0 ? firstPageParam - 20 : undefined,
+    },
+    query: ({ pageParam }) => ({ url: 'feed', params: { offset: pageParam, limit: 20 } }),
+  }),
+}),
+
+// usage:
+await dispatch(productsApi.endpoints.getInfiniteFeedCapped.initiate()).unwrap();
+
+// keep loading more — once 4 pages have been fetched, the oldest is dropped from the cache:
+const state = productsApi.endpoints.getInfiniteFeedCapped.select()(getState());
+if (state.hasNextPage && !state.isFetchingNextPage) {
+  dispatch(productsApi.endpoints.getInfiniteFeedCapped.initiate(undefined, { direction: 'forward' }));
+}
+```
+
+**How it works:** once a fourth page is fetched, `maxPages: 3` drops the oldest cached page from the front (or back, depending on fetch direction) rather than letting the cached `InfiniteData.pages` array grow unbounded — this caps memory usage for an endlessly-scrollable feed, at the cost of needing `getPreviousPageParam` to be defined (which the source enforces: `maxPages` without a `getPreviousPageParam` throws at definition time), since dropped pages may need to be re-fetched if the user scrolls back up past the retained window.
+
+## 18. `createAsyncThunk` + entity adapter + normalized author relations in one slice
+
+```tsx
+import {
+  createSlice,
+  createAsyncThunk,
+  createEntityAdapter,
+  type PayloadAction,
+} from '@headlesskit/state-management-toolkit';
+
+interface Author { id: string; name: string }
+interface Post { id: string; title: string; authorId: string }
+
+const authorsAdapter = createEntityAdapter<Author>();
+const postsAdapter = createEntityAdapter<Post>();
+
+export const fetchBlogData = createAsyncThunk('blog/fetchAll', async () => {
+  const res = await fetch('/api/blog');
+  return (await res.json()) as { authors: Author[]; posts: Post[] };
+});
+
+interface BlogState {
+  authors: ReturnType<typeof authorsAdapter.getInitialState>;
+  posts: ReturnType<typeof postsAdapter.getInitialState>;
+  status: 'idle' | 'loading' | 'succeeded' | 'failed';
+}
+
+const blogSlice = createSlice({
+  name: 'blog',
+  initialState: {
+    authors: authorsAdapter.getInitialState(),
+    posts: postsAdapter.getInitialState(),
+    status: 'idle',
+  } as BlogState,
+  reducers: {
+    authorRenamed(state, action: PayloadAction<{ id: string; name: string }>) {
+      authorsAdapter.updateOne(state.authors, { id: action.payload.id, changes: { name: action.payload.name } });
+    },
+  },
+  extraReducers: (builder) => {
+    builder
+      .addCase(fetchBlogData.pending, (state) => {
+        state.status = 'loading';
+      })
+      .addCase(fetchBlogData.fulfilled, (state, action) => {
+        state.status = 'succeeded';
+        authorsAdapter.setAll(state.authors, action.payload.authors);
+        postsAdapter.setAll(state.posts, action.payload.posts);
+      })
+      .addCase(fetchBlogData.rejected, (state) => {
+        state.status = 'failed';
+      });
+  },
+});
+
+export const blogSelectors = {
+  authors: authorsAdapter.getSelectors((s: { blog: BlogState }) => s.blog.authors),
+  posts: postsAdapter.getSelectors((s: { blog: BlogState }) => s.blog.posts),
+};
+```
+
+**How it works:** `fetchBlogData.fulfilled`'s case reducer calls `setAll` on *two* separate adapter-managed collections within one Immer draft commit — both `state.authors` and `state.posts` update atomically as part of the same dispatched action, so there's never a render where posts reflect the new data but authors still show the old list (or vice versa), which two separate thunks committed independently could not guarantee.
+
+## 19. Listener middleware orchestrating a multi-step workflow with `fork`
+
+```tsx
+import { createListenerMiddleware } from '@headlesskit/state-management-toolkit';
+import { orderPlaced } from './ordersSlice';
+
+const listenerMiddleware = createListenerMiddleware();
+
+listenerMiddleware.startListening({
+  actionCreator: orderPlaced,
+  effect: async (action, listenerApi) => {
+    const emailTask = listenerApi.fork(async (forkApi) => {
+      await forkApi.delay(500);
+      await fetch('/api/notifications/email', { method: 'POST', body: JSON.stringify(action.payload) });
+      return 'email-sent';
+    });
+
+    const inventoryTask = listenerApi.fork(async (forkApi) => {
+      const res = await fetch('/api/inventory/reserve', { method: 'POST', body: JSON.stringify(action.payload) });
+      return forkApi.pause(res.json());
+    });
+
+    const [emailResult, inventoryResult] = await Promise.all([emailTask.result, inventoryTask.result]);
+    if (inventoryResult.status === 'ok') {
+      listenerApi.dispatch({ type: 'orders/inventoryReserved', payload: inventoryResult.value });
+    }
+  },
+});
+```
+
+**How it works:** `fork` launches an independent child task that runs concurrently with the rest of the effect and with any sibling forks, each tracked separately — awaiting `.result` (rather than the executor's return value directly) yields a `TaskResult` discriminated union (`'ok'`/`'rejected'`/`'cancelled'`) so the parent effect can branch on *how* each fork ended, including the case where the whole listener was cancelled mid-flight and every still-running fork was cancelled along with it.
+
+## 20. Listener middleware using `unsubscribe`/`subscribe` to pause itself
+
+```tsx
+listenerMiddleware.startListening({
+  actionCreator: searchQueryChanged,
+  effect: async (action, listenerApi) => {
+    listenerApi.unsubscribe();
+    try {
+      const res = await fetch(`/api/search?q=${action.payload}`);
+      listenerApi.dispatch({ type: 'search/resultsReceived', payload: await res.json() });
+    } finally {
+      listenerApi.subscribe();
+    }
+  },
+});
+```
+
+**How it works:** calling `unsubscribe()` from inside the effect itself removes this listener entry so further `searchQueryChanged` dispatches don't start a *new* concurrent effect instance while this one is still awaiting its fetch — `subscribe()` in the `finally` block re-registers it once the in-flight request settles (success or failure), which is a self-contained way to serialize an effect's own re-entrancy without external `cancelActiveListeners` bookkeeping.
+
+## 21. Listener middleware using `cancelActiveListeners` to supersede in-flight effects
+
+```tsx
+listenerMiddleware.startListening({
+  actionCreator: searchQueryChanged,
+  effect: async (action, listenerApi) => {
+    listenerApi.cancelActiveListeners();
+    await listenerApi.delay(300);
+    const res = await fetch(`/api/search?q=${action.payload}`);
+    listenerApi.dispatch({ type: 'search/resultsReceived', payload: await res.json() });
+  },
+});
+```
+
+**How it works:** `cancelActiveListeners()` cancels every other currently-running instance of *this same* listener entry (but not other listeners) — combined with the `delay(300)` debounce, each new keystroke's effect instance immediately cancels whatever previous keystroke's effect was still waiting out its delay or awaiting its fetch, so only the most recent search query's results ever get dispatched, without manually tracking a "latest request id" yourself.
+
+## 22. Listener middleware using `condition` to gate a multi-step approval flow
+
+```tsx
+listenerMiddleware.startListening({
+  actionCreator: documentSubmittedForReview,
+  effect: async (action, listenerApi) => {
+    const approved = await listenerApi.condition(
+      (a) => a.type === 'review/approved' || a.type === 'review/rejected',
+      60_000,
+    );
+    if (!approved) {
+      listenerApi.dispatch({ type: 'review/timedOut', payload: action.payload.documentId });
+      return;
+    }
+  },
+});
+```
+
+**How it works:** `condition` resolves to a plain boolean — `true` if the predicate matched before the timeout, `false` if the timeout elapsed first — which is exactly enough information for a binary "did *something* matching happen in time, yes or no" branch; it deliberately discards *which* action satisfied the predicate, which is why example 23 below reaches for `take` instead whenever that distinction matters.
+
+## 23. Listener middleware using `take` to branch on which of two outcomes occurred
+
+```tsx
+listenerMiddleware.startListening({
+  actionCreator: documentSubmittedForReview,
+  effect: async (action, listenerApi) => {
+    const result = await listenerApi.take(
+      (a) => a.type === 'review/approved' || a.type === 'review/rejected',
+      60_000,
+    );
+    if (result === null) {
+      listenerApi.dispatch({ type: 'review/timedOut', payload: action.payload.documentId });
+      return;
+    }
+    const [resultAction] = result;
+    listenerApi.dispatch({
+      type: resultAction.type === 'review/approved' ? 'review/notifyApproved' : 'review/notifyRejected',
+      payload: action.payload.documentId,
+    });
+  },
+});
+```
+
+**How it works:** `take`'s `[action, state, prevState]` tuple return value (or `null` on timeout) lets this effect dispatch a *different* follow-up action depending on whether `'review/approved'` or `'review/rejected'` was the action that actually matched — the same branching `condition` alone cannot express, since `condition` only ever tells you "yes, the predicate matched eventually," not which of two distinct action types caused that match.
+
+## 24. `dynamicMiddleware.addMiddleware` adding middleware after store creation
+
+```tsx
+import { createDynamicMiddleware, configureStore } from '@headlesskit/state-management-toolkit';
+import rootReducer from './rootReducer';
+
+const dynamicMiddleware = createDynamicMiddleware();
+
+export const store = configureStore({
+  reducer: rootReducer,
+  middleware: (getDefaultMiddleware) => getDefaultMiddleware().concat(dynamicMiddleware.middleware),
+});
+
+export function loadFeatureModule() {
+  const analyticsMiddleware = () => (next: any) => (action: any) => {
+    console.log('analytics saw', action.type);
+    return next(action);
+  };
+  dynamicMiddleware.addMiddleware(analyticsMiddleware);
+}
+```
+
+**How it works:** `dynamicMiddleware.middleware` is the only middleware actually registered with `configureStore` — it's a thin container that, on every dispatch, runs whatever middleware functions have been added to its internal list so far, in insertion order. Calling `addMiddleware` later (e.g. when a lazily-loaded route module initializes) extends that list without rebuilding the store or its middleware chain.
+
+## 25. `dynamicMiddleware.addMiddleware` with the `prepend` option
+
+```tsx
+dynamicMiddleware.addMiddleware({ middleware: loggerMiddleware, prepend: true });
+dynamicMiddleware.addMiddleware(analyticsMiddleware);
+```
+
+**How it works:** by default, dynamically added middleware is appended to the end of the dynamic container's internal list — passing `{ middleware, prepend: true }` instead inserts `loggerMiddleware` at the front of that list, so it observes (and can short-circuit) actions before `analyticsMiddleware` does, even though `analyticsMiddleware` might have been (or will be) added independently of ordering concerns.
+
+## 26. Testing a slice's case reducer in isolation, no store
+
+```tsx
+import { describe, it, expect } from 'vitest';
+import counterReducer, { increment, decrement } from './counterSlice';
+
+describe('counterSlice', () => {
+  it('increments the value', () => {
+    const prevState = { value: 0 };
+    const nextState = counterReducer(prevState, increment());
+    expect(nextState).toEqual({ value: 1 });
+  });
+
+  it('does not mutate the previous state object', () => {
+    const prevState = { value: 0 };
+    counterReducer(prevState, decrement());
+    expect(prevState).toEqual({ value: 0 });
+  });
+});
+```
+
+**How it works:** `counterSlice.reducer` is a plain `(state, action) => state` function — calling it directly with a hand-constructed `prevState` and an action object needs no `configureStore`, no `dispatch`, and no React rendering at all. The second test specifically asserts the *input* object is untouched, which is true even though the reducer body looks like a mutation, because Immer's draft-and-finalize process never writes back to the original object passed in.
+
+## 27. Testing a `createAsyncThunk`'s lifecycle actions in isolation, no network
+
+```tsx
+import { describe, it, expect, vi } from 'vitest';
+import userReducer from './userSlice';
+import { fetchUser } from './thunks';
+
+describe('fetchUser lifecycle', () => {
+  it('sets status to loading on pending', () => {
+    const prevState = { entity: null, status: 'idle' as const };
+    const pendingAction = { type: fetchUser.pending.type, payload: undefined };
+    expect(userReducer(prevState, pendingAction).status).toBe('loading');
+  });
+
+  it('stores the payload on fulfilled', () => {
+    const prevState = { entity: null, status: 'loading' as const };
+    const fulfilledAction = {
+      type: fetchUser.fulfilled.type,
+      payload: { id: 'user-1', name: 'Ada' },
+    };
+    const nextState = userReducer(prevState, fulfilledAction);
+    expect(nextState.status).toBe('succeeded');
+    expect(nextState.entity).toEqual({ id: 'user-1', name: 'Ada' });
+  });
+});
+```
+
+**How it works:** since `extraReducers` matches on the lifecycle action's `type` string, a test can hand-construct a plain `{ type: fetchUser.fulfilled.type, payload }` object instead of actually dispatching the thunk and waiting on a real (or mocked) `fetch` call — this exercises the exact same case-reducer code path `addCase(fetchUser.fulfilled, ...)` registered, without any async test setup at all.
+
+## 28. Testing entity adapter CRUD reducers in isolation against a bare `{ ids, entities }` state
+
+```tsx
+import { describe, it, expect } from 'vitest';
+import { createEntityAdapter } from '@headlesskit/state-management-toolkit';
+
+interface Todo { id: string; text: string; done: boolean }
+const todosAdapter = createEntityAdapter<Todo>();
+
+describe('todosAdapter', () => {
+  it('addOne inserts into both ids and entities', () => {
+    const state = todosAdapter.getInitialState();
+    const next = todosAdapter.addOne(state, { id: '1', text: 'Buy milk', done: false });
+    expect(next.ids).toEqual(['1']);
+    expect(next.entities['1']).toEqual({ id: '1', text: 'Buy milk', done: false });
+  });
+
+  it('removeOne deletes from both ids and entities', () => {
+    const seeded = todosAdapter.addOne(todosAdapter.getInitialState(), { id: '1', text: 'x', done: false });
+    const next = todosAdapter.removeOne(seeded, '1');
+    expect(next.ids).toEqual([]);
+    expect(next.entities['1']).toBeUndefined();
+  });
+});
+```
+
+**How it works:** calling `todosAdapter.addOne`/`removeOne` directly against a bare entity-state object (rather than through a slice's generated action creator) tests the adapter's mutation logic on its own — these are plain functions, so asserting on the returned `{ ids, entities }` shape directly verifies the adapter's bookkeeping invariant (every id in `ids` has a corresponding key in `entities` and vice versa) without involving `createSlice`, `dispatch`, or a store at all.
+
+## 29. Combining `@headlesskit/state-management-devtools`'s `installDevtools` with `configureStore`
+
+```tsx
+// devtools-setup.ts — must be imported before any store is created
+import { installDevtools } from '@headlesskit/state-management-devtools';
+
+export const { inspectorStore, dockStore } = installDevtools();
+```
+
+```tsx
+// store.ts
+import './devtools-setup';
+import { configureStore } from '@headlesskit/state-management-toolkit';
+import rootReducer from './rootReducer';
+
+export const store = configureStore({ reducer: rootReducer });
+```
+
+**How it works:** `installDevtools()` populates `window.__HEADLESSKIT_DEVTOOLS_EXTENSION__` (and its `_COMPOSE__` counterpart) — globals that `configureStore` checks for *at the moment it's called*, not lazily. Importing `./devtools-setup` before `./store` guarantees those globals already exist when `configureStore` runs, so every dispatched action is recorded into `inspectorStore`'s in-memory history; importing them in the other order would leave the store permanently disconnected from time-travel, with no runtime error to flag the mistake.
+
+## 30. Reading devtools time-travel history directly from `inspectorStore`
+
+```tsx
+import { inspectorStore } from './devtools-setup';
+
+const snapshot = inspectorStore.getSnapshot();
+console.log(snapshot.computedStates.length, 'actions recorded');
+
+inspectorStore.jumpToAction(snapshot.stagedActionIds[2]);
+// store.getState() now reflects state as of the 3rd recorded action
+
+inspectorStore.commit();
+// collapses history so far into the baseline state, history list resets
+```
+
+**How it works:** `jumpToAction` doesn't mutate history — it recomputes the *effective* state by replaying the real reducer (`rootReducer`) over the recorded action list up to that point and pushes that computed state into the live store, which is why `store.getState()` reflects it immediately. `commit()` is a separate, destructive operation: it folds everything recorded so far into a new baseline and clears the replayable action list, freeing memory at the cost of no longer being able to time-travel further back than the commit point.
+
+## 31. `keepUnusedDataFor` tuning how long an unused cache entry survives
+
+```tsx
+endpoints: (build) => ({
+  getProductById: build.query<Product, string>({
+    query: (id) => `products/${id}`,
+    keepUnusedDataFor: 5,
+  }),
+}),
+
+// usage:
+const sub = store.dispatch(productsApi.endpoints.getProductById.initiate('p1'));
+await sub.unwrap();
+sub.unsubscribe(); // starts the 5-second garbage-collection countdown
+```
+
+**How it works:** once the last component/subscriber unsubscribes from this query's cache entry, a 5-second countdown starts (overriding the api-level default of 60) before the entry is garbage-collected from the store — navigating back within that window reuses the still-warm cache entry instantly; navigating back after it elapses triggers a full refetch, since the entry no longer exists at all.
+
+## 32. `refetchOnMountOrArgChange` forcing a refetch within a time window
+
+```tsx
+endpoints: (build) => ({
+  getProducts: build.query<Product[], void>({
+    query: () => 'products',
+    refetchOnMountOrArgChange: 30,
+  }),
+}),
+
+// usage:
+store.dispatch(productsApi.endpoints.getProducts.initiate());
+```
+
+**How it works:** set to a number (seconds) rather than `true`/`false`, this means a new subscriber only triggers a refetch if the existing cache entry is older than 30 seconds — a fresh mount immediately after a recent fetch reuses the cache silently, while one after a longer gap refetches, striking a middle ground between `false` (never force-refetch on mount) and `true` (always force-refetch on every mount regardless of age).
+
+## 33. `refetchOnFocus` and `refetchOnReconnect` at the api level
+
+```tsx
+export const api = createApi({
+  reducerPath: 'api',
+  baseQuery: fetchBaseQuery({ baseUrl: '/api' }),
+  refetchOnFocus: true,
+  refetchOnReconnect: true,
+  endpoints: (build) => ({
+    getProducts: build.query<Product[], void>({ query: () => 'products' }),
+  }),
+});
+
+// usage — also wire up the browser event listeners these flags depend on:
+import { setupListeners } from '@headlesskit/state-management-toolkit/query';
+
+setupListeners(store.dispatch);
+store.dispatch(api.endpoints.getProducts.initiate());
+```
+
+**How it works:** these two flags set the *default* for every endpoint on this api instance — `refetchOnFocus` refetches active queries when the browser tab regains focus, `refetchOnReconnect` does the same when `navigator.onLine` flips back to `true`, but neither actually fires unless `setupListeners(store.dispatch)` has also been called to wire up the underlying `window` focus/online event listeners; without it, these flags are configured but inert.
+
+## 34. `invalidationBehavior: 'immediately'` versus the default `'delayed'`
+
+```tsx
+export const api = createApi({
+  reducerPath: 'api',
+  baseQuery: fetchBaseQuery({ baseUrl: '/api' }),
+  invalidationBehavior: 'immediately',
+  endpoints: (build) => ({
+    getProducts: build.query<Product[], void>({ query: () => 'products', providesTags: ['Product'] }),
+    createProduct: build.mutation<Product, { name: string }>({
+      query: (body) => ({ url: 'products', method: 'POST', body }),
+      invalidatesTags: ['Product'],
+    }),
+  }),
+});
+
+// usage:
+await store.dispatch(api.endpoints.getProducts.initiate()).unwrap();
+await store.dispatch(api.endpoints.createProduct.initiate({ name: 'Widget' })).unwrap();
+// with invalidationBehavior: 'immediately', getProducts refetches as soon as createProduct
+// is dispatched, rather than waiting for it to resolve.
+```
+
+**How it works:** the default `'delayed'` behavior waits until a mutation's promise actually resolves before processing its `invalidatesTags`, so queries invalidated by a still-pending mutation don't refetch prematurely if that mutation ultimately fails; `'immediately'` instead processes invalidation as soon as the mutation is *dispatched*, before its result is known — useful when you want dependent queries to refetch optimistically in lockstep with the mutation firing, accepting the risk of an unnecessary refetch if the mutation later fails.
+
+## 35. `transformResponse` and `transformErrorResponse` together on one endpoint
+
+```tsx
+interface ApiError { status: number; data: { message: string } }
+
+endpoints: (build) => ({
+  getProducts: build.query<Product[], void>({
+    query: () => 'products',
+    transformResponse: (response: { data: Product[] }) => response.data,
+    transformErrorResponse: (response: ApiError) => response.data.message,
+  }),
+}),
+
+// usage:
+const result = await store.dispatch(productsApi.endpoints.getProducts.initiate()).catch(() => null);
+const { data, error } = productsApi.endpoints.getProducts.select()(store.getState());
+if (error) console.log(error); // plain string message, not the nested envelope
+```
+
+**How it works:** `transformResponse` reshapes a *successful* response before it's cached; `transformErrorResponse` does the equivalent for an *error* response, run only when the base query itself resolved with an error shape — here it extracts a flat `string` message from a nested `{ status, data: { message } }` error envelope, so every consumer of this endpoint's `error` field sees a plain string instead of needing to know the server's specific error envelope shape.
+
+## 36. `serializeQueryArgs` excluding a non-serializable argument from the cache key
+
+```tsx
+interface ApiClient { fetchProduct: (id: string) => Promise<Product> }
+
+endpoints: (build) => ({
+  getProductViaClient: build.query<Product, { id: string; client: ApiClient }>({
+    queryFn: async ({ id, client }) => ({ data: await client.fetchProduct(id) }),
+    serializeQueryArgs: ({ queryArgs }) => queryArgs.id,
+  }),
+}),
+
+// usage:
+await store.dispatch(
+  productsApi.endpoints.getProductViaClient.initiate({ id: 'p1', client: apiClient }),
+).unwrap();
+```
+
+**How it works:** without `serializeQueryArgs`, the default cache-key derivation would try to serialize the entire argument object including `client` — a function-bearing object with no stable serialization — producing a cache key that's effectively useless for deduplication. Returning just `queryArgs.id` makes two calls with the *same* `id` but different (e.g. freshly-constructed) `client` instances correctly share one cache entry, since only `id` determines whether they're "the same query."
+
+## 37. `createSlice`'s `selectors` field combined with a reducer-path override
+
+```tsx
+import { createSlice } from '@headlesskit/state-management-toolkit';
+
+const settingsSlice = createSlice({
+  name: 'settings',
+  reducerPath: 'appSettings',
+  initialState: { theme: 'light' as 'light' | 'dark' },
+  reducers: {
+    themeToggled(state) {
+      state.theme = state.theme === 'light' ? 'dark' : 'light';
+    },
+  },
+  selectors: {
+    selectTheme: (state) => state.theme,
+  },
+});
+
+interface RootState { appSettings: ReturnType<typeof settingsSlice.getInitialState> }
+
+settingsSlice.selectors.selectTheme({ appSettings: { theme: 'dark' } } satisfies RootState);
+```
+
+**How it works:** `reducerPath` overrides where `slice.selectors` expects to find this slice's state in the root state tree — normally that defaults to `name` (`'settings'`), but here the generated selectors instead read `rootState.appSettings`, which only works correctly if `configureStore`'s `reducer` map actually registers this slice's reducer under the matching `'appSettings'` key.
+
+## 38. `createAsyncThunk`'s `condition` combined with `dispatchConditionRejection`
+
+```tsx
+import { createAsyncThunk } from '@headlesskit/state-management-toolkit';
+import type { RootState } from './store';
+
+export const fetchProductsIfStale = createAsyncThunk(
+  'products/fetchIfStale',
+  async (_arg, { signal }) => {
+    const res = await fetch('/api/products', { signal });
+    return res.json();
+  },
+  {
+    condition: (_arg, { getState }) => (getState() as RootState).products.status !== 'loading',
+    dispatchConditionRejection: true,
+  },
+);
+```
+
+**How it works:** by default, a `condition` returning `false` dispatches *nothing at all* — no `pending`, no `rejected`. Setting `dispatchConditionRejection: true` changes that: a failed condition still dispatches a `rejected` action (with `meta.condition: true` rather than carrying a real error), which matters if some other part of the app uses `isRejected`/`extraReducers` to react to "this attempt didn't go through," since silently dispatching nothing would otherwise be indistinguishable from "the thunk was never called."
+
+## 39. A full "todo app with API sync" composite: slice + thunk + entity adapter + RTK-Query in one flow
+
+```tsx
+import {
+  createSlice,
+  createAsyncThunk,
+  createEntityAdapter,
+  type PayloadAction,
+} from '@headlesskit/state-management-toolkit';
+import { createApi, fetchBaseQuery } from '@headlesskit/state-management-toolkit/query';
+
+interface Todo { id: string; text: string; done: boolean }
+
+export const todosApi = createApi({
+  reducerPath: 'todosApi',
+  baseQuery: fetchBaseQuery({ baseUrl: '/api' }),
+  tagTypes: ['Todo'],
+  endpoints: (build) => ({
+    getTodos: build.query<Todo[], void>({
+      query: () => 'todos',
+      providesTags: (result) =>
+        result
+          ? [...result.map(({ id }) => ({ type: 'Todo' as const, id })), { type: 'Todo', id: 'LIST' }]
+          : [{ type: 'Todo', id: 'LIST' }],
+    }),
+    toggleTodo: build.mutation<Todo, { id: string; done: boolean }>({
+      query: ({ id, done }) => ({ url: `todos/${id}`, method: 'PATCH', body: { done } }),
+      invalidatesTags: (result, error, { id }) => [{ type: 'Todo', id }],
+    }),
+  }),
+});
+
+const todosAdapter = createEntityAdapter<Todo>();
+
+export const syncTodosFromCache = createAsyncThunk(
+  'todosLocal/syncFromCache',
+  async (_arg, { dispatch, getState }) => {
+    const result = await dispatch(todosApi.endpoints.getTodos.initiate()).unwrap();
+    return result;
+  },
+);
+
+const todosLocalSlice = createSlice({
+  name: 'todosLocal',
+  initialState: todosAdapter.getInitialState({ status: 'idle' as 'idle' | 'loading' | 'succeeded' }),
+  reducers: {
+    localTodoAdded: todosAdapter.addOne,
+  },
+  extraReducers: (builder) => {
+    builder
+      .addCase(syncTodosFromCache.pending, (state) => {
+        state.status = 'loading';
+      })
+      .addCase(syncTodosFromCache.fulfilled, (state, action: PayloadAction<Todo[]>) => {
+        state.status = 'succeeded';
+        todosAdapter.setAll(state, action.payload);
+      });
+  },
+});
+
+export default todosLocalSlice.reducer;
+```
+
+**How it works:** `syncTodosFromCache` bridges RTK-Query's cache and a plain entity-adapter slice — dispatching `todosApi.endpoints.getTodos.initiate()` and `.unwrap()`-ing it inside the thunk's payload creator reuses RTK-Query's own request/cache machinery (including deduplication against any already-in-flight identical query) to populate a *separate* normalized collection that the rest of the app's reducers and selectors can treat as plain local state, rather than reading directly from the api slice's cache shape everywhere.
+
+## 40. `predicate`-form listener combined with `getOriginalState` to detect a specific field's transition
+
+```tsx
+listenerMiddleware.startListening({
+  predicate: (action, currentState: RootState, originalState: RootState) =>
+    originalState.auth.status !== 'authenticated' && currentState.auth.status === 'authenticated',
+  effect: (action, listenerApi) => {
+    const original = listenerApi.getOriginalState();
+    console.log('user just transitioned from', original.auth.status, 'to authenticated');
+    listenerApi.dispatch({ type: 'analytics/loginCompleted' });
+  },
+});
+```
+
+**How it works:** the `predicate`'s third parameter and `getOriginalState()` both give access to state *before* the current action's reducer ran — `getOriginalState` can only be called synchronously inside the effect (it throws if called after an `await`), which is why this example reads it as the very first line, before any async work, to capture the pre-action snapshot before it potentially becomes stale relative to further dispatches.
+
+## 41. `createReducer`'s lazy initial-state function form
+
+```tsx
+import { createReducer } from '@headlesskit/state-management-toolkit';
+
+function loadPersistedTheme(): 'light' | 'dark' {
+  return (localStorage.getItem('theme') as 'light' | 'dark') ?? 'light';
+}
+
+const themeReducer = createReducer(loadPersistedTheme, (builder) => {
+  builder.addCase('theme/toggled', (state) => (state === 'light' ? 'dark' : 'light'));
+});
+```
+
+**How it works:** passing a function instead of a plain value as `createReducer`'s first argument defers computing the initial state until the reducer actually runs for the first time (with `undefined` state, the conventional "give me the initial state" signal) — this matters when computing the initial value has a side effect (reading `localStorage`) that shouldn't run at module-evaluation time, e.g. in a server-side rendering context where `localStorage` doesn't exist at all until the reducer is actually invoked client-side.
+
+## 42. `createAction.match` as a type guard outside any reducer
+
+```tsx
+import { createAction } from '@headlesskit/state-management-toolkit';
+
+const todoAdded = createAction<{ id: string; text: string }>('todos/added');
+
+function logIfTodoAdded(action: unknown) {
+  if (todoAdded.match(action)) {
+    console.log('a todo was added:', action.payload.text);
+  }
+}
+```
+
+**How it works:** `.match()` is a runtime type guard generated alongside every action creator — calling `todoAdded.match(action)` both checks `action.type === 'todos/added'` *and*, in TypeScript, narrows `action`'s type so `action.payload` is correctly typed as `{ id: string; text: string }` inside the `if` block, without an `as` cast, which is exactly the same mechanism `isAnyOf`/`isAllOf` build on internally.
+
+## 43. `build.query`'s `onQueryStarted` lifecycle hook logging without touching the cache
+
+```tsx
+endpoints: (build) => ({
+  getProducts: build.query<Product[], void>({
+    query: () => 'products',
+    async onQueryStarted(arg, { dispatch, queryFulfilled }) {
+      const start = performance.now();
+      try {
+        await queryFulfilled;
+        console.log('getProducts took', performance.now() - start, 'ms');
+      } catch {
+        console.log('getProducts failed after', performance.now() - start, 'ms');
+      }
+    },
+  }),
+}),
+
+// usage:
+store.dispatch(productsApi.endpoints.getProducts.initiate()); // logs timing once it settles
+```
+
+**How it works:** `onQueryStarted` fires synchronously the moment the query is dispatched, well before `queryFulfilled` resolves — awaiting `queryFulfilled` inside it is how you observe the eventual success/failure without altering the cache (contrast with the optimistic-update pattern, which dispatches `util.updateQueryData` here instead); this hook is purely an observation point, run once per dispatched query instance regardless of how many components are subscribed to its result.
+
+## 44. `build.mutation`'s `onCacheEntryAdded` lifecycle hook for a fixed-cache-key subscription
+
+```tsx
+endpoints: (build) => ({
+  watchInventory: build.query<{ stock: number }, string>({
+    query: (productId) => `products/${productId}/stock`,
+    async onCacheEntryAdded(productId, { updateCachedData, cacheDataLoaded, cacheEntryRemoved }) {
+      await cacheDataLoaded;
+      const socket = new WebSocket(`wss://example.com/products/${productId}/stock`);
+      socket.addEventListener('message', (event) => {
+        updateCachedData(() => JSON.parse(event.data));
+      });
+      await cacheEntryRemoved;
+      socket.close();
+    },
+  }),
+}),
+
+// usage:
+const sub = store.dispatch(productsApi.endpoints.watchInventory.initiate('p1'));
+const { data } = productsApi.endpoints.watchInventory.select('p1')(store.getState());
+console.log(data?.stock);
+// later: sub.unsubscribe() — once keepUnusedDataFor elapses, cacheEntryRemoved resolves
+// and the websocket above is closed.
+```
+
+**How it works:** `onCacheEntryAdded` runs for the lifetime of a cache entry, not just once — `cacheDataLoaded` resolves after the initial fetch completes (so the websocket isn't opened before there's already a baseline value to update), and `cacheEntryRemoved` resolves only once every subscriber has unsubscribed and `keepUnusedDataFor` has elapsed, which is the correct moment to tear down the websocket, since opening one per component instance rather than per cache entry would multiply connections unnecessarily.
+
+## 45. Reading `api.util.resetApiState` to clear the entire cache, e.g. on logout
+
+```tsx
+import { store } from './store';
+import { api } from './api';
+
+function logout() {
+  store.dispatch({ type: 'auth/loggedOut' });
+  store.dispatch(api.util.resetApiState());
+}
+```
+
+**How it works:** `resetApiState()` wipes every cache entry, subscriber count, and in-flight query tracking back to the api slice's initial state in one dispatch — this is the correct way to ensure no stale, possibly user-specific cached data (e.g. another account's `getProducts` result) survives a logout, as opposed to selectively invalidating tags, which would only refetch rather than fully discard.
+
+## 46. `createApi`'s `extractRehydrationInfo` for SSR/persisted-state hydration
+
+```tsx
+export const api = createApi({
+  reducerPath: 'api',
+  baseQuery: fetchBaseQuery({ baseUrl: '/api' }),
+  extractRehydrationInfo: (action, { reducerPath }) => {
+    if (action.type === 'persist/REHYDRATE') {
+      return action.payload?.[reducerPath];
+    }
+  },
+});
+```
+
+**How it works:** `extractRehydrationInfo` runs whenever its containing reducer sees an action it doesn't otherwise recognize — returning the relevant slice of a rehydration action's payload tells the api slice "treat this as my own persisted cache state," letting a server-rendered or `localStorage`-persisted cache snapshot seed the client store's cache on startup, rather than every query starting from an empty cache and refetching on first mount regardless of what was already fetched server-side.
+
+## 47. `combineSlices` building a root reducer with lazy-loaded slice injection
+
+```tsx
+import { combineSlices } from '@headlesskit/state-management-toolkit';
+import { counterSlice } from './counterSlice';
+import { todosSlice } from './todosSlice';
+
+const rootReducer = combineSlices(counterSlice, todosSlice);
+
+export type RootState = ReturnType<typeof rootReducer>;
+
+// later, from a lazily-loaded feature module:
+import { analyticsSlice } from './features/analytics/slice';
+const injectedRootReducer = rootReducer.inject(analyticsSlice);
+```
+
+**How it works:** `combineSlices` builds the same kind of combined reducer `configureStore({ reducer: {...} })` would, but additionally exposes `.inject(slice)`, which returns a *new* combined reducer including the injected slice's key and initial state — this is how a code-split route can register its own slice's reducer the moment its module loads, without the root reducer needing to statically import every possible feature slice up front.
+
+## 48. `createDraftSafeSelector` for a selector called from inside a `createSlice` reducer
+
+```tsx
+import { createSlice, createDraftSafeSelector } from '@headlesskit/state-management-toolkit';
+
+interface CartState { items: { id: string; price: number; qty: number }[] }
+
+const selectTotal = createDraftSafeSelector(
+  (state: CartState) => state.items,
+  (items) => items.reduce((sum, item) => sum + item.price * item.qty, 0),
+);
+
+const cartSlice = createSlice({
+  name: 'cart',
+  initialState: { items: [] } as CartState,
+  reducers: {
+    itemAdded(state, action: { payload: { id: string; price: number; qty: number } }) {
+      state.items.push(action.payload);
+      const total = selectTotal(state);
+      if (total > 1000) {
+        console.warn('cart total exceeds limit:', total);
+      }
+    },
+  },
+});
+```
+
+**How it works:** a plain memoized selector built with `createSelector` caches its last input/output pair by reference — but an Immer draft's reference can be reused across separate reducer calls for unrelated dispatches, which would make a plain memoized selector return a stale cached result when called on a draft. `createDraftSafeSelector` detects when it's handed a draft (via Immer's `isDraft`) and skips the memoization cache in that case, recomputing fresh every time, which is the only safe way to call a memoized selector from inside a reducer body itself.
+
+## 49. `isAnyOf` combined with `infiniteQueryOptions`-driven actions to track any page fetch across an infinite query
+
+```tsx
+import { createReducer, isAnyOf } from '@headlesskit/state-management-toolkit';
+import { productsApi } from './productsApi';
+
+const isAnyProductPageFetch = isAnyOf(
+  productsApi.endpoints.getInfiniteProducts.matchPending,
+  productsApi.endpoints.getInfiniteProducts.matchFulfilled,
+);
+
+const feedActivityReducer = createReducer({ lastFetchedAt: 0 }, (builder) => {
+  builder.addMatcher(isAnyProductPageFetch, (state) => {
+    state.lastFetchedAt = Date.now();
+  });
+});
+```
+
+**How it works:** every query and infinite-query endpoint exposes its own `matchPending`/`matchFulfilled`/`matchRejected` matchers, scoped to *that specific endpoint* rather than every thunk in the app — combining two of them with `isAnyOf` here tracks "any page of this particular infinite query was just requested or just arrived," useful for an activity indicator that shouldn't care whether the fetch was a forward `fetchNextPage`-style continuation or the initial page load.
+
+## 50. Full store wiring: api reducer/middleware + entity-adapter slice + listener middleware + dynamic middleware together
+
+```tsx
+import {
+  configureStore,
+  createListenerMiddleware,
+  createDynamicMiddleware,
+} from '@headlesskit/state-management-toolkit';
+import { setupListeners } from '@headlesskit/state-management-toolkit/query';
+import { productsApi } from './productsApi';
+import todosLocalReducer from './todosLocalSlice';
+import { orderPlaced } from './ordersSlice';
+
+const listenerMiddleware = createListenerMiddleware();
+listenerMiddleware.startListening({
+  actionCreator: orderPlaced,
+  effect: (action, listenerApi) => {
+    listenerApi.dispatch(productsApi.util.invalidateTags(['Product']));
+  },
+});
+
+const dynamicMiddleware = createDynamicMiddleware();
+
+export const store = configureStore({
+  reducer: {
+    [productsApi.reducerPath]: productsApi.reducer,
+    todosLocal: todosLocalReducer,
+  },
+  middleware: (getDefaultMiddleware) =>
+    getDefaultMiddleware()
+      .prepend(listenerMiddleware.middleware)
+      .concat(productsApi.middleware, dynamicMiddleware.middleware),
+});
+
+setupListeners(store.dispatch);
+
+export type RootState = ReturnType<typeof store.getState>;
+export type AppDispatch = typeof store.dispatch;
+```
+
+**How it works:** ordering matters here — `listenerMiddleware.middleware` is `prepend`ed so it observes every action (including thunks, before the thunk middleware unwraps them) at the front of the chain, while `productsApi.middleware` and `dynamicMiddleware.middleware` are `concat`ed after the default thunk middleware, which is where RTK-Query's own middleware expects to sit. `setupListeners` is called once, after the store exists, since it needs `store.dispatch` to wire up the focus/reconnect event listeners that `refetchOnFocus`/`refetchOnReconnect` depend on.

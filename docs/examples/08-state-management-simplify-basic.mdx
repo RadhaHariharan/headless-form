@@ -1,0 +1,367 @@
+# State Management Simplify — Basic Examples
+
+Twenty-five examples covering one concept each from [`@headlesskit/state-management-simplify`](../state-management-simplify/01-overview.mdx) (the vanilla, zustand-style store) and [`@headlesskit/state-management-simplify-react`](../state-management-simplify-react/01-overview.mdx) (its React hook).
+
+---
+
+## 1. A minimal counter store (vanilla)
+
+```typescript
+import { createStore } from '@headlesskit/state-management-simplify';
+
+const store = createStore<{ count: number; increment: () => void }>((set) => ({
+  count: 0,
+  increment: () => set((state) => ({ count: state.count + 1 })),
+}));
+
+store.getState().increment();
+console.log(store.getState().count); // 1
+```
+
+**How it works:** the function you pass to `createStore` is called once, immediately, with `set`/`get`/the store API as arguments — whatever object it returns becomes the initial state, and any function fields on that object (like `increment`) close over `set`/`get` so they can read/update state later without you threading the store through every call site.
+
+## 2. The curried `createStore<T>()(initializer)` form
+
+```typescript
+import { createStore } from '@headlesskit/state-management-simplify';
+
+interface CounterStore {
+  count: number;
+  increment: () => void;
+}
+
+const store = createStore<CounterStore>()((set) => ({
+  count: 0,
+  increment: () => set((state) => ({ count: state.count + 1 })),
+}));
+```
+
+**How it works:** `createStore` is overloaded — call it directly with an initializer (`createStore(fn)`), or call it with no arguments first to get back a second function that takes the initializer (`createStore<T>()(fn)`). The curried form exists purely so TypeScript can infer the generic correctly when middleware is involved (the middleware's own generics need `T` fixed *before* it sees the initializer); for a plain store with no middleware, either form behaves identically at runtime.
+
+## 3. `set`'s shallow merge vs. full replace
+
+```typescript
+store.setState({ count: 5 });           // merges: other fields untouched
+store.setState({ count: 5 }, true);     // replaces: every other field is gone
+```
+
+**How it works:** by default, `setState(partial)` shallow-merges `partial` onto the existing top-level state (`{ ...state, ...partial }`) — this is why a store with `{ count, increment, decrement }` can call `set({ count: 5 })` without wiping out `increment`/`decrement`. Passing `true` as the second argument switches to a full replace, which is rarely what you want unless you're deliberately resetting to a brand-new state object.
+
+## 4. Subscribing to every change (vanilla)
+
+```typescript
+const unsubscribe = store.subscribe((state, prevState) => {
+  console.log('count went from', prevState.count, 'to', state.count);
+});
+```
+
+**How it works:** unlike `@headlesskit/state-management`'s `subscribe` (no arguments), this package's listener receives *both* the new and previous state directly — useful for diffing without having to have captured the previous value yourself beforehand.
+
+## 5. Reading state once, without subscribing
+
+```typescript
+function logCurrentCount() {
+  console.log(store.getState().count);
+}
+```
+
+**How it works:** `getState()` is a synchronous, always-current read with no subscription side effect — calling it from a one-off event handler (a button click, a `setTimeout`, anything not rendering UI) is the right tool; reach for `subscribe` (vanilla) or the React hook (next example) only when you need to *react* to changes over time.
+
+## 6. The React hook with a selector
+
+```tsx
+import { create } from '@headlesskit/state-management-simplify-react';
+
+const useCounterStore = create<{ count: number; increment: () => void }>((set) => ({
+  count: 0,
+  increment: () => set((state) => ({ count: state.count + 1 })),
+}));
+
+function Counter() {
+  const count = useCounterStore((state) => state.count);
+  const increment = useCounterStore((state) => state.increment);
+  return <button onClick={increment}>{count}</button>;
+}
+```
+
+**How it works:** `create` (from `-react`, not the vanilla package) returns a *hook* — calling `useCounterStore(selector)` subscribes the component to just the slice of state `selector` returns, and only re-renders it when that specific slice's value actually changes (compared by `Object.is`), not on every store update.
+
+## 7. Several actions on one store
+
+```typescript
+const useCounterStore = create<CounterStore>((set) => ({
+  count: 0,
+  increment: () => set((s) => ({ count: s.count + 1 })),
+  decrement: () => set((s) => ({ count: s.count - 1 })),
+  reset: () => set({ count: 0 }),
+}));
+```
+
+**How it works:** actions are just regular fields on the state object whose value happens to be a function — there's no separate "actions" concept the library tracks specially. This means an action can call `get()` to read the absolute latest state (important inside async actions — see [Medium #10](./09-state-management-simplify-medium.mdx#10-async-actions)) rather than closing over a stale value.
+
+## 8. Cleaning up a subscription
+
+```typescript
+useEffect(() => {
+  const unsubscribe = store.subscribe((state) => console.log(state.count));
+  return unsubscribe;
+}, []);
+```
+
+**How it works:** `subscribe` returns the unsubscribe function directly, which is exactly the shape `useEffect`'s cleanup return expects — no separate "remove listener" call needed, the same value just gets called again later by React itself when the effect re-runs or the component unmounts.
+
+## 9. `useShallow` to select multiple fields at once
+
+```tsx
+import { useShallow } from '@headlesskit/state-management-simplify-react';
+
+const { x, y } = useStore(useShallow((state) => ({ x: state.x, y: state.y })));
+```
+
+**How it works:** a selector returning a brand-new object literal (`{ x: state.x, y: state.y }`) would normally fail the default `Object.is` equality check on *every* render (since `{...}` always creates a new object reference), causing the component to re-render even when `x`/`y` didn't change. `useShallow` wraps the selector with a shallow-equality comparison instead, so the component only re-renders when one of the returned object's own fields actually differs.
+
+## 10. Whole-state subscription vs. a selector
+
+```tsx
+function Bad() {
+  const state = useStore(); // re-renders on ANY field change, even unrelated ones
+  return <p>{state.count}</p>;
+}
+
+function Good() {
+  const count = useStore((state) => state.count); // re-renders only when count changes
+  return <p>{count}</p>;
+}
+```
+
+**How it works:** calling the hook with no selector subscribes to the entire state object, which (being one mutable reference per update) is considered "changed" by every single `setState` call regardless of which field actually moved — always prefer a selector unless you genuinely need the whole object (e.g. for serialization/debugging).
+
+## 11. Resetting to the original initial state
+
+```typescript
+store.setState(store.getInitialState(), true);
+```
+
+**How it works:** `getInitialState()` returns the exact object your `createStore` initializer produced on its very first call — captured once and frozen, regardless of how many times `setState` has run since. Passing it back through `setState(..., true)` (full replace) is a complete reset, including any actions whose closures may have been recreated since (they're part of that same initial object).
+
+## 12. Typing a store that mixes state and actions
+
+```typescript
+interface CounterStore {
+  count: number;          // state
+  increment: () => void;  // action
+  decrement: () => void;  // action
+}
+
+const useCounterStore = create<CounterStore>((set) => ({
+  count: 0,
+  increment: () => set((s) => ({ count: s.count + 1 })),
+  decrement: () => set((s) => ({ count: s.count - 1 })),
+}));
+```
+
+**How it works:** there's exactly one type parameter (`CounterStore`) covering both data and behavior — `set`'s own type is derived from it automatically (`set: (partial: Partial<CounterStore> | ((state: CounterStore) => Partial<CounterStore>)) => void`), so the compiler already knows `set({ count: 5 })` is valid but `set({ countt: 5 })` is a typo, with no extra type annotations needed at the call site.
+
+## 13. A shallow-merge gotcha with nested objects
+
+```typescript
+const store = createStore<{ user: { name: string; age: number } }>(() => ({
+  user: { name: 'Ada', age: 30 },
+}));
+
+store.setState({ user: { name: 'Grace' } }); // age is GONE — user was fully replaced
+```
+
+**How it works:** the shallow merge in [Example 3](#3-sets-shallow-merge-vs-full-replace) only applies at the *top level* — `user` is a top-level key, so setting it replaces the entire `user` object rather than merging into it. To update one nested field, spread the existing nested object yourself (next example), or reach for the `immer` middleware (see [Advanced #2](./10-state-management-simplify-advanced.mdx#2-the-immer-middleware-for-ergonomic-nested-updates)).
+
+## 14. Updating one nested field by spreading every level
+
+```typescript
+interface ProfileStore {
+  user: { name: string; age: number; address: { city: string; zip: string } };
+}
+
+const store = createStore<ProfileStore>(() => ({
+  user: { name: 'Ada', age: 30, address: { city: 'London', zip: 'E1' } },
+}));
+
+store.setState((state) => ({
+  user: {
+    ...state.user,
+    address: { ...state.user.address, city: 'Manchester' },
+  },
+}));
+```
+
+**How it works:** because `setState`'s shallow merge only protects sibling keys at the *same* level it's applied to, updating `address.city` two levels deep requires spreading both `user` (so `name`/`age` survive) and `user.address` (so `zip` survives) — each nesting level you don't explicitly spread gets silently dropped, which is exactly the bug from [Example 13](#13-a-shallow-merge-gotcha-with-nested-objects) generalized one level further.
+
+## 15. Toggling a boolean flag nested two levels deep
+
+```typescript
+interface SettingsStore {
+  preferences: { notifications: { email: boolean; sms: boolean } };
+  toggleEmail: () => void;
+}
+
+const useSettingsStore = create<SettingsStore>((set) => ({
+  preferences: { notifications: { email: true, sms: false } },
+  toggleEmail: () =>
+    set((state) => ({
+      preferences: {
+        ...state.preferences,
+        notifications: {
+          ...state.preferences.notifications,
+          email: !state.preferences.notifications.email,
+        },
+      },
+    })),
+}));
+```
+
+**How it works:** the action reads the *current* value off `state` (passed into the updater function) rather than closing over a stale flag from when the store was created, so calling `toggleEmail()` twice in a row correctly flips the value back and forth instead of toggling against a frozen snapshot — the updater-function form of `set` is what makes this safe even if other code updates `preferences` concurrently between calls.
+
+## 16. Updating one item inside a plain array field
+
+```typescript
+interface TodoStore {
+  todos: { id: string; text: string; done: boolean }[];
+  toggleTodo: (id: string) => void;
+}
+
+const useTodoStore = create<TodoStore>((set) => ({
+  todos: [{ id: '1', text: 'Write docs', done: false }],
+  toggleTodo: (id) =>
+    set((state) => ({
+      todos: state.todos.map((t) => (t.id === id ? { ...t, done: !t.done } : t)),
+    })),
+}));
+```
+
+**How it works:** arrays are themselves just a value at a top-level key, so the same "replace the whole thing" rule from [Example 13](#13-a-shallow-merge-gotcha-with-nested-objects) applies — `.map` produces a brand-new array where every untouched item is the *same* object reference as before (cheap for consumers doing reference-equality checks) and only the matched item is a new object, which is the idiomatic immutable-array-update pattern this package expects since it does no special-casing for arrays.
+
+## 17. Removing one item from an array field
+
+```typescript
+const useTodoStore = create<TodoStore>((set) => ({
+  todos: [],
+  removeTodo: (id: string) =>
+    set((state) => ({ todos: state.todos.filter((t) => t.id !== id) })),
+}));
+```
+
+**How it works:** `.filter` is preferred over mutating methods like `.splice` for the same reason `.map` was used in [Example 16](#16-updating-one-item-inside-a-plain-array-field) — it returns a new array, leaving the original (which `prevState` in any active subscriber still references) untouched; mutating the array in place would corrupt that snapshot and break `Object.is`-based change detection, since the array reference wouldn't change at all.
+
+## 18. Adding an item to an array field
+
+```typescript
+const useTodoStore = create<TodoStore>((set) => ({
+  todos: [],
+  addTodo: (text: string) =>
+    set((state) => ({
+      todos: [...state.todos, { id: crypto.randomUUID(), text, done: false }],
+    })),
+}));
+```
+
+**How it works:** spreading the existing array into a new array literal (`[...state.todos, newItem]`) is the array equivalent of object-spread — it copies every existing element reference into a new array and appends one more, so the new array is a distinct reference (triggering re-renders/subscribers) while every untouched todo object inside it stays the exact same reference as before.
+
+## 19. A store with two independent nested sections
+
+```typescript
+interface AppStore {
+  user: { name: string; loggedIn: boolean };
+  cart: { itemCount: number };
+  login: (name: string) => void;
+  addToCart: () => void;
+}
+
+const useAppStore = create<AppStore>((set) => ({
+  user: { name: '', loggedIn: false },
+  cart: { itemCount: 0 },
+  login: (name) => set((state) => ({ user: { ...state.user, name, loggedIn: true } })),
+  addToCart: () => set((state) => ({ cart: { ...state.cart, itemCount: state.cart.itemCount + 1 } })),
+}));
+```
+
+**How it works:** `login` only ever returns a new `user` object and `addToCart` only ever returns a new `cart` object — `setState`'s top-level shallow merge means each action can update its own nested section without needing to know about, or accidentally clobber, the other section, even though both live on the same store.
+
+## 20. Selecting a nested field directly in a component
+
+```tsx
+function CartBadge() {
+  const itemCount = useAppStore((state) => state.cart.itemCount);
+  return <span>{itemCount}</span>;
+}
+```
+
+**How it works:** the selector reaches straight through to the leaf value (`state.cart.itemCount`, a primitive number) rather than returning the whole `cart` object — since the comparison is `Object.is` on whatever the selector returns, selecting the primitive itself means the component only re-renders when that specific number changes, not whenever any other field on `cart` changes.
+
+## 21. Computing initial state from a function vs. a plain object
+
+```typescript
+// Plain object — fine when there's no setup logic
+const storeA = createStore<{ count: number }>(() => ({ count: 0 }));
+
+// Function body — needed when initial values require computation
+const storeB = createStore<{ id: string; createdAt: number }>(() => ({
+  id: crypto.randomUUID(),
+  createdAt: Date.now(),
+}));
+```
+
+**How it works:** the initializer is always a function, but what matters is *when* its body runs — `createStore` calls it exactly once, synchronously, at creation time, so any non-deterministic values (`crypto.randomUUID()`, `Date.now()`) inside it are computed fresh per store instance rather than shared across instances the way a top-level constant would be.
+
+## 22. Passing `get` to read state inside an action
+
+```typescript
+interface Store {
+  count: number;
+  logDoubled: () => void;
+}
+
+const useStore = create<Store>((set, get) => ({
+  count: 0,
+  logDoubled: () => console.log(get().count * 2),
+}));
+```
+
+**How it works:** the initializer receives three arguments — `set`, `get`, and the store API — and `get` is simply `getState` bound to this store, useful inside an action that needs to *read* current state without going through `set`'s updater-function form (which only gives you state when you're also about to write).
+
+## 23. Distinguishing state fields from action fields at the type level
+
+```typescript
+interface Store {
+  // state
+  count: number;
+  name: string;
+  // actions
+  increment: () => void;
+  rename: (name: string) => void;
+}
+```
+
+**How it works:** the package itself draws no distinction between these two groups of fields — grouping them with a comment, as shown here, is purely a team convention for readability, since at runtime and at the type level `increment` and `count` are both just properties resolved off the same returned object.
+
+## 24. Calling an action from outside React entirely
+
+```typescript
+import { useCounterStore } from './counter-store';
+
+document.getElementById('btn')!.addEventListener('click', () => {
+  useCounterStore.getState().increment();
+});
+```
+
+**How it works:** the hook produced by `create` carries the underlying vanilla store's `getState`/`setState`/`subscribe` as static properties (see [Medium #12](./09-state-management-simplify-medium.mdx#12-one-store-reading-another-stores-state)), so any plain JavaScript code — a non-React event listener, a vanilla DOM module, a test file — can call `useCounterStore.getState().increment()` without ever rendering a component or invoking the hook as a hook.
+
+## 25. Why object identity, not content, drives re-renders
+
+```typescript
+const a = { x: 1 };
+const b = { x: 1 };
+console.log(Object.is(a, b)); // false — same content, different reference
+
+store.setState({ position: { x: 1 } }); // always a "change" even if x was already 1
+```
+
+**How it works:** the default equality check the hook (and `setState`'s own change-detection) uses is `Object.is`, which compares object/array values by reference, not by deep content — so returning a brand-new `{ x: 1 }` object from a selector or an action is treated as a change even when every field inside it happens to be identical to before, which is why [`useShallow`](#9-useshallow-to-select-multiple-fields-at-once) and manual reference-stability checks exist for cases where that matters.

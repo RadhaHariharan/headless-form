@@ -17,6 +17,11 @@ const demos = [
     title: "State management (simplify)",
     description: "@headlesskit/state-management-simplify-react — lightweight hook-based store.",
   },
+  {
+    href: "/devtools-demo",
+    title: "Devtools",
+    description: "@headlesskit/state-management-devtools-react — time-travel Inspector for both store flavors.",
+  },
 ];
 
 export default function Home() {

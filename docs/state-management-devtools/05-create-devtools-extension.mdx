@@ -1,0 +1,52 @@
+# createDevtoolsExtension
+
+**File:** `src/create-devtools-extension.ts`
+
+Builds the `{ extension, compose }` pair that backs both `window.__HEADLESSKIT_DEVTOOLS_EXTENSION__` and `window.__HEADLESSKIT_DEVTOOLS_EXTENSION_COMPOSE__`. This is where the two replay strategies described in [the overview](./01-overview.mdx#two-replay-strategies-one-engine) are actually implemented.
+
+```typescript
+import { createDevtoolsExtension } from '@headlesskit/state-management-devtools';
+```
+
+## Signature
+
+```typescript
+function createDevtoolsExtension(inspectorStore: InspectorStoreController): {
+  extension: DevtoolsExtension;
+  compose: DevtoolsExtensionCompose;
+}
+```
+
+## The enhancer path (reducer-based stores)
+
+`extension(config)` and `compose(config)(...enhancers)` both build the same store enhancer. When the underlying store creator (`next`) is called, the enhancer:
+
+1. Calls `next(reducer, preloadedState, enhancer)` once, purely to read the store's true initial state.
+2. Registers a connection with [`registerConnection`](./03-create-inspector-store.mdx), passing a `step` function that's just the real reducer — `step(state, entry) = reducer(state, entry.action)`.
+3. Returns a store whose `dispatch` records a `PERFORM_ACTION` lifted command (instead of calling the reducer directly), whose `getState` always returns `getEffectiveState(handle.getLiftedState())`, and whose `subscribe` is a fresh listener set notified after every dispatch.
+
+Because `getState` is always derived from the lifted state, calling `inspectorStore.jumpToState(name, index)` from anywhere immediately changes what the *live* store reports — no separate "preview" state, no extra plumbing.
+
+## The connect() path (zustand-style stores)
+
+`extension.connect(config)` returns a `DevtoolsConnection` for `state-management-simplify`'s `devtools` middleware. There's no reducer here, so:
+
+- `init(state)` / `send(action, state)` register the connection with a `patchStep` step function (see [lifted-state](./06-lifted-state.mdx#patchstep)), computing a shallow diff between the previous effective state and the newly recorded state and storing it as the entry's replay patch.
+- `subscribe(listener)` registers a **control listener** on the inspector store — whenever a UI calls a time-travel method (`jumpToState`, `sweep`, `commit`, ...), this connection translates the result into the `{ type: 'DISPATCH', ... }` message format `state-management-simplify`'s middleware already parses, and calls `listener(message)`. Reset/commit/pause forward their literal command; everything else (jump/toggle/sweep/revert/rollback) resolves to a `JUMP_TO_STATE` message carrying the freshly computed state as JSON, since the connector — not the middleware — owns the replay logic here.
+
+## Basic usage
+
+```typescript
+const inspectorStore = createInspectorStore();
+const { extension, compose } = createDevtoolsExtension(inspectorStore);
+
+window.__HEADLESSKIT_DEVTOOLS_EXTENSION__ = extension;
+window.__HEADLESSKIT_DEVTOOLS_EXTENSION_COMPOSE__ = compose;
+```
+
+You won't usually call this directly — [`installDevtools`](./02-install-devtools.mdx) does it for you.
+
+## Common pitfalls
+
+- **The enhancer must stay innermost in the compose chain** so middleware-transformed actions (not pre-middleware ones) are what get recorded — `composeWithDevTools(config)(...enhancers)` already appends it last; don't reorder enhancers yourself unless you're rebuilding `compose` from scratch.
+- **`connect()`-based connections have no reducer, so skip/revert/sweep are approximate.** See [the overview's pitfalls](./01-overview.mdx#common-pitfalls) — patch replay reconstructs "what if this action's *resulting fields* never applied," which differs from "what if the update logic never ran" for relative updates.

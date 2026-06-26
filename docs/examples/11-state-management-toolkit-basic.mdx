@@ -1,0 +1,514 @@
+# State Management Toolkit — Basic Examples
+
+Twenty-five examples covering one concept each, using [`@headlesskit/state-management-toolkit`](../state-management-toolkit/01-overview.mdx) — an RTK-equivalent layer on top of [`@headlesskit/state-management`](../state-management/01-overview.mdx) providing `createSlice`, `createAsyncThunk`, `createEntityAdapter`, `listenerMiddleware`, `dynamicMiddleware`, and a built-in RTK-Query-equivalent data layer (`createApi`). See [Examples overview](./01-overview.mdx) for how to read these.
+
+---
+
+## 1. A single counter slice with object-form reducers
+
+```tsx
+import { createSlice } from '@headlesskit/state-management-toolkit';
+
+const counterSlice = createSlice({
+  name: 'counter',
+  initialState: { value: 0 },
+  reducers: {
+    increment(state) {
+      state.value += 1;
+    },
+    decrement(state) {
+      state.value -= 1;
+    },
+  },
+});
+
+export const { increment, decrement } = counterSlice.actions;
+export default counterSlice.reducer;
+```
+
+**How it works:** each key under `reducers` becomes both a case reducer registered under `` `counter/${key}` `` and an auto-generated action creator exposed at `counterSlice.actions[key]`. Inside the reducer body, `state` is an Immer draft — `state.value += 1` looks like a direct mutation but Immer intercepts it and produces a new immutable state object behind the scenes, so nothing downstream that relies on reference equality (like a memoized selector) breaks.
+
+## 2. Typing a reducer's payload with `PayloadAction<T>`
+
+```tsx
+import { createSlice, type PayloadAction } from '@headlesskit/state-management-toolkit';
+
+const counterSlice = createSlice({
+  name: 'counter',
+  initialState: { value: 0 },
+  reducers: {
+    incrementByAmount(state, action: PayloadAction<number>) {
+      state.value += action.payload;
+    },
+  },
+});
+
+counterSlice.actions.incrementByAmount(5); // { type: 'counter/incrementByAmount', payload: 5 }
+```
+
+**How it works:** `PayloadAction<T>` is purely a TypeScript annotation — at runtime, every dispatched action is always `{ type, payload }`. Annotating the reducer's second parameter this way means `action.payload` is typed as `number` inside the function body, and the generated action creator's parameter is inferred as `number` too, so calling `incrementByAmount('5')` is a compile error rather than a silent runtime bug.
+
+## 3. Multiple reducers on one slice
+
+```tsx
+import { createSlice, type PayloadAction } from '@headlesskit/state-management-toolkit';
+
+interface TodoState {
+  text: string;
+  filter: 'all' | 'active' | 'completed';
+}
+
+const uiSlice = createSlice({
+  name: 'ui',
+  initialState: { text: '', filter: 'all' } as TodoState,
+  reducers: {
+    textChanged(state, action: PayloadAction<string>) {
+      state.text = action.payload;
+    },
+    filterChanged(state, action: PayloadAction<TodoState['filter']>) {
+      state.filter = action.payload;
+    },
+    formReset(state) {
+      state.text = '';
+      state.filter = 'all';
+    },
+  },
+});
+```
+
+**How it works:** every reducer defined here mutates a *single* shared draft of `TodoState` — `createSlice` internally funnels all of them through one `createReducer` call keyed by action `type`, so dispatching `textChanged` never touches `filter`, and the slice itself has no idea which UI event triggered which reducer; it only ever sees `(state, action)` pairs.
+
+## 4. `extraReducers` reacting to another slice's action
+
+```tsx
+import { createSlice } from '@headlesskit/state-management-toolkit';
+import { sessionEnded } from './authSlice';
+
+const cartSlice = createSlice({
+  name: 'cart',
+  initialState: { items: [] as string[] },
+  reducers: {
+    itemAdded(state, action: { payload: string }) {
+      state.items.push(action.payload);
+    },
+  },
+  extraReducers: (builder) => {
+    builder.addCase(sessionEnded, (state) => {
+      state.items = [];
+    });
+  },
+});
+```
+
+**How it works:** `extraReducers` lets a slice respond to action types it didn't itself define — here, `cartSlice` clears its items whenever `authSlice`'s `sessionEnded` action fires, anywhere in the app. Both the slice's own `reducers` and `extraReducers`' `addCase` registrations are merged into one underlying reducer, so there's no ordering surprise between "own" and "external" case handling for different action types.
+
+## 5. A single GET request with `createAsyncThunk`
+
+```tsx
+import { createAsyncThunk } from '@headlesskit/state-management-toolkit';
+
+interface User { id: string; name: string }
+
+export const fetchUser = createAsyncThunk('users/fetchById', async (userId: string) => {
+  const response = await fetch(`/api/users/${userId}`);
+  return (await response.json()) as User;
+});
+```
+
+**How it works:** calling `fetchUser('user-1')` doesn't perform the fetch itself — it returns a thunk function that, when dispatched, runs the `payloadCreator` and automatically dispatches `users/fetchById/pending` immediately, then either `.../fulfilled` (with the resolved JSON as `action.payload`) or `.../rejected`, depending on how the promise settles. You never write those three action types or their dispatch calls by hand.
+
+## 6. Reading `pending`/`fulfilled`/`rejected` status in a slice
+
+```tsx
+import { createSlice } from '@headlesskit/state-management-toolkit';
+import { fetchUser } from './thunks';
+
+const userSlice = createSlice({
+  name: 'user',
+  initialState: { entity: null as { id: string; name: string } | null, status: 'idle' as 'idle' | 'loading' | 'succeeded' | 'failed' },
+  reducers: {},
+  extraReducers: (builder) => {
+    builder
+      .addCase(fetchUser.pending, (state) => {
+        state.status = 'loading';
+      })
+      .addCase(fetchUser.fulfilled, (state, action) => {
+        state.status = 'succeeded';
+        state.entity = action.payload;
+      })
+      .addCase(fetchUser.rejected, (state) => {
+        state.status = 'failed';
+      });
+  },
+});
+```
+
+**How it works:** `fetchUser.pending`/`.fulfilled`/`.rejected` are themselves action creators with a `.match()` method — `addCase` registers a case reducer keyed by that exact action `type` string. Because `createAsyncThunk` guarantees exactly one of `fulfilled`/`rejected` fires after `pending` for every dispatch, `status` can only ever be in one of these states at a time, never stuck on `'loading'` forever (barring a thrown error that escapes the promise chain entirely).
+
+## 7. Creating an entity adapter and seeding initial state
+
+```tsx
+import { createEntityAdapter } from '@headlesskit/state-management-toolkit';
+
+interface Todo { id: string; text: string; done: boolean }
+
+const todosAdapter = createEntityAdapter<Todo>();
+
+const initialState = todosAdapter.getInitialState({ loading: false }, [
+  { id: '1', text: 'Buy milk', done: false },
+]);
+// { ids: ['1'], entities: { '1': { id: '1', text: 'Buy milk', done: false } }, loading: false }
+```
+
+**How it works:** `getInitialState` builds the normalized `{ ids, entities }` shape and merges in any extra fields you also need to track (here, `loading`), optionally pre-populated. Storing the collection this way gives O(1) lookup by ID via `entities[id]` while `ids` preserves ordering — no linear scan through an array is ever needed to find one todo.
+
+## 8. `addOne` — adding a single entity
+
+```tsx
+import { createSlice } from '@headlesskit/state-management-toolkit';
+import { todosAdapter } from './adapter';
+
+const todosSlice = createSlice({
+  name: 'todos',
+  initialState: todosAdapter.getInitialState(),
+  reducers: {
+    todoAdded: todosAdapter.addOne,
+  },
+});
+
+todosSlice.actions.todoAdded({ id: '2', text: 'Walk the dog', done: false });
+```
+
+**How it works:** passing `todosAdapter.addOne` directly as a `reducers` value works because every entity-adapter mutation method has the exact `(state, action) => void` shape `createSlice` expects of a case reducer — the auto-generated `todoAdded` action creator wraps whatever you pass it as `action.payload`, and `addOne` reads that payload as the entity to insert. It silently no-ops if an entity with that ID already exists.
+
+## 9. `setAll` — replacing the whole collection
+
+```tsx
+import { todosAdapter } from './adapter';
+
+const todosSlice = createSlice({
+  name: 'todos',
+  initialState: todosAdapter.getInitialState(),
+  reducers: {
+    todosLoaded: todosAdapter.setAll,
+  },
+});
+
+todosSlice.actions.todosLoaded([
+  { id: '1', text: 'Buy milk', done: false },
+  { id: '2', text: 'Walk the dog', done: true },
+]);
+```
+
+**How it works:** `setAll` is effectively `removeAll` followed by `setMany` — it discards every entity not present in the new list, which is exactly the behavior you want after a fresh "load the full list from the server" response, as opposed to `upsertMany`, which would leave stale entities from a previous load lying around if the server stopped returning them.
+
+## 10. `updateOne` — a partial, shallow-merge update
+
+```tsx
+import { todosAdapter } from './adapter';
+
+const todosSlice = createSlice({
+  name: 'todos',
+  initialState: todosAdapter.getInitialState(),
+  reducers: {
+    todoToggled: (state, action: { payload: string }) => {
+      todosAdapter.updateOne(state, { id: action.payload, changes: { done: true } });
+    },
+  },
+});
+```
+
+**How it works:** `updateOne`'s `changes` object is shallow-merged onto the existing entity — only the keys you specify (`done` here) are overwritten, every other field on the entity is left untouched. It's a no-op if the ID doesn't exist, which avoids accidentally creating a malformed partial entity from a stale ID.
+
+## 11. `removeOne` — deleting a single entity
+
+```tsx
+import { todosAdapter } from './adapter';
+
+const todosSlice = createSlice({
+  name: 'todos',
+  initialState: todosAdapter.getInitialState(),
+  reducers: {
+    todoRemoved: todosAdapter.removeOne,
+  },
+});
+
+todosSlice.actions.todoRemoved('1');
+```
+
+**How it works:** `removeOne` takes the raw ID (not the entity) as its payload, and removes it from both `state.ids` and `state.entities` in the same draft mutation — there's no intermediate state where one is updated and the other isn't, even though conceptually it's "two" data structures being kept in sync.
+
+## 12. `upsertOne` — insert-or-update in one call
+
+```tsx
+import { todosAdapter } from './adapter';
+
+const todosSlice = createSlice({
+  name: 'todos',
+  initialState: todosAdapter.getInitialState(),
+  reducers: {
+    todoSynced: todosAdapter.upsertOne,
+  },
+});
+
+todosSlice.actions.todoSynced({ id: '3', text: 'Call the bank', done: false });
+```
+
+**How it works:** `upsertOne` checks whether the ID already exists — if not, it behaves like `addOne`; if it does, it behaves like `setOne` (a full replace, not a shallow merge like `updateOne`). This is the right tool whenever you have a complete entity object from the server and don't care whether it's new or already in the store.
+
+## 13. A basic `createApi` with one GET query endpoint
+
+```tsx
+import { createApi, fetchBaseQuery } from '@headlesskit/state-management-toolkit/query';
+
+interface Post { id: number; title: string }
+
+export const api = createApi({
+  reducerPath: 'api',
+  baseQuery: fetchBaseQuery({ baseUrl: '/api' }),
+  tagTypes: ['Post'],
+  endpoints: (build) => ({
+    getPosts: build.query<Post[], void>({
+      query: () => 'posts',
+      providesTags: ['Post'],
+    }),
+  }),
+});
+
+// usage:
+import { store } from './store';
+
+await store.dispatch(api.endpoints.getPosts.initiate()).unwrap();
+
+const result = api.endpoints.getPosts.select()(store.getState());
+console.log(result.data); // Post[] once resolved
+```
+
+**How it works:** `getPosts` here is just a declarative description — calling `query: () => 'posts'` describes the request, it doesn't perform it. Dispatching `api.endpoints.getPosts.initiate()` is what actually triggers `fetchBaseQuery` to hit `GET /api/posts`; the result is cached under a key derived from the endpoint name plus the (here, absent) argument, so a second `initiate()` call with the same argument reuses the cached entry instead of refetching. `.select()(state)` reads that same cache entry without dispatching anything.
+
+## 14. A basic POST mutation endpoint
+
+```tsx
+import { createApi, fetchBaseQuery } from '@headlesskit/state-management-toolkit/query';
+
+interface Post { id: number; title: string }
+
+export const api = createApi({
+  reducerPath: 'api',
+  baseQuery: fetchBaseQuery({ baseUrl: '/api' }),
+  tagTypes: ['Post'],
+  endpoints: (build) => ({
+    getPosts: build.query<Post[], void>({ query: () => 'posts', providesTags: ['Post'] }),
+    addPost: build.mutation<Post, { title: string }>({
+      query: (body) => ({ url: 'posts', method: 'POST', body }),
+      invalidatesTags: ['Post'],
+    }),
+  }),
+});
+
+// usage:
+import { store } from './store';
+
+const result = await store.dispatch(api.endpoints.addPost.initiate({ title: 'New post' })).unwrap();
+console.log(result); // the created Post
+```
+
+**How it works:** `addPost`'s `query` function returns `{ url, method, body }` instead of a bare string — `fetchBaseQuery` JSON-serializes `body` and sets the `Content-Type` header automatically. `invalidatesTags: ['Post']` means once this mutation succeeds, every active `getPosts`-style query that `providesTags: ['Post']` is marked stale and automatically refetched, without you manually dispatching a refetch action. `.unwrap()` on the dispatched mutation resolves to the created `Post`, or throws if the request failed.
+
+## 15. Wiring a slice into `configureStore`
+
+```tsx
+import { configureStore } from '@headlesskit/state-management-toolkit';
+import counterReducer from './counterSlice';
+import todosReducer from './todosSlice';
+
+export const store = configureStore({
+  reducer: {
+    counter: counterReducer,
+    todos: todosReducer,
+  },
+});
+
+export type RootState = ReturnType<typeof store.getState>;
+```
+
+**How it works:** passing a plain object to `reducer` makes `configureStore` build a combined reducer for you under the hood (equivalent to a manual `combineReducers` call) — each slice's reducer only ever sees its own key's slice of state, never the full `RootState`, which is exactly why `counterSlice.actions.increment()` works without `counterSlice` knowing `todos` exists at all.
+
+## 16. Wiring `api.reducer` and `api.middleware` into the store
+
+```tsx
+import { configureStore } from '@headlesskit/state-management-toolkit';
+import { api } from './api';
+
+export const store = configureStore({
+  reducer: {
+    [api.reducerPath]: api.reducer,
+  },
+  middleware: (getDefaultMiddleware) => getDefaultMiddleware().concat(api.middleware),
+});
+```
+
+**How it works:** `api.reducer` only stores cache *data* — `api.middleware` is what actually drives cache *behavior* (polling, refetch-on-focus, garbage-collecting unused cache entries after `keepUnusedDataFor` seconds). Omitting the middleware leaves queries dispatchable and their results visible in state, but none of those automatic lifecycle behaviors ever run, with no error pointing at the missing piece.
+
+## 17. `getDefaultMiddleware` and adding a custom middleware
+
+```tsx
+import { configureStore } from '@headlesskit/state-management-toolkit';
+import rootReducer from './rootReducer';
+import { loggerMiddleware } from './loggerMiddleware';
+
+export const store = configureStore({
+  reducer: rootReducer,
+  middleware: (getDefaultMiddleware) =>
+    getDefaultMiddleware().concat(loggerMiddleware),
+});
+```
+
+**How it works:** `getDefaultMiddleware()` returns the toolkit's built-in middleware stack (thunk support plus, in development, the immutable-state and serializable-state invariant checks) as a `Tuple` you can `.concat()`/`.prepend()` onto, rather than replacing entirely — this is how you add middleware *without* losing thunk dispatch support, which a naive `middleware: [loggerMiddleware]` array would do.
+
+## 18. A basic `listenerMiddleware.startListening` side effect
+
+```tsx
+import { createListenerMiddleware } from '@headlesskit/state-management-toolkit';
+import { userLoggedIn } from './authSlice';
+import { fetchUserPreferences } from './preferencesSlice';
+
+export const listenerMiddleware = createListenerMiddleware();
+
+listenerMiddleware.startListening({
+  actionCreator: userLoggedIn,
+  effect: async (action, listenerApi) => {
+    listenerApi.dispatch(fetchUserPreferences(action.payload.userId));
+  },
+});
+```
+
+**How it works:** `startListening` registers an effect that runs *after* the reducer has already processed `userLoggedIn` — `listenerApi.dispatch` lets the effect kick off further actions (here, another thunk) as a reaction, decoupling "what happened" (a plain action) from "what should happen next" (a side effect), instead of cramming both into one giant thunk.
+
+## 19. Selectors via `slice.selectors`
+
+```tsx
+import { createSlice } from '@headlesskit/state-management-toolkit';
+
+const counterSlice = createSlice({
+  name: 'counter',
+  initialState: { value: 0 },
+  reducers: { increment: (state) => { state.value += 1; } },
+  selectors: {
+    selectValue: (state) => state.value,
+    selectIsPositive: (state) => state.value > 0,
+  },
+});
+
+interface RootState { counter: ReturnType<typeof counterSlice.getInitialState> }
+
+counterSlice.selectors.selectValue({ counter: { value: 5 } } satisfies RootState); // 5
+```
+
+**How it works:** `slice.selectors` assumes the slice's state lives at `rootState[reducerPath]` (which defaults to `name`) — each selector you define receives just the slice's own state shape, but is exposed pre-wrapped to accept the *root* state, so consuming code never has to manually write `state.counter.value` and risk a typo in the key.
+
+## 20. Selectors via `adapter.getSelectors()`
+
+```tsx
+import { todosAdapter } from './adapter';
+
+interface RootState { todos: ReturnType<typeof todosAdapter.getInitialState> }
+
+const { selectAll, selectById, selectTotal } = todosAdapter.getSelectors(
+  (state: RootState) => state.todos,
+);
+
+selectAll(rootState);       // Todo[] in `ids` order
+selectById(rootState, '1'); // Todo | undefined
+selectTotal(rootState);     // number
+```
+
+**How it works:** passing a `selectState` function to `getSelectors` is what lets these selectors be called with *root* state directly, rather than the bare entity-state slice — internally each generated selector first calls `selectState(rootState)` to reach the `{ ids, entities }` shape, then derives its result from that, so the same adapter selectors work no matter where in your root state tree the entity collection actually lives.
+
+## 21. Reading values without `getSelectors` (entity-state-only)
+
+```tsx
+import { todosAdapter } from './adapter';
+
+const localSelectors = todosAdapter.getSelectors(); // no selectState argument
+
+localSelectors.selectAll({ ids: ['1'], entities: { '1': { id: '1', text: 'Buy milk', done: false } } });
+```
+
+**How it works:** calling `getSelectors()` with zero arguments produces selectors that expect to be called with the entity state *directly*, not wrapped in a larger root state object — useful for unit-testing the adapter's reducer logic in isolation, where you have a bare `{ ids, entities }` value and no full store to construct.
+
+## 22. Dispatching a query endpoint's `initiate` thunk manually
+
+```tsx
+import { store } from './store';
+import { api } from './api';
+
+const resultPromise = store.dispatch(api.endpoints.getPosts.initiate());
+
+resultPromise.then((result) => {
+  console.log(result.data); // Post[] once resolved
+});
+```
+
+**How it works:** `initiate(arg)` is the actual dispatchable thunk behind a query endpoint — calling it manually (rather than through a generated hook) is exactly what you'd do outside a component, e.g. in a route loader or a non-React vanilla app. It returns a promise-like object that also carries an `unsubscribe()` method, since dispatching it also "subscribes" the cache entry, keeping it alive until you explicitly let go.
+
+## 23. Reading a query's cached result with `endpoints.<name>.select`
+
+```tsx
+import { api } from './api';
+import { store } from './store';
+
+const selectPosts = api.endpoints.getPosts.select();
+
+const cacheEntry = selectPosts(store.getState());
+console.log(cacheEntry.data, cacheEntry.isLoading, cacheEntry.error);
+```
+
+**How it works:** `.select(arg)` returns a memoized selector function (not the data itself) — calling it with the current root state returns the full cache-entry shape (`data`, `status`, `isLoading`, `isSuccess`, `isError`, `error`) for that specific argument's cache key, so you can read query results outside of any specific UI binding, the same data a generated hook would expose.
+
+## 24. A basic mutation invocation
+
+```tsx
+import { store } from './store';
+import { api } from './api';
+
+async function createPost(title: string) {
+  const result = await store.dispatch(api.endpoints.addPost.initiate({ title }));
+  if ('error' in result) {
+    console.error('Failed to create post', result.error);
+    return;
+  }
+  console.log('Created post', result.data);
+}
+```
+
+**How it works:** unlike a query, a mutation's `initiate(arg)` is fire-once per call — there's no shared cache entry keyed by argument the way queries have, since two `addPost({ title: 'x' })` calls are two genuinely separate writes, not the same data being re-fetched. The resolved result is a discriminated union of `{ data }` or `{ error }`, so checking `'error' in result` is the correct way to branch, rather than relying on a thrown exception.
+
+## 25. Defining and registering an entity-adapter-backed selector alongside a slice's own selectors
+
+```tsx
+import { createSlice } from '@headlesskit/state-management-toolkit';
+import { createEntityAdapter } from '@headlesskit/state-management-toolkit';
+
+interface Todo { id: string; text: string; done: boolean }
+
+const todosAdapter = createEntityAdapter<Todo>();
+
+const todosSlice = createSlice({
+  name: 'todos',
+  initialState: todosAdapter.getInitialState({ filter: 'all' as 'all' | 'active' }),
+  reducers: {
+    todoAdded: todosAdapter.addOne,
+  },
+  selectors: {
+    selectFilter: (state) => state.filter,
+  },
+});
+
+export const todosSelectors = todosAdapter.getSelectors(
+  (rootState: { todos: ReturnType<typeof todosSlice.getInitialState> }) => rootState.todos,
+);
+export const { selectFilter } = todosSlice.selectors;
+```
+
+**How it works:** the slice's own `selectors` (declared via `createSlice`'s `selectors` option) and the entity adapter's `getSelectors()` output are two independent selector sets pointed at the same underlying state — `selectFilter` reads the `filter` field the adapter doesn't know about, while `todosSelectors.selectAll` reads the `ids`/`entities` fields the slice's own `selectors` option never had to mention. Composing them side-by-side avoids needing one giant selector function that knows about every field at once.

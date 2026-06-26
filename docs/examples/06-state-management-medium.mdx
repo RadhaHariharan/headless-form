@@ -1,0 +1,480 @@
+# State Management — Medium Examples
+
+Thirty examples building on [Basic](./05-state-management-basic.mdx) — middleware, composition, and patterns the base package leaves you to build by hand (it deliberately has no built-in thunk, slices, or selectors — that's what [`@headlesskit/state-management-toolkit`](../state-management-toolkit/01-overview.mdx) adds on top).
+
+---
+
+## 1. A logging middleware
+
+```typescript
+import { createStore, applyMiddleware } from '@headlesskit/state-management';
+
+const logger = (api) => (next) => (action) => {
+  console.log('dispatching', action);
+  const result = next(action);
+  console.log('next state', api.getState());
+  return result;
+};
+
+const store = createStore(rootReducer, applyMiddleware(logger));
+```
+
+**How it works:** middleware is a triple-curried function — `(api) => (next) => (action) => result`. `api` gives you `{ dispatch, getState }` for the *whole* store; `next` is "the rest of the middleware chain" (eventually the real reducer dispatch) — calling it is what actually lets the action through. Forgetting to call (or return) `next(action)` silently swallows every dispatched action, since nothing downstream ever runs.
+
+## 2. Composing multiple middlewares
+
+```typescript
+import { createStore, applyMiddleware, compose } from '@headlesskit/state-management';
+
+const enhancer = compose(applyMiddleware(logger, crashReporter));
+const store = createStore(rootReducer, enhancer);
+```
+
+**How it works:** `applyMiddleware(...middlewares)` wires middlewares left-to-right conceptually but wraps them right-to-left under the hood, so `logger`'s `next(action)` call is what invokes `crashReporter`'s middleware function, whose own `next(action)` call finally reaches the real reducer. `compose` is a generic function-composition helper — with one enhancer it's a no-op wrapper, but it's what lets you combine `applyMiddleware(...)` with *other* enhancers (like a persistence enhancer) into a single one `createStore` accepts.
+
+## 3. A minimal hand-rolled thunk middleware
+
+```typescript
+const thunkMiddleware = (api) => (next) => (action) =>
+  typeof action === 'function' ? action(api.dispatch, api.getState) : next(action);
+
+store.dispatch((dispatch, getState) => {
+  dispatch({ type: 'loading/start' });
+  fetchData().then((data) => dispatch({ type: 'loading/success', data }));
+});
+```
+
+**How it works:** this package has no built-in async-action support — "thunk" middleware is just a convention, not a special API: if `dispatch` is called with a *function* instead of a plain action object, this middleware intercepts it and calls that function with `(dispatch, getState)` instead of forwarding it to the reducer (which would crash trying to read `action.type` off a function). This is exactly the pattern `@headlesskit/state-management-toolkit`'s thunk middleware automates for you.
+
+## 4. `bindActionCreators` for ergonomic dispatch
+
+```typescript
+import { bindActionCreators } from '@headlesskit/state-management';
+
+const actions = bindActionCreators({ increment, decrement }, store.dispatch);
+actions.increment(); // same as store.dispatch(increment())
+```
+
+**How it works:** for each action creator you pass in, `bindActionCreators` returns a wrapped version that calls the creator *and* immediately dispatches its result — useful when handing a set of actions to code (e.g. deeply nested UI callbacks) that shouldn't need direct access to `dispatch` or the action-creator functions separately.
+
+## 5. A middleware that conditionally blocks an action
+
+```typescript
+const requireAuth = (api) => (next) => (action) => {
+  if (action.type.startsWith('admin/') && !api.getState().auth.isAdmin) {
+    console.warn('Blocked unauthorized action', action.type);
+    return action;
+  }
+  return next(action);
+};
+```
+
+**How it works:** because `next` is just a function call, *not* calling it is a complete, valid way to short-circuit an action — the reducer never sees it, so state never changes for it. Returning `action` anyway keeps `dispatch`'s usual return-value contract intact for any caller checking the result, without faking that the action actually ran.
+
+## 6. A normalized "entities" slice (by hand)
+
+```typescript
+interface UsersState { byId: Record<string, User>; allIds: string[] }
+
+function usersReducer(state: UsersState = { byId: {}, allIds: [] }, action: UserAction): UsersState {
+  switch (action.type) {
+    case 'users/received':
+      return {
+        byId: { ...state.byId, ...Object.fromEntries(action.users.map((u) => [u.id, u])) },
+        allIds: [...new Set([...state.allIds, ...action.users.map((u) => u.id)])],
+      };
+    default: return state;
+  }
+}
+```
+
+**How it works:** "normalized" just means storing entities keyed by id (`byId`) alongside an ordered list of ids (`allIds`), rather than a raw array — lookups by id become O(1) and updating one entity doesn't require scanning the whole array. This is exactly the shape `@headlesskit/state-management-toolkit`'s entity adapter generates and maintains for you automatically; doing it by hand here shows what that adapter is actually doing under the hood.
+
+## 7. Two normalized slices that cross-reference each other by id
+
+```typescript
+interface PostsState { byId: Record<string, { id: string; title: string; authorId: string }>; allIds: string[] }
+interface AuthorsState { byId: Record<string, { id: string; name: string }>; allIds: string[] }
+
+function postsReducer(state: PostsState = { byId: {}, allIds: [] }, action: PostAction): PostsState {
+  switch (action.type) {
+    case 'posts/added':
+      return {
+        byId: { ...state.byId, [action.post.id]: action.post }, // post.authorId just stores the id, not the author object
+        allIds: [...state.allIds, action.post.id],
+      };
+    default: return state;
+  }
+}
+
+const rootReducer = combineReducers({ posts: postsReducer, authors: authorsReducer });
+
+// reading a cross-slice relationship: look up the id in one slice, then index into the other
+function selectPostWithAuthor(state: RootState, postId: string) {
+  const post = state.posts.byId[postId];
+  return { ...post, author: state.authors.byId[post.authorId] };
+}
+```
+
+**How it works:** `combineReducers` keeps `posts` and `authors` as two completely independent reducers that never see each other's state — `postsReducer` has no way to validate that `action.post.authorId` actually exists in `authorsState.byId`, because relationships between normalized slices are a *read-time* concern, not a write-time one. `selectPostWithAuthor` is where the two slices get joined back together, by treating `authorId` as a foreign key and indexing into the sibling slice's `byId` map — exactly like a SQL join, except done by hand in a selector function.
+
+## 8. Cascading a delete across cross-referencing slices
+
+```typescript
+function postsReducer(state: PostsState, action: PostAction): PostsState {
+  switch (action.type) {
+    case 'authors/removed': {
+      // when an author is deleted, drop every post that referenced them
+      const remainingIds = state.allIds.filter((id) => state.byId[id].authorId !== action.authorId);
+      if (remainingIds.length === state.allIds.length) return state; // no posts referenced this author — bail out unchanged
+      return {
+        byId: Object.fromEntries(remainingIds.map((id) => [id, state.byId[id]])),
+        allIds: remainingIds,
+      };
+    }
+    default: return state;
+  }
+}
+```
+
+**How it works:** because `combineReducers` dispatches every action to every slice reducer, `postsReducer` can listen for `'authors/removed'` — an action that conceptually "belongs" to the authors slice — and react to it directly, without any explicit wiring between the two reducers. The early-return guard (`remainingIds.length === state.allIds.length`) matters here specifically because this reducer runs on *every* `authors/removed` dispatch even when this author had no posts, and skipping the object-rebuild in that common case avoids a needless reference change rippling through memoized selectors that read `state.posts`.
+
+## 9. A hand-rolled `updateNestedField(state, path, value)` utility
+
+```typescript
+function updateNestedField<S>(state: S, path: string[], value: unknown): S {
+  if (path.length === 0) return value as S;
+  const [head, ...rest] = path;
+  return { ...state, [head]: updateNestedField((state as any)[head], rest, value) };
+}
+
+// usage inside a reducer
+case 'user/setCity':
+  return updateNestedField(state, ['address', 'city'], action.city);
+case 'user/setSmsNotifications':
+  return updateNestedField(state, ['settings', 'notifications', 'sms'], action.enabled);
+```
+
+**How it works:** the recursion walks down `path` one segment at a time, and at *every* level it spreads `{ ...state, [head]: ... }` before recursing into the next level — this is mechanically identical to writing out the spread chain by hand (as in [Basic #19](./05-state-management-basic.mdx#19-three-level-deep-nested-update-spread-at-every-level)), just generalized so one function handles any depth. The base case (`path.length === 0`) is what stops the recursion and actually substitutes in the new value; every recursive call above it is purely about rebuilding the objects on the path back up to the root without touching their siblings.
+
+## 10. `updateNestedField` reused across multiple reducers
+
+```typescript
+function userReducer(state: UserState, action: UserAction): UserState {
+  switch (action.type) {
+    case 'user/setCity': return updateNestedField(state, ['address', 'city'], action.city);
+    case 'user/setTheme': return updateNestedField(state, ['settings', 'theme'], action.theme);
+    default: return state;
+  }
+}
+
+function cartReducer(state: CartState, action: CartAction): CartState {
+  switch (action.type) {
+    case 'cart/setShippingMethod': return updateNestedField(state, ['shipping', 'method'], action.method);
+    default: return state;
+  }
+}
+```
+
+**How it works:** once `updateNestedField` exists as a standalone, state-shape-agnostic function, *any* reducer in the codebase can call it for *any* nested path — it has no knowledge of `UserState` or `CartState` specifically, only of plain objects and string-array paths. This is the same payoff Immer-based `createSlice` reducers get from "mutating" syntax, achieved here without a dependency: one small utility absorbs the spread-chain tedium so individual `case` branches read as a single line each.
+
+## 11. The `updateNestedField` gap — paths through arrays
+
+```typescript
+// updateNestedField as written only handles plain-object keys; it does NOT
+// special-case array indices or by-id lookups inside arrays:
+updateNestedField(state, ['todos', '0', 'done'], true);
+// rewrites state.todos as { ...todosArray, '0': {...} } — an OBJECT, not an array!
+```
+
+**How it works:** `{ ...state, [head]: ... }` works for arrays too in the sense that it doesn't throw, but spreading an array with `{ ...arr }` produces a plain object with numeric string keys (`{ '0': ..., '1': ..., length` is lost), not an array — so this utility is only safe for object-shaped paths, and any path segment that should index into an array needs a dedicated branch (e.g. `state.todos.map((t, i) => i === Number(head) ? recurse(t) : t)`) rather than relying on the generic spread. This is exactly the kind of edge case a real adapter library (or Immer's structural sharing) handles for you, and the kind of bug a hand-rolled utility like this one needs an explicit test for.
+
+## 12. Manual derived-state selectors
+
+```typescript
+const selectCompletedTodos = (state: RootState) => state.todos.filter((t) => t.done);
+const selectIncompleteCount = (state: RootState) => state.todos.length - selectCompletedTodos(state).length;
+```
+
+**How it works:** a "selector" is just a function from `state` to some derived value — there's no special registration step. The catch with plain functions like these is they recompute on *every* call, even if `state.todos` hasn't changed since the last call; see [memoized selectors](./07-state-management-advanced.mdx) for the fix, or reach for `@headlesskit/state-management-toolkit`'s `createSelector` (memoizing selectors) for this exact problem solved generically.
+
+## 13. A manual memoized selector for a nested derived value
+
+```typescript
+function createMemoizedSelector<S, R>(selector: (state: S) => R) {
+  let lastInput: unknown;
+  let lastResult: R;
+  return (state: S): R => {
+    const input = selector === undefined ? state : (state as any).posts; // narrow to the slice this selector actually reads
+    if (input !== lastInput) {
+      lastResult = selector(state);
+      lastInput = input;
+    }
+    return lastResult;
+  };
+}
+
+const selectPostsWithAuthors = createMemoizedSelector((state: RootState) =>
+  state.posts.allIds.map((id) => ({ ...state.posts.byId[id], author: state.authors.byId[state.posts.byId[id].authorId] })),
+);
+```
+
+**How it works:** the cache key here is deliberately `state.posts` — the *specific nested slice* this selector reads — rather than the whole root `state` object, because `state.authors` changing (which also changes the top-level `state` reference via `combineReducers`) shouldn't be allowed to invalidate a cache keyed on the whole tree if `state.posts` itself didn't change. Memoizing on too broad a slice (or the whole state) defeats the optimization for any other slice's updates; memoizing on too narrow a slice misses real invalidations — picking the right input is the entire design problem this solves, and it's exactly what `createSelector`'s explicit "input selectors" list exists to make less error-prone.
+
+## 14. `bindActionCreators` with a separate namespace per nested domain
+
+```typescript
+import { bindActionCreators } from '@headlesskit/state-management';
+
+const postActionCreators = { addPost, removePost };
+const authorActionCreators = { addAuthor, removeAuthor };
+
+const actions = {
+  posts: bindActionCreators(postActionCreators, store.dispatch),
+  authors: bindActionCreators(authorActionCreators, store.dispatch),
+};
+
+actions.posts.addPost({ id: '1', title: 'Hello', authorId: 'a1' });
+actions.authors.removeAuthor('a1');
+```
+
+**How it works:** `bindActionCreators` itself only walks one level of a *flat* map of functions — passing it a nested object of namespaces directly would silently skip every nested object, since its internal loop only rebinds values where `typeof actionCreator === 'function'`. The namespacing here (`actions.posts.*`, `actions.authors.*`) is achieved by calling `bindActionCreators` once *per domain* and assembling the results into your own nested object afterward — the nesting is a convention you build on top, not something the function does for you.
+
+## 15. A minimal store enhancer
+
+```typescript
+const withLogging: StoreEnhancer = (createStoreFn) => (reducer, preloadedState, enhancer) => {
+  const store = createStoreFn(reducer, preloadedState, enhancer);
+  console.log('store created with initial state', store.getState());
+  return store;
+};
+
+const store = createStore(rootReducer, withLogging);
+```
+
+**How it works:** an enhancer wraps the *store creator* itself, not an individual dispatch — it receives the "real" `createStore` function as `createStoreFn`, and can intercept/modify the store object that comes back (add extra methods, wrap `dispatch`/`getState`, etc.) before returning it. `applyMiddleware(...)` is itself just a particularly common enhancer; [`@headlesskit/state-management-devtools`'s connector](../state-management-devtools/05-create-devtools-extension.mdx) is another, more elaborate one — see [Advanced #1](./07-state-management-advanced.mdx#1-connecting-a-plain-store-to-the-time-travel-inspector).
+
+## 16. Middleware that reads a nested field out of an action payload
+
+```typescript
+const auditLog: any[] = [];
+
+const auditMiddleware = (api) => (next) => (action) => {
+  if (action.type === 'posts/added') {
+    // read a nested field straight off the action payload, not off state
+    auditLog.push({ postId: action.post.id, authorId: action.post.authorId, at: Date.now() });
+  }
+  return next(action);
+};
+```
+
+**How it works:** middleware sees the *action* before the reducer does, so it can branch on `action.type` and read nested fields straight off the payload (`action.post.id`) without needing `api.getState()` at all — this is the right layer for cross-cutting concerns like auditing that care about "what was dispatched," as opposed to selectors, which only ever see "what the state became." Because this runs before `next(action)`, the audit entry is recorded even if a later middleware in the chain (see next example) ends up rejecting the action.
+
+## 17. Middleware that transforms a nested action payload before it reaches the reducer
+
+```typescript
+const normalizeIncomingPost = (api) => (next) => (action) => {
+  if (action.type !== 'posts/added') return next(action);
+  // server sends a nested { author: { id, name } } — strip it down to authorId before it hits the reducer
+  const { author, ...rest } = action.post;
+  return next({ ...action, post: { ...rest, authorId: author.id } });
+};
+```
+
+**How it works:** middleware can call `next` with a *different* action than the one it received — here the incoming payload has a denormalized nested `author` object (as a server response naturally would), and the middleware reshapes it into the normalized `authorId`-only form the reducers in [Example 7](#7-two-normalized-slices-that-cross-reference-each-other-by-id) expect, before the action ever reaches `combineReducers`. This keeps the normalization logic in one place (the middleware) instead of duplicating "strip the nested author object" inside every reducer that might receive a `posts/added` action.
+
+## 18. Middleware order changes what a nested-payload transform sees
+
+```typescript
+// order A: normalize, then audit — auditLog records the NORMALIZED payload (authorId only)
+applyMiddleware(normalizeIncomingPost, auditMiddleware);
+
+// order B: audit, then normalize — auditLog records the RAW payload (nested author object)
+applyMiddleware(auditMiddleware, normalizeIncomingPost);
+```
+
+**How it works:** `applyMiddleware`'s arguments are chained left-to-right, so the *first* middleware listed is the outermost wrapper and the *last* is innermost, closest to the real reducer — in order A, `normalizeIncomingPost` calls `next(action)` first, so `auditMiddleware` (next in the chain) receives the already-transformed action; in order B it's the reverse. There's nothing about this package that picks a "correct" order for you — when middleware mutate the action shape (rather than just observing it, as plain logging does), the order you list them in `applyMiddleware` is itself part of your application's behavior, not an implementation detail.
+
+## 19. Testing a reducer that manages nested state in isolation
+
+```typescript
+test('user/setCity only replaces the address branch', () => {
+  const initial: UserState = { profile: { name: 'Ada' }, address: { city: 'old', zip: '00000' } };
+  const next = userReducer(initial, { type: 'user/setCity', city: 'new' });
+
+  expect(next.address.city).toBe('new');
+  expect(next.profile).toBe(initial.profile);  // reference unchanged — sibling branch untouched
+  expect(next.address).not.toBe(initial.address); // reference changed — this branch WAS touched
+});
+```
+
+**How it works:** testing nested-state reducers needs the same reference-equality assertions as testing any other reducer (see [Example 9 of the basic file](./05-state-management-basic.mdx#9-the-classic-nested-mutation-bug---what-not-to-do)), just applied at every level that's supposed to change *and* every level that isn't — `toBe` on `profile` is the test that would catch a reducer that accidentally spreads too eagerly (or, worse, mutates), while `not.toBe` on `address` is the test that would catch a reducer that forgot to spread `address` at all and just returned the same nested object back.
+
+## 20. Testing the nested-mutation bug actually fails the right assertion
+
+```typescript
+test('buggy reducer fails the address reference check', () => {
+  const initial: UserState = { profile: { name: 'Ada' }, address: { city: 'old', zip: '00000' } };
+  const next = buggyUserReducer(initial, { type: 'user/setCity', city: 'new' }); // mutates state.address.city directly
+
+  expect(next).not.toBe(initial);           // passes — buggy reducer does spread the top level
+  expect(next.address).not.toBe(initial.address); // FAILS — same object, because it was mutated in place, not replaced
+});
+```
+
+**How it works:** this is the automated version of [Basic #9](./05-state-management-basic.mdx#9-the-classic-nested-mutation-bug---what-not-to-do)'s nested-mutation bug — the *first* assertion alone (checking only the top-level reference) gives a false sense of correctness, since the buggy reducer's `{ ...state }` does produce a new top-level object; it's only the second assertion, checking the specific nested branch that should have changed, that catches the missing inner spread. A reducer test suite that only ever asserts `toEqual` (deep value equality) instead of `toBe` (reference equality) on the changed branch would pass this buggy reducer by accident, because the *values* end up correct even though the *references* are wrong.
+
+## 21. A "selectors colocated with their slice" convention
+
+```typescript
+// authorsSlice.ts
+export function authorsReducer(state: AuthorsState = { byId: {}, allIds: [] }, action: AuthorAction) { /* ... */ }
+export const selectAuthorById = (state: RootState, id: string) => state.authors.byId[id];
+export const selectAllAuthors = (state: RootState) => state.authors.allIds.map((id) => state.authors.byId[id]);
+```
+
+**How it works:** nothing in this package enforces or even recognizes a "slice" as a unit — `selectAuthorById` and `selectAllAuthors` are just plain functions placed in the same file as `authorsReducer` purely by convention, so that anything reading from the `authors` part of the tree goes through one of these two functions instead of writing `state.authors.byId[id]` inline at every call site. This convention is what `@headlesskit/state-management-toolkit`'s `createSlice` + `getSelectors()` formalizes and auto-generates for normalized entity state specifically.
+
+## 22. Connecting a store with nested state to the time-travel Inspector
+
+```typescript
+import { createStore, combineReducers } from '@headlesskit/state-management';
+import { installDevtools, createDevtoolsExtension } from '@headlesskit/state-management-devtools';
+
+const { inspectorStore } = installDevtools();
+const { extension } = createDevtoolsExtension(inspectorStore);
+
+const rootReducer = combineReducers({ posts: postsReducer, authors: authorsReducer });
+const store = createStore(rootReducer, extension({ name: 'blog-store' }));
+```
+
+**How it works:** `createDevtoolsExtension(inspectorStore)` returns an `extension` function that, called with `{ name }`, produces a real `StoreEnhancer` — the same kind of value `applyMiddleware(...)` produces — so it slots into `createStore`'s second argument exactly like any other enhancer, regardless of how nested the reducer tree behind it is. The Inspector has no special handling for `combineReducers`-shaped state versus flat state; it just records whatever `store.getState()` returns after each dispatch, nested or not.
+
+## 23. Observing a nested diff in the Inspector
+
+```typescript
+store.dispatch({ type: 'posts/added', post: { id: '1', title: 'Hello', authorId: 'a1' } });
+store.dispatch({ type: 'authors/removed', authorId: 'a1' }); // cascades: post '1' is also dropped, per Example 8
+
+// In the Inspector UI: select the "authors/removed" action.
+// The state diff panel shows TWO changed paths in one action:
+//   authors.byId.a1        (removed)
+//   posts.byId.1           (removed, via the cascade)
+```
+
+**How it works:** because `combineReducers` runs every slice reducer on every action, a single dispatch can change more than one top-level branch of the tree at once — the Inspector's diff view is just comparing the previous and next `getState()` snapshots key by key, so it surfaces *both* changed branches (`authors` and, thanks to the cascade in [Example 8](#8-cascading-a-delete-across-cross-referencing-slices), `posts`) under that one action, rather than attributing the action to a single slice. This is a useful way to actually *see* cross-slice cascades happening, as opposed to inferring them from reading reducer code.
+
+## 24. A minimal store enhancer that persists nested state to `localStorage`
+
+```typescript
+const withPersistence = (key: string): StoreEnhancer => (createStoreFn) => (reducer, preloadedState, enhancer) => {
+  const saved = localStorage.getItem(key);
+  const store = createStoreFn(reducer, saved ? JSON.parse(saved) : preloadedState, enhancer);
+  store.subscribe(() => localStorage.setItem(key, JSON.stringify(store.getState())));
+  return store;
+};
+
+const store = createStore(rootReducer, withPersistence('app-state'));
+```
+
+**How it works:** the enhancer hooks both ends of the store's lifecycle — it rewrites `preloadedState` *before* the store is created (so a saved nested tree hydrates the very first `getState()` call), and it subscribes its own listener *after* creation to persist on every subsequent dispatch, regardless of how deep the change was. `JSON.stringify`/`JSON.parse` round-trips the entire nested tree as plain data, which is exactly why state in this package needs to stay JSON-serializable (no class instances, `Map`s, or functions in state) if you want enhancers like this one to work.
+
+## 25. Testing a reducer in isolation
+
+```typescript
+test('increment adds one', () => {
+  const state = counterReducer({ count: 1 }, { type: 'increment' });
+  expect(state).toEqual({ count: 2 });
+});
+
+test('unknown action returns the same reference', () => {
+  const initial = { count: 1 };
+  expect(counterReducer(initial, { type: 'unrelated' })).toBe(initial);
+});
+```
+
+**How it works:** because a reducer is a pure function `(state, action) => state`, testing it needs no store, no dispatch, no mocking — just call it directly with whatever `state`/`action` you want to assert against. The second test specifically checks *reference* equality (`toBe`, not `toEqual`) to catch a reducer that accidentally returns a new object even when nothing changed — a bug that would make every subscriber think a change occurred.
+
+## 26. Dispatching from outside any framework
+
+```html
+<button id="inc">+1</button>
+<script type="module">
+  import { store } from './store.js';
+  document.getElementById('inc').addEventListener('click', () => {
+    store.dispatch({ type: 'increment' });
+  });
+  store.subscribe(() => {
+    document.getElementById('count').textContent = store.getState().count;
+  });
+</script>
+```
+
+**How it works:** there is nothing React-specific (or framework-specific at all) about this package — `dispatch` and `subscribe` work identically whether called from a React event handler, a vanilla `addEventListener`, a Node.js script, or a test file. This is the literal definition of "framework-agnostic": the store doesn't know or care what's reading from it.
+
+## 27. Action-type constants to avoid typos
+
+```typescript
+export const INCREMENT = 'counter/increment';
+export const DECREMENT = 'counter/decrement';
+
+// reducer
+case INCREMENT: return { count: state.count + 1 };
+
+// dispatch site
+store.dispatch({ type: INCREMENT });
+```
+
+**How it works:** purely a convention to avoid a typo'd string literal silently falling into a reducer's `default` branch (no error, just a no-op state update that's confusing to debug) — TypeScript narrowing on a discriminated `type` union (see [Basic #10](./05-state-management-basic.mdx#10-typing-actions-with-a-union)) catches the same class of mistake at compile time, so most TypeScript codebases use one or the other, not both.
+
+## 28. A framework-agnostic `subscribe`-driven render loop
+
+```typescript
+function render() {
+  const { count } = store.getState();
+  document.getElementById('app').innerHTML = `<p>${count}</p>`;
+}
+
+render();
+store.subscribe(render);
+```
+
+**How it works:** this is the entire "binding layer" any UI framework wrapper (React, Vue, vanilla DOM) ultimately reduces to — call `render()` once for the initial paint, then again every time `subscribe`'s listener fires. `useSyncExternalStore` (what `forms-react`/`state-management-simplify-react` use internally) is a more sophisticated version of exactly this pattern, adding concurrent-rendering-safe snapshotting on top.
+
+## 29. Guarding `updateNestedField` against a missing intermediate branch
+
+```typescript
+function updateNestedField<S>(state: S, path: string[], value: unknown): S {
+  if (path.length === 0) return value as S;
+  const [head, ...rest] = path;
+  const branch = (state as any)?.[head] ?? {}; // missing intermediate object -> treat as empty, don't throw
+  return { ...state, [head]: updateNestedField(branch, rest, value) };
+}
+```
+
+**How it works:** the unguarded version from [Example 9](#9-a-hand-rolled-updatenestedfieldstate-path-value-utility) throws a `TypeError` the moment any path segment doesn't exist yet on `state` (e.g. setting `settings.theme` before `settings` has ever been initialized) — `?? {}` makes the recursive call fall through to an empty object instead, so the spread chain still builds out every missing intermediate object on the way down. This only papers over *objects*; a missing array in the path still needs the array-aware handling discussed in [Example 11](#11-the-updatenestedfield-gap--paths-through-arrays).
+
+## 30. Graduating a normalized nested slice to `@headlesskit/state-management-toolkit`'s entity adapter
+
+```typescript
+// Before: this package, hand-rolled normalized slice (Example 6/7)
+function postsReducer(state: PostsState = { byId: {}, allIds: [] }, action: PostAction): PostsState {
+  switch (action.type) {
+    case 'posts/added': return { byId: { ...state.byId, [action.post.id]: action.post }, allIds: [...state.allIds, action.post.id] };
+    default: return state;
+  }
+}
+
+// After: createEntityAdapter generates the same byId/allIds maintenance, plus selectors
+import { createEntityAdapter, createSlice } from '@headlesskit/state-management-toolkit';
+
+const postsAdapter = createEntityAdapter<Post>();
+const postsSlice = createSlice({
+  name: 'posts',
+  initialState: postsAdapter.getInitialState(),
+  reducers: { postAdded: postsAdapter.addOne },
+});
+const { selectAll: selectAllPosts, selectById: selectPostById } = postsAdapter.getSelectors();
+```
+
+**How it works:** `postsAdapter.addOne` is a ready-made reducer function that performs the exact same "merge into `byId`, append to `allIds`" logic written out by hand in [Example 6](#6-a-normalized-entities-slice-by-hand), and `postsAdapter.getSelectors()` generates `selectAll`/`selectById`/`selectIds`/`selectEntities` so the lookups built manually in [Example 7](#7-two-normalized-slices-that-cross-reference-each-other-by-id) don't need to be written per-slice. Nothing about the normalized *shape* changes between the two versions — `{ ids: [...], entities: { ... } }` is the adapter's name for the same `{ byId, allIds }` idea — so a codebase can migrate one slice at a time without touching how other slices read or write their own state.

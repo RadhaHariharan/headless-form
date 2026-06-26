@@ -1,0 +1,77 @@
+# Lifted state
+
+**File:** `src/lifted-state.ts`
+
+The pure functions behind every connection's time-travel — given a `LiftedState` and a command, compute the next `LiftedState`. No I/O, no `window`, no React: this is the same model both replay strategies in [`createDevtoolsExtension`](./05-create-devtools-extension.mdx) build on.
+
+```typescript
+import {
+  applyLiftedAction,
+  recomputeStates,
+  createInitialLiftedState,
+  getEffectiveState,
+  diffShallowPatch,
+  patchStep,
+  capLiftedState,
+} from '@headlesskit/state-management-devtools';
+```
+
+## The model
+
+```typescript
+interface LiftedState {
+  actionsById: Record<number, ActionEntry>;
+  stagedActionIds: number[];      // dispatch order, excluding anything folded into committedState
+  skippedActionIds: number[];     // ids currently excluded from replay
+  committedState: unknown;        // the baseline every replay starts from
+  computedStates: ComputedState[]; // one entry per stagedActionIds index
+  currentStateIndex: number;      // index into computedStates; -1 = show committedState
+  nextActionId: number;
+  isLocked: boolean;
+  isPaused: boolean;
+}
+```
+
+This is the same "lifted reducer" shape real Redux DevTools time-travel uses: rather than storing "the current state," a connection stores the *entire replayable history* plus a pointer to which point in it is currently being viewed. Jumping to a previous action is just moving the pointer; skipping an action means recomputing every state after it without that action's effect.
+
+## createInitialLiftedState(committedState)
+
+Builds the empty `LiftedState` a connection starts from, or returns to on `reset`.
+
+## recomputeStates(liftedState, step)
+
+Replays every non-skipped staged action through `step`, starting from `committedState`, rebuilding `computedStates`. If `step` throws for a given action, that entry's `ComputedState` carries an `error` message and reuses the prior state — replay continues rather than aborting, so one bad action doesn't make the rest of history unreadable.
+
+## getEffectiveState(liftedState)
+
+Reads the state a UI should currently display: `committedState` when `currentStateIndex` is `-1`, otherwise `computedStates[currentStateIndex].state`.
+
+## applyLiftedAction(liftedState, action, step, initialCommittedState)
+
+The single entry point every time-travel command goes through:
+
+| `action.type` | Effect |
+|----------------|--------|
+| `PERFORM_ACTION` | Appends a new action (unless paused) and recomputes. Auto-follows the latest index unless locked. |
+| `RESET` | Returns to `createInitialLiftedState(initialCommittedState)` — the connection's *original* baseline. |
+| `COMMIT` | Folds `getEffectiveState(liftedState)` into a fresh `committedState`, clearing history. |
+| `ROLLBACK` | Clears history, keeping the current `committedState`. |
+| `REVERT` | Drops the most recently staged action and recomputes. |
+| `TOGGLE_ACTION` | Adds/removes an id from `skippedActionIds` and recomputes. |
+| `SWEEP` | Permanently drops every currently-skipped action and recomputes. |
+| `JUMP_TO_STATE` / `JUMP_TO_ACTION` | Moves `currentStateIndex` — no recompute needed. |
+| `IMPORT_STATE` | Replaces the lifted state wholesale, then recomputes (for safety, in case the imported history doesn't match the current `step`). |
+| `PAUSE_RECORDING` / `LOCK_CHANGES` | Flips `isPaused`/`isLocked`. |
+
+## diffShallowPatch(prev, next) and patchStep(state, entry)
+
+The replay strategy for connections with no reducer (zustand-style stores): `diffShallowPatch` computes which top-level keys changed (and marks removed keys as `undefined`) between two states; `patchStep` shallow-merges an entry's stored patch back onto a previous state. Replaying every non-skipped patch in order from `committedState` reconstructs the same sequence of states a real `set(partial)` call sequence would have produced — exact for additive/overwriting updates, approximate for relative ones (see [the overview's pitfalls](./01-overview.mdx#common-pitfalls)).
+
+## capLiftedState(liftedState, maxActions)
+
+Bounds memory by folding the oldest staged actions into `committedState` once a connection exceeds `maxActions` — used internally by [`createInspectorStore`](./03-create-inspector-store.mdx) on every write.
+
+## Common pitfalls
+
+- **`recomputeStates` always replays from scratch.** It's O(history length) per call, not incremental — fine for a devtools history capped at a few hundred entries, not something to call in a hot loop over unbounded data.
+- **`applyLiftedAction` is pure** — it returns a new `LiftedState` rather than mutating its input. If you're building a custom UI on top of these functions directly (rather than through `InspectorStore`), you own keeping a reference to the latest value yourself.

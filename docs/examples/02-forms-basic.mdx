@@ -1,0 +1,350 @@
+# Forms — Basic Examples
+
+Twenty-five examples covering one concept each, using [`@headlesskit/forms-react`](../forms-react/01-overview.mdx)'s `useForm` hook (a thin React wrapper over [`@headlesskit/forms`](../forms/01-overview.mdx)'s framework-agnostic `createFormStore`). See [Examples overview](./01-overview.mdx) for how to read these.
+
+---
+
+## 1. A single required text field
+
+```tsx
+import { useForm, isNotEmpty } from '@headlesskit/forms-react';
+
+function NameForm() {
+  const form = useForm({
+    mode: 'uncontrolled',
+    initialValues: { name: '' },
+    validate: { name: isNotEmpty('Name is required') },
+  });
+
+  return (
+    <form onSubmit={form.onSubmit((values) => console.log(values))}>
+      <input key={form.key('name')} {...form.getInputProps('name')} />
+      {form.errors.name && <span>{form.errors.name}</span>}
+      <button type="submit">Submit</button>
+    </form>
+  );
+}
+```
+
+**How it works:** `useForm` creates one form store per component instance and subscribes to it via `useSyncExternalStore`, so only fields whose *error/touched/dirty* status changes trigger a re-render — typing into an uncontrolled input does not re-render `NameForm` at all. `getInputProps('name')` returns `{ defaultValue, onChange, onBlur, error, ... }` wired to that exact path. Validation only runs when `form.onSubmit` is called (`validateInputOnChange`/`validateInputOnBlur` both default to `false`), so `form.errors.name` stays empty until the first submit attempt.
+
+## 2. Multiple fields with different validators
+
+```tsx
+import { useForm, isNotEmpty, isEmail } from '@headlesskit/forms-react';
+
+const form = useForm({
+  mode: 'uncontrolled',
+  initialValues: { name: '', email: '' },
+  validate: {
+    name: isNotEmpty('Name is required'),
+    email: isEmail('Enter a valid email'),
+  },
+});
+```
+
+**How it works:** `validate` accepts an object keyed by field path; each value is a `ValidationRule` — a small function `(value, values) => error | null` that `isNotEmpty`/`isEmail` build for you. On submit, every rule runs and the resulting `FormErrors` object is merged into `form.errors` in one batch, so the form re-renders exactly once even though two fields just gained errors simultaneously.
+
+## 3. Initial (default) values
+
+```tsx
+const form = useForm({
+  initialValues: { plan: 'free', seats: 1, newsletter: true },
+});
+
+form.getValues(); // { plan: 'free', seats: 1, newsletter: true }
+```
+
+**How it works:** `initialValues` seeds both the live value *and* the baseline `reset()` returns to. It's a `Partial<Values>`, so you can omit fields and they'll be `undefined` until set — useful when the real defaults arrive asynchronously (see the [transform values](./03-forms-medium.mdx) and [draft persistence](./04-forms-advanced.mdx) examples for what to do with that).
+
+## 4. Reading the latest values without subscribing to them
+
+```tsx
+function SubmitSummaryButton({ form }: { form: ReturnType<typeof useForm> }) {
+  const handleClick = () => {
+    alert(JSON.stringify(form.getValues()));
+  };
+  return <button onClick={handleClick}>Show current values</button>;
+}
+```
+
+**How it works:** in `mode: 'uncontrolled'` (the React default), `form.values` is a stable snapshot reference that does **not** update on every keystroke — only `form.getValues()` reads the true current value, by reaching into the underlying DOM-bound store rather than relying on a React re-render to have happened first. This is exactly why uncontrolled mode avoids re-rendering on typing: nothing needs `values` as a dependency.
+
+## 5. Controlled vs. uncontrolled mode
+
+```tsx
+// Uncontrolled (default for useForm): typing does not re-render the form.
+const fast = useForm({ mode: 'uncontrolled', initialValues: { q: '' } });
+
+// Controlled: values live in React state — every keystroke re-renders,
+// but form.values is always live/reactive, no getValues() needed.
+const reactive = useForm({ mode: 'controlled', initialValues: { q: '' } });
+reactive.values.q; // always current, safe to use directly in JSX
+```
+
+**How it works:** `mode` is the single switch between the package's two storage strategies. `'uncontrolled'` keeps values in an internal ref and only re-renders for error/touched/dirty/validating changes — `values`/`getValues()` diverge in freshness, as shown in example 4. `'controlled'` keeps values in React state instead, so `form.values` is always fresh but every `setFieldValue`/keystroke now triggers a full re-render of every component reading `form` — pick `'controlled'` only when you specifically need `values` to drive JSX reactively (e.g. a live character counter).
+
+## 6. A checkbox field
+
+```tsx
+const form = useForm({ initialValues: { acceptedTerms: false } });
+
+<input type="checkbox" {...form.getInputProps('acceptedTerms', { type: 'checkbox' })} />
+```
+
+**How it works:** passing `{ type: 'checkbox' }` changes which DOM property `getInputProps` wires up — `checked`/`onChange` reading `event.target.checked` instead of `value`/`event.target.value`. Without this option, a checkbox would receive a `value` prop instead of `checked`, which React would silently ignore for the visual check state.
+
+## 7. A radio group
+
+```tsx
+const form = useForm({ initialValues: { plan: 'free' } });
+
+{['free', 'pro', 'enterprise'].map((plan) => (
+  <label key={plan}>
+    <input type="radio" {...form.getInputProps('plan', { type: 'radio', value: plan })} />
+    {plan}
+  </label>
+))}
+```
+
+**How it works:** every radio in the group shares the same path (`'plan'`) but a different `value` option — `getInputProps` compares that option against the current field value to decide whether `checked` is `true` for *this specific* radio, so only one renders as selected at a time even though they're all bound to one field.
+
+## 8. Suppressing `error`/`onFocus`/`onBlur` from `getInputProps`
+
+```tsx
+// withError: false — no `error` key at all, useful when you render errors elsewhere.
+const { error, ...rest } = form.getInputProps('bio'); // error is always undefined here
+<input {...form.getInputProps('bio', { withError: false })} />;
+
+// withFocus: false — omits onFocus/onBlur (e.g. a read-only display input).
+<input {...form.getInputProps('summary', { withFocus: false })} />;
+```
+
+**How it works:** `withError` (default `true`) and `withFocus` (default `type !== 'radio'`) are the two boolean switches on `GetInputPropsOptions` that trim down the returned prop object — useful when a custom field component renders its error message from a different source (e.g. a schema-wide error list) and spreading an unused `error` prop onto a native `<input>` would trigger a React DOM warning.
+
+## 9. A number field with a range rule
+
+```tsx
+import { useForm, isInRange } from '@headlesskit/forms-react';
+
+const form = useForm({
+  initialValues: { seats: 1 },
+  validate: { seats: isInRange({ min: 1, max: 50 }, 'Must be between 1 and 50') },
+});
+
+<input type="number" {...form.getInputProps('seats')} />
+```
+
+**How it works:** `isInRange` doesn't know or care that the input is type `number` — by the time validation runs, `getInputProps`'s `onChange` has already coerced the DOM's string value through the field's last-known type, so `isInRange` compares against a real `number`, not the string `"5"`.
+
+## 10. Length validation with `hasLength`
+
+```tsx
+import { useForm, hasLength } from '@headlesskit/forms-react';
+
+const form = useForm({
+  initialValues: { username: '', pin: '' },
+  validate: {
+    username: hasLength({ min: 3, max: 20 }, 'Must be 3–20 characters'),
+    pin: hasLength(4, 'PIN must be exactly 4 digits'),
+  },
+});
+```
+
+**How it works:** `hasLength` accepts either an exact `number` (as for `pin`) or a `{ min?, max? }` range (as for `username`), and works on both strings (trimmed before measuring) and arrays — the same function validates a tag list's item count just as well as a username's character count, because both are measured by `.length`.
+
+## 11. Matching a regular expression with `matches`
+
+```tsx
+import { useForm, matches } from '@headlesskit/forms-react';
+
+const form = useForm({
+  initialValues: { phone: '' },
+  validate: { phone: matches(/^\d{10}$/, 'Enter a 10-digit phone number') },
+});
+```
+
+**How it works:** `matches` always fails closed for non-string values, then delegates the actual pattern test to `createStringValidator`'s `customPattern` option internally — so it shares the exact same regex-testing code path as `createStringValidator({ allowedCharacters: 'custom' })`, just pre-wired for the one-regex case.
+
+## 12. Validating JSON and rich-text content
+
+```tsx
+import { useForm, isJSONString, isNotEmptyHTML } from '@headlesskit/forms-react';
+
+const form = useForm({
+  initialValues: { config: '', bio: '<p><br></p>' },
+  validate: {
+    config: isJSONString('Must be valid JSON'),
+    bio: isNotEmptyHTML('Bio cannot be empty'),
+  },
+});
+```
+
+**How it works:** `isJSONString` runs the value through a real `JSON.parse` inside a `try`/`catch`, so malformed JSON (trailing commas, unquoted keys) fails just like it would in production code consuming that string. `isNotEmptyHTML` strips all `<tag>` markup with a regex before checking for leftover non-whitespace characters — so a WYSIWYG editor's empty-state output like `<p><br></p>` correctly fails even though the raw string is non-empty.
+
+## 13. Reading touched and dirty status
+
+```tsx
+const form = useForm({ initialValues: { bio: '' } });
+
+<input key={form.key('bio')} {...form.getInputProps('bio')} />
+{form.isDirty('bio') && <span>Unsaved changes</span>}
+```
+
+**How it works:** *dirty* means "the current value differs from the initial value" (computed by comparing against `initialValues`, not "has the user touched it"); *touched* means "the user has interacted with this field" (focused, per `touchTrigger: 'change'` by default, the first `onChange` counts). A field can be touched-but-not-dirty (typed the same value back) or dirty-but-not-touched (set programmatically via `setFieldValue`).
+
+## 14. Choosing the touch trigger: `'change'` vs. `'focus'`
+
+```tsx
+const form = useForm({
+  initialValues: { email: '' },
+  touchTrigger: 'focus', // touched as soon as the user tabs/clicks in, not after typing
+});
+```
+
+**How it works:** `touchTrigger` (default `'change'`) decides which DOM event flips a field's `isTouched` flag — `'change'` waits for the first edit, `'focus'` marks it touched the instant the input gains focus, even if the user immediately tabs away without typing. This matters for UI that shows "required" hints only after the user has had a chance to interact: `'focus'` is more eager, `'change'` is more forgiving of users who just glance at a field.
+
+## 15. Resetting the whole form
+
+```tsx
+<button type="button" onClick={() => form.reset()}>Reset</button>
+```
+
+**How it works:** `reset()` restores `values` to `initialValues`, clears `errors`, and resets `touched`/`dirty` to their initial state in one call. In uncontrolled mode, this also forces the bound `<input>`s to re-render with their `defaultValue` — which is exactly why every uncontrolled input needs `key={form.key(path)}`: changing the `key` is what makes React actually remount the input rather than leaving the DOM's own typed-in value in place.
+
+## 16. Resetting a single field
+
+```tsx
+<button type="button" onClick={() => form.resetField('email')}>Clear email</button>
+```
+
+**How it works:** scoped to one path — every other field's value, error, touched, and dirty state is untouched. Internally this is the same mechanism as `reset()` (restore from `initialValues`) but applied to one key instead of the whole `Values` object.
+
+## 17. Handling valid and invalid submissions
+
+```tsx
+<form
+  onSubmit={form.onSubmit(
+    (values) => api.submit(values),
+    (errors) => console.warn('Fix these fields first:', errors),
+  )}
+>
+```
+
+**How it works:** `onSubmit` returns a real `FormEventHandler` — calling it runs validation first; if every rule passes, your first callback runs with the (optionally [transformed](./03-forms-medium.mdx)) values, otherwise your second callback runs with the resulting `FormErrors` and the raw `Values`. Either way, `event.preventDefault()` is called according to `onSubmitPreventDefault` (default `'always'`), so the browser never does a full page navigation.
+
+## 18. Controlling when `preventDefault` runs
+
+```tsx
+const form = useForm({
+  initialValues: { search: '' },
+  onSubmitPreventDefault: 'validation-failed', // let a valid submit do a normal navigation
+});
+```
+
+**How it works:** `onSubmitPreventDefault` accepts `'always'` (default), `'never'`, or `'validation-failed'` — the last option only calls `event.preventDefault()` when validation actually fails, letting a successful submit fall through to the browser's native behavior (e.g. a GET search form that should genuinely navigate to `?q=...` on success, but stay put to show errors on failure).
+
+## 19. Disabling the submit button while submitting
+
+```tsx
+<form onSubmit={form.onSubmit(async (values) => {
+  form.setSubmitting(true);
+  try {
+    await api.submit(values);
+  } finally {
+    form.setSubmitting(false);
+  }
+})}>
+  <button type="submit" disabled={form.submitting}>
+    {form.submitting ? 'Submitting…' : 'Submit'}
+  </button>
+</form>
+```
+
+**How it works:** `submitting` is plain state on the form store — `useForm` doesn't set it for you automatically around an async `onValid` callback (it has no way to know your callback is async vs. sync), so you flip it yourself. Because it's part of the same reactive snapshot as `errors`/`validating`, toggling it triggers exactly the re-renders needed to disable/re-enable the button, nothing more.
+
+## 20. A nested object field: `address.city`
+
+```tsx
+const form = useForm({
+  initialValues: { name: '', address: { street: '', city: '', zip: '' } },
+  validate: { 'address.city': isNotEmpty('City is required') },
+});
+
+<input key={form.key('address.city')} {...form.getInputProps('address.city')} />
+{form.errors['address.city'] && <span>{form.errors['address.city']}</span>}
+```
+
+**How it works:** every path-accepting API (`getInputProps`, `key`, `validate`, `errors`, `setFieldValue`) uses plain dot-notation strings — `'address.city'` is not special syntax, it's exactly what `getPath`/`setPath` walk through internally (`obj.address.city`). `form.errors` is a *flat* record keyed by that full string, not a nested `{ address: { city: ... } }` shape, so you always read it back with the identical dotted string you validated with.
+
+## 21. Reading and setting a nested value directly
+
+```tsx
+const form = useForm({ initialValues: { address: { street: '', city: '' } } });
+
+form.getValues().address.city;            // read the whole nested object
+form.setFieldValue('address.city', 'Boston'); // patch just the one leaf
+```
+
+**How it works:** `setFieldValue('address.city', ...)` calls `setPath` under the hood, which returns a **new** `address` object (and a new root `values` object) with only `city` replaced — `street` is carried over by reference, untouched. This is why patching one nested leaf is cheap and why sibling leaves like `address.street` don't appear dirty afterward; only `'address.city'` (and, by extension, the `'address'` parent, since its contents changed) gets a new dirty/value.
+
+## 22. A tag list — array of primitive values
+
+```tsx
+const form = useForm({ initialValues: { tags: ['react', 'forms'] } });
+
+form.getValues().tags.map((tag, i) => (
+  <input key={form.key(`tags.${i}`)} {...form.getInputProps(`tags.${i}`)} />
+));
+<button type="button" onClick={() => form.insertListItem('tags', '')}>Add tag</button>
+<button type="button" onClick={() => form.removeListItem('tags', 0)}>Remove first</button>
+```
+
+**How it works:** array elements are addressed by their numeric index as a path segment (`'tags.0'`, `'tags.1'`, …) — `DeepKeys<Values>` types this as `` `tags.${number}` ``, so `tags.0` and `tags.1` are both valid, type-checked paths even though `tags` itself is just `string[]`. `insertListItem`/`removeListItem` shift every subsequent index, which is why each input needs `form.key(`tags.${i}`)` so React remounts the right slot after the array's length changes.
+
+## 23. A required checkbox with `createCheckboxValidator`
+
+```tsx
+import { useForm, createCheckboxValidator, toValidationRule } from '@headlesskit/forms-react';
+
+const acceptTerms = createCheckboxValidator({ mustBeTrue: true });
+
+const form = useForm({
+  initialValues: { acceptedTerms: false },
+  validate: { acceptedTerms: toValidationRule(acceptTerms, 'Terms') },
+});
+```
+
+**How it works:** `createCheckboxValidator`'s `mustBeTrue` option is the dedicated "must be checked" rule — it takes priority over the generic `required` check and produces a more specific message (`"Terms must be accepted"`). `toValidationRule` is the adapter that turns the field-validator's `(value, fieldName) => error` shape into the `(value, values, path) => error` shape `validate` expects, supplying `'Terms'` as the human-readable name instead of deriving one from the path.
+
+## 24. A date field with `createDateValidator`
+
+```tsx
+import { useForm, createDateValidator, toValidationRule } from '@headlesskit/forms-react';
+
+const dob = createDateValidator({ maxDate: '2010-01-01', inPast: true });
+
+const form = useForm({
+  initialValues: { birthDate: '' },
+  validate: { birthDate: toValidationRule(dob, 'Date of birth') },
+});
+
+<input type="date" {...form.getInputProps('birthDate')} />
+```
+
+**How it works:** `createDateValidator` parses bare `YYYY-MM-DD` strings as **local** midnight (via `parseLocalDate`), deliberately differing from the native `Date` constructor's UTC-midnight parsing — this avoids an off-by-one-day bug in negative-UTC timezones. `maxDate` and `inPast` are independent checks that both run: a date could pass `maxDate` (before 2010) but still need to also be in the past relative to today, and the first failing check wins.
+
+## 25. Required-from-an-array validation with `createArrayValidator`
+
+```tsx
+import { useForm, createArrayValidator, toValidationRule } from '@headlesskit/forms-react';
+
+const skillsRule = createArrayValidator({ minItems: 1, maxItems: 5, uniqueItems: true });
+
+const form = useForm({
+  initialValues: { skills: [] as string[] },
+  validate: { skills: toValidationRule(skillsRule, 'Skills') },
+});
+```
+
+**How it works:** when `minItems` is set, `createArrayValidator` defers its generic "required" message and instead reports the more specific `"Skills must have at least 1 item"` once the count check runs — so an empty array gets one clear message instead of two competing ones. `uniqueItems` is checked independently via a `Set` size comparison, so a 5-item array with one duplicate fails `uniqueItems` even though it already satisfies `minItems`/`maxItems`.

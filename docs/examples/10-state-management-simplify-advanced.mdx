@@ -1,0 +1,958 @@
+# State Management Simplify — Advanced Examples
+
+Fifty examples covering architecture-level concerns: full middleware stacks, SSR, testing, store factories, and performance. Assumes you've read [Basic](./08-state-management-simplify-basic.mdx) and [Medium](./09-state-management-simplify-medium.mdx).
+
+---
+
+## 1. The full middleware stack composed together
+
+```typescript
+import { createStore, devtools, persist, subscribeWithSelector, createJSONStorage } from '@headlesskit/state-management-simplify';
+
+const useStore = create<Store>()(
+  devtools(
+    persist(
+      subscribeWithSelector((set) => ({ count: 0, increment: () => set((s) => ({ count: s.count + 1 })) })),
+      { name: 'store', storage: createJSONStorage(() => sessionStorage) },
+    ),
+    { name: 'MyStore' },
+  ),
+);
+```
+
+**How it works:** middleware here composes by literal function nesting, innermost-first — `subscribeWithSelector` wraps your raw initializer, `persist` wraps *that*, and `devtools` wraps the result of `persist`. Each layer only modifies the `set`/`get`/store API the layer inside it receives; `devtools`, being outermost, is the one whose recorded actions [the Inspector](../state-management-devtools-react/01-overview.mdx) ultimately sees, after `persist`'s and `subscribeWithSelector`'s own internal bookkeeping has already run for that update.
+
+## 2. The `immer` middleware for ergonomic nested updates
+
+```typescript
+import { immer } from '@headlesskit/state-management-simplify';
+
+const useStore = create<{ todos: Todo[] }>()(
+  immer((set) => ({
+    todos: [],
+    toggle: (id: string) =>
+      set((state) => {
+        const todo = state.todos.find((t) => t.id === id);
+        if (todo) todo.done = !todo.done; // looks like a mutation...
+      }),
+  })),
+);
+```
+
+**How it works:** `immer` wraps `set` so that the function you pass to it can "mutate" a draft proxy directly (`todo.done = !todo.done`) instead of manually spreading every level of nesting (`{...state, todos: state.todos.map(...)}`) — Immer itself produces the real, structurally-shared immutable update underneath. This solves exactly the shallow-merge nesting gotcha from [Basic #7](./08-state-management-simplify-basic.mdx#7-a-shallow-merge-gotcha-with-nested-objects), generalized to arbitrarily deep state.
+
+## 3. An SSR-safe store
+
+```typescript
+import { unstable_ssrSafe } from '@headlesskit/state-management-simplify';
+
+const useStore = create<Store>()(unstable_ssrSafe((set) => ({ count: 0 })));
+```
+
+**How it works:** a store created once at module scope is normally *shared* across every request on the server — fine for a stateless server, but a correctness bug for SSR frameworks that reuse the same Node.js process across multiple concurrent requests, where one user's state could leak into another's render. `unstable_ssrSafe` changes the store's lifecycle so each render gets its own isolated state instead of one shared module-level instance; reach for it specifically when you see cross-request state bleed in an SSR environment, not as a default.
+
+## 4. A guided time-travel debugging session
+
+```typescript
+// 1. Dispatch a few actions through the live store.
+useStore.getState().increment();
+useStore.getState().increment();
+useStore.getState().increment();
+
+// 2. In the Inspector: toggle the checkbox on the *second* increment to skip it.
+// 3. Click "Sweep" to permanently remove it.
+useStore.getState().count; // 2 — only the two non-skipped increments applied
+```
+
+**How it works:** because this package has no reducer, skip/sweep here replay [a shallow patch per action](../state-management-devtools/06-lifted-state.mdx#diffshallowpatchprev-next-and-patchstepstate-entry) rather than re-running real logic — `diffShallowPatch` recorded `{ count: 1 }`, `{ count: 2 }`, `{ count: 3 }` as the three patches; skipping the middle one re-merges only the 1st and 3rd patches onto the committed baseline, landing on `{ count: 2 }`. This is exact for this additive case; see [the overview's pitfalls](../state-management-devtools/01-overview.mdx#common-pitfalls) for where patch replay diverges from true reducer replay.
+
+## 5. Writing your own middleware
+
+```typescript
+type Logger = <T>(f: StateCreator<T>, name?: string) => StateCreator<T>;
+
+const logger: Logger = (f, name) => (set, get, store) => {
+  const loggedSet: typeof set = (...args) => {
+    set(...args);
+    console.log(`${name ?? 'store'} updated:`, get());
+  };
+  return f(loggedSet, get, store);
+};
+
+const useStore = create<Store>()(logger((set) => ({ count: 0 }), 'counter'));
+```
+
+**How it works:** a middleware is a function that takes a `StateCreator` and returns another `StateCreator` — its whole job is to intercept the `set`/`get`/`store` triple before handing a (possibly wrapped) version to the real initializer `f`. Here, `loggedSet` calls the real `set` first, then logs — wrapping in the other order (log, then call `set`) would log the *previous* state instead of the one just written.
+
+## 6. Unit-testing a store with no React at all
+
+```typescript
+import { createStore } from '@headlesskit/state-management-simplify';
+
+test('increment increases count by one', () => {
+  const store = createStore<{ count: number; increment: () => void }>((set) => ({
+    count: 0,
+    increment: () => set((s) => ({ count: s.count + 1 })),
+  }));
+
+  store.getState().increment();
+  expect(store.getState().count).toBe(1);
+});
+```
+
+**How it works:** the vanilla `createStore` (from `@headlesskit/state-management-simplify`, not the `-react` package's `create`) is the exact same store the React hook wraps — testing against it directly needs no `render()`, no `act()`, and no DOM, exercising the real store logic your component will eventually use.
+
+## 7. A store factory for multiple independent instances
+
+```typescript
+function createTabStore(tabId: string) {
+  return create<{ scrollPosition: number; setScroll: (n: number) => void }>((set) => ({
+    scrollPosition: 0,
+    setScroll: (scrollPosition) => set({ scrollPosition }),
+  }));
+}
+
+const stores = new Map<string, ReturnType<typeof createTabStore>>();
+function getTabStore(tabId: string) {
+  if (!stores.has(tabId)) stores.set(tabId, createTabStore(tabId));
+  return stores.get(tabId)!;
+}
+```
+
+**How it works:** `create`/`createStore` are just functions you can call as many times as you want — there's no requirement (or built-in support) for a single global singleton, so a "store per tab/per-tenant/per-document-id" architecture is just a factory function plus your own registry (a `Map`, here) keyed however your domain needs.
+
+## 8. Memoizing an expensive derived selector
+
+```typescript
+import { useMemo } from 'react';
+
+function ExpensiveList() {
+  const items = useStore((state) => state.items);
+  const sorted = useMemo(() => [...items].sort(expensiveComparator), [items]);
+  return <ul>{sorted.map((item) => <li key={item.id}>{item.name}</li>)}</ul>;
+}
+```
+
+**How it works:** the store's own selector mechanism (`Object.is`/`useShallow`) only controls *whether the component re-renders* — it does nothing to prevent expensive work from re-running *inside* a render that does happen. Wrapping the actual sort in `useMemo`, keyed on the same `items` reference the selector already returns, skips recomputing the sort on renders triggered by *other* state changes (anything not `items`) while still recomputing it correctly when `items` itself changes.
+
+## 9. Optimistic updates with subscribe-based error recovery
+
+```typescript
+const useCartStore = create<{ items: Item[]; removeOptimistic: (id: string) => void }>((set, get) => ({
+  items: [],
+  removeOptimistic: (id) => {
+    const before = get().items;
+    set({ items: before.filter((i) => i.id !== id) });
+    api.removeItem(id).catch(() => set({ items: before })); // restore the captured snapshot
+  },
+}));
+```
+
+**How it works:** capturing `get().items` *before* the optimistic `set` (rather than trying to reconstruct what was removed afterward) gives the `.catch` rollback an exact, trivially correct snapshot to restore — the same technique as the [state-management package's optimistic-update example](./07-state-management-advanced.mdx#7-manual-optimistic-updates-with-rollback-middleware), just expressed as a closure variable instead of a middleware.
+
+## 10. Migrating a Redux-style reducer into a simplify store
+
+```typescript
+import { reducerMiddleware } from '@headlesskit/state-management-simplify';
+
+function counterReducer(state: { count: number }, action: { type: string }) {
+  switch (action.type) {
+    case 'increment': return { count: state.count + 1 };
+    default: return state;
+  }
+}
+
+const useStore = create<{ count: number; dispatch: (action: { type: string }) => void }>()(
+  reducerMiddleware(counterReducer, { count: 0 }),
+);
+
+useStore.getState().dispatch({ type: 'increment' });
+```
+
+**How it works:** `reducerMiddleware` is an adapter, not a rewrite — it keeps your existing pure `(state, action) => state` reducer completely unchanged and exposes a `dispatch` action on the resulting store that internally calls `set(reducer(get(), action))`. This is the path of least resistance for porting an existing `@headlesskit/state-management` (or Redux) reducer into this package's store shape without touching its logic at all.
+
+## 11. A typed helper to reduce store-creation boilerplate
+
+```typescript
+function createBoundedStore<T extends object>(initializer: StateCreator<T>, name: string) {
+  return create<T>()(devtools(persist(initializer, { name }), { name }));
+}
+
+const useSettingsStore = createBoundedStore<SettingsStore>((set) => ({ theme: 'light' }), 'settings');
+const useCartStore = createBoundedStore<CartStore>((set) => ({ items: [] }), 'cart');
+```
+
+**How it works:** once a codebase settles on "every store gets devtools + persist," wrapping that decision in one generic helper means each individual store's call site states only what's unique to it (its shape and a name) — the middleware stack itself lives in exactly one place, so changing it later (e.g. adding `subscribeWithSelector` everywhere) is a one-line change instead of a find-and-replace across every store file.
+
+## 12. Comparing render counts: whole-state vs. selector vs. `useShallow`
+
+```tsx
+function renderCounter(label: string) {
+  const count = useRef(0);
+  count.current += 1;
+  return <small>{label}: {count.current} renders</small>;
+}
+
+function WholeState() { useStore(); return renderCounter('whole-state'); }
+function Selector() { useStore((s) => s.count); return renderCounter('selector'); }
+function Shallow() { useStore(useShallow((s) => ({ count: s.count }))); return renderCounter('shallow'); }
+```
+
+**How it works:** dispatching an action that changes an *unrelated* field re-renders `WholeState` every time (it has no selector to filter on), leaves `Selector` untouched (its selected `count` value didn't change), and also leaves `Shallow` untouched (same reasoning, plus protection against the object-literal-identity issue from [Medium #9](./09-state-management-simplify-medium.mdx#9-useshallow-to-select-multiple-fields-at-once) if the selector returned more than one field). Running all three side by side against the same store and the same dispatched actions is the most direct way to *see* — not just read about — why selector-based subscriptions matter.
+
+## 13. Three middleware composed on a deeply nested, multi-domain store
+
+```typescript
+import { createStore, devtools, persist, createJSONStorage } from '@headlesskit/state-management-simplify';
+import { immer } from '@headlesskit/state-management-simplify';
+
+interface AppStore {
+  user: { profile: { name: string; email: string }; auth: { token: string | null } };
+  cart: { items: { id: string; qty: number }[] };
+  preferences: { theme: string; locale: string };
+}
+
+const useAppStore = create<AppStore>()(
+  devtools(
+    persist(
+      immer((set) => ({
+        user: { profile: { name: '', email: '' }, auth: { token: null } },
+        cart: { items: [] },
+        preferences: { theme: 'light', locale: 'en' },
+      })),
+      { name: 'app-store', storage: createJSONStorage(() => localStorage), partialize: (s) => ({ preferences: s.preferences }) },
+    ),
+    { name: 'AppStore' },
+  ),
+);
+
+useAppStore.setState((state) => {
+  state.cart.items.push({ id: 'sku1', qty: 1 }); // immer draft mutation, three layers in
+});
+```
+
+**How it works:** composition is still innermost-first function nesting — `immer` wraps the raw initializer so the action body can mutate a `Draft` directly even though `user`/`cart`/`preferences` are three independent nested domains; `persist` wraps the immer-wrapped result, so what it persists (filtered by `partialize` to just `preferences`) is the *already-immer-produced* immutable state, not a draft; `devtools`, outermost, records the final committed state after both inner layers have run. Each middleware only ever sees the `set`/`get`/`api` triple the layer inside it hands up — `devtools` has no idea `immer` is even in the stack, it just sees ordinary `set` calls producing ordinary state diffs.
+
+## 14. `unstable_ssrSafe`'s real mechanism: it throws, it doesn't isolate
+
+```typescript
+import { unstable_ssrSafe } from '@headlesskit/state-management-simplify';
+
+const useStore = create<{ count: number }>()(
+  unstable_ssrSafe((set) => ({ count: 0 /* no actions reference set at init time */ })),
+);
+
+// On the server (typeof window === 'undefined'):
+useStore.setState({ count: 1 }); // throws: "Cannot set state of store in SSR"
+```
+
+**How it works:** contrary to a "gives each request its own state" intuition, `ssrSafe`'s actual implementation (`packages/state-management-simplify/src/middleware/ssrSafe.ts`) detects `typeof window === 'undefined'` and, only in that case, replaces `api.setState` with a function that unconditionally throws — the initializer still runs and produces real initial state for SSR'd markup to read via `getState()`, but any code path that calls `set` during server rendering fails loudly instead of silently mutating a module-level store that's shared across concurrent requests. This converts an easy-to-miss cross-request state leak into an immediate, debuggable crash during development.
+
+## 15. A shopping cart with nested totals recomputed via immer drafts
+
+```typescript
+interface CartStore {
+  cart: { items: { id: string; price: number; qty: number }[]; total: number };
+  addItem: (id: string, price: number) => void;
+  setQty: (id: string, qty: number) => void;
+}
+
+const useCartStore = create<CartStore>()(
+  immer((set) => ({
+    cart: { items: [], total: 0 },
+    addItem: (id, price) =>
+      set((state) => {
+        state.cart.items.push({ id, price, qty: 1 });
+        state.cart.total = state.cart.items.reduce((sum, i) => sum + i.price * i.qty, 0);
+      }),
+    setQty: (id, qty) =>
+      set((state) => {
+        const item = state.cart.items.find((i) => i.id === id);
+        if (item) item.qty = qty;
+        state.cart.total = state.cart.items.reduce((sum, i) => sum + i.price * i.qty, 0);
+      }),
+  })),
+);
+```
+
+**How it works:** both actions push/mutate `state.cart.items` directly through the Immer draft and then recompute `state.cart.total` as a second mutation in the *same* draft — Immer batches every mutation made during one `produce` call into a single new immutable result, so even though this touches both `items` and `total` it still produces exactly one new `cart` object and triggers exactly one `set`. The equivalent plain-spread version would need to compute the new `items` array first, then build the new `cart` object referencing both the new `items` and the freshly computed `total` in one literal — Immer just defers that bookkeeping to the library.
+
+## 16. A hand-built normalized entity cache (no entity adapter exists in this package)
+
+```typescript
+interface TodosStore {
+  todos: { byId: Record<string, { id: string; text: string; done: boolean }>; allIds: string[] };
+  addTodo: (text: string) => void;
+  removeTodo: (id: string) => void;
+}
+
+const useTodosStore = create<TodosStore>((set) => ({
+  todos: { byId: {}, allIds: [] },
+  addTodo: (text) => {
+    const id = crypto.randomUUID();
+    set((state) => ({
+      todos: {
+        byId: { ...state.todos.byId, [id]: { id, text, done: false } },
+        allIds: [...state.todos.allIds, id],
+      },
+    }));
+  },
+  removeTodo: (id) =>
+    set((state) => {
+      const { [id]: _removed, ...rest } = state.todos.byId;
+      return { todos: { byId: rest, allIds: state.todos.allIds.filter((x) => x !== id) } };
+    }),
+}));
+```
+
+**How it works:** unlike Redux Toolkit's `createEntityAdapter`, this package ships no normalized-collection helper — `byId`/`allIds` is a convention you build by hand, and every action touching it has to keep both halves in sync manually (`addTodo` writes to both; `removeTodo` deletes from `byId` via destructuring-omission and filters `allIds`). The payoff over a plain array (as in [Basic #16](./08-state-management-simplify-basic.mdx#16-updating-one-item-inside-a-plain-array-field)) is O(1) lookup-by-id (`todos.byId[id]`) instead of an O(n) `.find`/`.map` scan, at the cost of this extra bookkeeping discipline on every write.
+
+## 17. Time-travel replay's patch-based limitation on nested relative updates
+
+```typescript
+interface CounterStore {
+  nested: { count: number };
+  incrementByCurrentCount: () => void; // relative: doubles the count
+}
+
+useStore.getState().incrementByCurrentCount(); // nested.count: 1 -> 2
+useStore.getState().incrementByCurrentCount(); // nested.count: 2 -> 4
+// Inspector: skip the FIRST action, then Sweep.
+useStore.getState().nested.count; // 4, NOT 2 — patch replay re-applies an absolute snapshot
+```
+
+**How it works:** [`diffShallowPatch`](../state-management-devtools/06-lifted-state.mdx#diffshallowpatchprev-next-and-patchstepstate-entry) recorded each step as the *resulting* `{ nested: { count: 2 } }` then `{ nested: { count: 4 } }` — absolute values, not "doubled the previous value." Skipping the first action and replaying only the second patch lands on whatever absolute value that patch said (`4`), not on what re-running `incrementByCurrentCount` against the post-skip state would have produced (`2`, doubling from `1`). This is the general case [Medium #4 in the devtools overview](../state-management-devtools/01-overview.mdx#common-pitfalls) warns about: patch replay is exact only when an action's effect doesn't depend on the state it's being replayed against, which a *relative* update like "double the current value" violates and an *additive* one (`count + 1`, as in [Advanced #4](#4-a-guided-time-travel-debugging-session)) does not.
+
+## 18. Testing a nested-state store slice in isolation
+
+```typescript
+import { createStore } from '@headlesskit/state-management-simplify';
+
+interface CartStore {
+  cart: { items: { id: string; qty: number }[] };
+  addItem: (id: string) => void;
+}
+
+function makeCartStore() {
+  return createStore<CartStore>((set) => ({
+    cart: { items: [] },
+    addItem: (id) =>
+      set((state) => ({ cart: { items: [...state.cart.items, { id, qty: 1 }] } })),
+  }));
+}
+
+test('addItem appends without mutating the previous items array', () => {
+  const store = makeCartStore();
+  const before = store.getState().cart.items;
+  store.getState().addItem('sku1');
+  expect(store.getState().cart.items).not.toBe(before); // new array reference
+  expect(before).toHaveLength(0);                        // original untouched
+});
+```
+
+**How it works:** `makeCartStore` is a factory (same pattern as [Example 7](#7-a-store-factory-for-multiple-independent-instances)) so each test gets a fresh, isolated store instance instead of sharing module-level state across test files — and asserting `not.toBe` on the nested `items` array, alongside checking the captured `before` reference is unchanged, verifies the *immutability* property itself (a new array was produced, the old one wasn't mutated in place), not just the resulting content, which is the failure mode nested-update bugs most often introduce.
+
+## 19. A store-factory pattern for per-tab nested state
+
+```typescript
+interface TabStore {
+  tab: { scroll: { x: number; y: number }; filters: { query: string } };
+  setScroll: (x: number, y: number) => void;
+}
+
+function createTabStore() {
+  return create<TabStore>((set) => ({
+    tab: { scroll: { x: 0, y: 0 }, filters: { query: '' } },
+    setScroll: (x, y) => set((state) => ({ tab: { ...state.tab, scroll: { x, y } } })),
+  }));
+}
+
+const tabStores = new Map<string, ReturnType<typeof createTabStore>>();
+function useTabStore(tabId: string) {
+  if (!tabStores.has(tabId)) tabStores.set(tabId, createTabStore());
+  return tabStores.get(tabId)!;
+}
+
+function ScrollIndicator({ tabId }: { tabId: string }) {
+  const useStore = useTabStore(tabId);
+  const { x, y } = useStore((state) => state.tab.scroll);
+  return <span>{x}, {y}</span>;
+}
+```
+
+**How it works:** extending [Example 7](#7-a-store-factory-for-multiple-independent-instances)'s factory pattern to nested state changes nothing about the factory mechanics — `createTabStore()` still just returns a brand-new hook with its own closure over a brand-new vanilla store each call — but it does mean every nested field (`scroll`, `filters`) is independently isolated per tab too, so two `ScrollIndicator`s for different `tabId`s never share, race on, or leak updates into each other's `scroll` state, unlike a single store keyed by `tabId` inside one nested object would risk if an action forgot to scope its update correctly.
+
+## 20. Render-count comparison: plain-spread vs. immer on a deep nested update
+
+```tsx
+function PlainSpreadList() {
+  const items = usePlainStore((state) => state.board.columns[0].tasks);
+  const renders = useRef(0); renders.current += 1;
+  return <p>plain: {renders.current} ({items.length} tasks)</p>;
+}
+
+function ImmerList() {
+  const items = useImmerStore((state) => state.board.columns[0].tasks);
+  const renders = useRef(0); renders.current += 1;
+  return <p>immer: {renders.current} ({items.length} tasks)</p>;
+}
+
+// Toggling a task in column[1] (not column[0]) on both stores:
+usePlainStore.getState().toggleTask('c2', 't5');
+useImmerStore.getState().toggleTask('c2', 't5');
+```
+
+**How it works:** both implementations re-render the same number of times here — neither produces a *correct*, reference-stable `columns[0]` when only `columns[1]` changed, because both `.map` over the full `columns` array (the plain version explicitly, immer's `produce` internally when any sibling element's container is touched at all only if your draft access pattern forces a copy). The actual lesson is the opposite of "immer reduces renders": immer's ergonomic win is fewer *lines of spread code*, not fewer renders — render counts are still governed entirely by whether the selector's returned reference changed, identical to [Example 12](#12-comparing-render-counts-whole-state-vs-selector-vs-useshallow)'s comparison, regardless of which middleware produced that reference.
+
+## 21. A composite settings panel tying `persist` and `devtools` together
+
+```typescript
+interface SettingsStore {
+  preferences: { theme: 'light' | 'dark'; fontSize: number; notifications: { email: boolean; push: boolean } };
+  setTheme: (theme: 'light' | 'dark') => void;
+  toggleEmailNotifications: () => void;
+}
+
+const useSettingsStore = create<SettingsStore>()(
+  devtools(
+    persist(
+      (set) => ({
+        preferences: { theme: 'light', fontSize: 14, notifications: { email: true, push: false } },
+        setTheme: (theme) => set((state) => ({ preferences: { ...state.preferences, theme } }), false, 'setTheme'),
+        toggleEmailNotifications: () =>
+          set(
+            (state) => ({
+              preferences: {
+                ...state.preferences,
+                notifications: { ...state.preferences.notifications, email: !state.preferences.notifications.email },
+              },
+            }),
+            false,
+            'toggleEmailNotifications',
+          ),
+      }),
+      { name: 'settings-panel', merge: (persisted, current) => ({ ...current, ...(persisted as object) }) },
+    ),
+    { name: 'SettingsPanel' },
+  ),
+);
+```
+
+**How it works:** the third argument to `set` (`'setTheme'`, `'toggleEmailNotifications'`) is `devtools`'s action-name parameter — without it, the Inspector would label every update from this store `anonymous` or whatever `findCallerName` manages to guess from the stack trace, but naming it explicitly makes the lifted-state history readable when several nested-preference actions fire close together. The explicit `merge` function here is the *default* behavior spelled out (`{ ...currentState, ...persistedState }`) but matters for documentation purposes: since `partialize` wasn't supplied, the entire `preferences` object — including the unpersisted-by-convention `notifications` sub-object — round-trips through storage as-is.
+
+## 22. SSR hydration timing: `persist` resolves after first paint
+
+```tsx
+function ThemedRoot({ children }: { children: React.ReactNode }) {
+  const hasHydrated = useSettingsStore.persist.hasHydrated();
+  const theme = useSettingsStore((state) => state.preferences.theme);
+
+  if (!hasHydrated) return <div data-theme="light">{children}</div>; // server default, always
+  return <div data-theme={theme}>{children}</div>;
+}
+```
+
+**How it works:** on the server, `persist`'s `hydrate()` either never runs (no `localStorage`) or the `storage` option itself throws inside `createJSONStorage`'s `try/catch`, returning `undefined` and leaving the initializer's plain defaults in place — so SSR-rendered markup always reflects `theme: 'light'`. On the client, hydration is asynchronous even when storage access itself is synchronous (the `Thenable` chain in `persist.ts` always resolves via `.then`), so there's a brief window after mount where `useSettingsStore.persist.hasHydrated()` is still `false` and the *real* persisted theme hasn't been applied yet — rendering the server-matching default until `hasHydrated()` flips avoids a hydration mismatch warning, then a one-time flash to the real theme once it resolves.
+
+## 23. Calling `rehydrate()` manually with `skipHydration`
+
+```typescript
+const useSettingsStore = create<SettingsStore>()(
+  persist((set) => ({ preferences: { theme: 'light' } }), {
+    name: 'settings',
+    skipHydration: true,
+  }),
+);
+
+// Later, at a point your app controls (e.g. after a route transition):
+useSettingsStore.persist.rehydrate();
+```
+
+**How it works:** `skipHydration: true` stops `persist` from calling its internal `hydrate()` automatically on store creation, leaving the initializer's plain defaults live until something calls `useSettingsStore.persist.rehydrate()` explicitly — useful in SSR frameworks where you want the server-rendered markup and the *first* client render to provably match (both showing defaults), only loading the real persisted state once you're certain it's safe (e.g. after the component tree that depends on it has mounted), trading one cycle of "wrong-looking" defaults for full control over exactly when the swap happens.
+
+## 24. Listening for hydration completion with `onFinishHydration`
+
+```typescript
+const unsubscribe = useSettingsStore.persist.onFinishHydration((state) => {
+  console.log('rehydrated preferences:', state.preferences);
+  analytics.identify({ theme: state.preferences.theme });
+});
+
+// later, once no longer needed:
+unsubscribe();
+```
+
+**How it works:** `onFinishHydration` (distinct from `onHydrate`, which fires *before* the storage read resolves) registers a callback invoked exactly once per `hydrate()` call, after `merge`'s result has already been committed via `set` — by the time this fires, `state.preferences` reflects whatever was actually loaded from storage, making it the right place for one-shot side effects that need the *final* rehydrated value (analytics identification, conditionally redirecting based on a persisted flag) rather than a `subscribe` listener, which would also fire on every later unrelated update.
+
+## 25. `devtools`'s `store` option to track several nested-state stores under one connection
+
+```typescript
+const useUserStore = create<{ user: { name: string } }>()(
+  devtools((set) => ({ user: { name: '' } }), { name: 'AppStores', store: 'user' }),
+);
+const useCartStore = create<{ cart: { items: Item[] } }>()(
+  devtools((set) => ({ cart: { items: [] } }), { name: 'AppStores', store: 'cart' }),
+);
+```
+
+**How it works:** passing the same `name` with different `store` values makes both stores share *one* Redux DevTools connection instead of opening two separate panels — the Inspector sees one combined state tree (`{ user: {...}, cart: {...} }`) where each store's actions are automatically prefixed (`user/anonymous`, `cart/anonymous`) and `JUMP_TO_STATE`/`IMPORT_STATE` route the relevant slice back to the matching store via `stateFromDevtools[store]`. Without `store`, each `devtools()` call opens its own untracked connection, which is simpler for one store but doesn't let you time-travel multiple independently-created nested stores together as if they were one app.
+
+## 26. Guarding against double-toggling a nested boolean during an in-flight async action
+
+```typescript
+interface FavoriteStore {
+  favorites: Record<string, { pending: boolean; isFavorite: boolean }>;
+  toggleFavorite: (id: string) => Promise<void>;
+}
+
+const useFavoriteStore = create<FavoriteStore>((set, get) => ({
+  favorites: {},
+  toggleFavorite: async (id) => {
+    if (get().favorites[id]?.pending) return; // already in flight, ignore
+    const current = get().favorites[id]?.isFavorite ?? false;
+    set((state) => ({ favorites: { ...state.favorites, [id]: { pending: true, isFavorite: current } } }));
+    const next = await api.toggleFavorite(id, !current);
+    set((state) => ({ favorites: { ...state.favorites, [id]: { pending: false, isFavorite: next } } }));
+  },
+}));
+```
+
+**How it works:** the `pending` flag lives *inside* the same nested record as `isFavorite`, so the guard at the top of `toggleFavorite` reads it via `get()` synchronously before doing anything else — a second rapid click while the first call's `await` is still outstanding hits the guard and returns immediately, rather than firing a second overlapping request whose resolution order against the first is not guaranteed. This is the nested-state version of the stale-response guard from [Medium #10](./09-state-management-simplify-medium.mdx#10-async-actions), generalized to also prevent the *request* from being sent twice, not just prevent a late response from clobbering a fresher one.
+
+## 27. Diffing nested state changes manually with `shallow` outside any subscription
+
+```typescript
+import { shallow } from '@headlesskit/state-management-simplify';
+
+function describeChange(prev: { cart: { items: Item[] } }, next: { cart: { items: Item[] } }) {
+  if (shallow(prev.cart, next.cart)) return 'cart unchanged';
+  if (prev.cart.items.length !== next.cart.items.length) return 'item count changed';
+  return 'item count same, contents changed';
+}
+```
+
+**How it works:** `shallow(prev.cart, next.cart)` compares the two `cart` objects' own enumerable keys with `Object.is` one level deep — since `items` is itself a nested array, a shallow comparison treats *any* new `items` array reference as "different," even one produced by a no-op `.map()`, so `shallow` returning `false` here only tells you "the `cart` object or its `items` reference changed," not what changed inside `items`; distinguishing "count changed" from "contents changed at the same count" needs the explicit follow-up checks shown, because `shallow` itself doesn't recurse.
+
+## 28. A nested-state store where `getInitialState()` is used for an "unsaved changes" diff
+
+```typescript
+interface EditorStore {
+  document: { title: string; body: string };
+}
+
+function hasUnsavedChanges(store: StoreApi<EditorStore>) {
+  const initial = store.getInitialState().document;
+  const current = store.getState().document;
+  return initial.title !== current.title || initial.body !== current.body;
+}
+```
+
+**How it works:** `getInitialState()` stays frozen at whatever the initializer produced on first call, completely unaffected by every `setState` since — comparing it field-by-field against the live `document` is a cheap way to answer "has the user changed anything since this document loaded" without maintaining a separate `isDirty` flag that every edit action would otherwise need to remember to set; the tradeoff is this only detects drift from the *original load*, not from the last *save*, which would require capturing a fresh snapshot at save time instead of relying on `getInitialState()`.
+
+## 29. Wrapping `persist` + `devtools` + `immer` in one typed factory for nested stores
+
+```typescript
+function createDomainStore<T extends object>(
+  initializer: StateCreator<T, [], []>,
+  name: string,
+) {
+  return create<T>()(
+    devtools(
+      persist(immer(initializer), { name }),
+      { name },
+    ),
+  );
+}
+
+const useCartStore = createDomainStore<{ cart: { items: Item[] } }>(
+  (set) => ({ cart: { items: [] } }),
+  'cart',
+);
+```
+
+**How it works:** extending [Example 11](#11-a-typed-helper-to-reduce-store-creation-boilerplate)'s two-middleware helper to three means the factory now also has to put `immer` *innermost* (closest to the raw initializer) so the actions it wraps can write `state.cart.items.push(...)`-style mutations, while `persist` and `devtools` outside it never need to know immer is involved — they just see ordinary state in, ordinary state out, because `immer`'s wrapping happens entirely inside the layer where drafts are converted back to real immutable objects before bubbling up.
+
+## 30. Detecting a hydration mismatch directly via `onRehydrateStorage`
+
+```typescript
+const useSettingsStore = create<SettingsStore>()(
+  persist((set) => ({ preferences: { theme: 'light', fontSize: 14 } }), {
+    name: 'settings',
+    onRehydrateStorage: (state) => {
+      console.log('about to rehydrate from:', state.preferences);
+      return (rehydratedState, error) => {
+        if (error) console.error('rehydration failed:', error);
+        else console.log('rehydrated to:', rehydratedState?.preferences);
+      };
+    },
+  }),
+);
+```
+
+**How it works:** `onRehydrateStorage` is called once, synchronously, *before* the storage read even starts, with whatever state currently exists (the initializer's defaults, on first load) — and it must return a second function, which `persist` then calls once the (possibly async) read settles, with either the merged result or the error. This two-phase shape exists specifically to bracket the asynchronous gap: the first call is your "about to hydrate" hook, the returned function is your "finished (or failed)" hook, and nothing else in this package's public API gives you a callback for that specific window.
+
+## 31. A nested `reducerMiddleware` migration where the reducer itself updates two domains
+
+```typescript
+import { reducerMiddleware } from '@headlesskit/state-management-simplify';
+
+interface AppState {
+  cart: { items: Item[] };
+  notifications: { count: number };
+}
+
+function appReducer(state: AppState, action: { type: string; item?: Item }) {
+  switch (action.type) {
+    case 'cart/add':
+      return {
+        ...state,
+        cart: { items: [...state.cart.items, action.item!] },
+        notifications: { count: state.notifications.count + 1 },
+      };
+    default:
+      return state;
+  }
+}
+
+const useAppStore = create<AppState & { dispatch: (a: { type: string; item?: Item }) => void }>()(
+  reducerMiddleware(appReducer, { cart: { items: [] }, notifications: { count: 0 } }),
+);
+```
+
+**How it works:** `reducerMiddleware`'s adapter calls `set((state) => reducer(state, action), false, action)` under the hood — a *single* `set` call per `dispatch`, so even though `appReducer` updates both `cart` and `notifications` in one switch case, subscribers only see one notification, not two, exactly like the manual batching pattern from [Example 24 of Medium](./09-state-management-simplify-medium.mdx#24-batching-multiple-nested-updates-into-a-single-set-call) — except here that batching is an inherent property of how reducers work (one action, one new state object) rather than something you had to remember to do by hand.
+
+## 32. Why patch-based replay is exact for nested *additive* updates but not nested *relative* ones
+
+```typescript
+// Additive (safe to skip/replay): each patch is independent of prior patches' values
+toggleNotification('email');  // patch: { preferences: { notifications: { email: true } } }
+toggleNotification('email');  // patch: { preferences: { notifications: { email: false } } }
+
+// Relative (unsafe to skip/replay): patch encodes an absolute result of a relative op
+multiplyFontSize(2);  // fontSize 14 -> 28, patch: { preferences: { fontSize: 28 } }
+multiplyFontSize(2);  // fontSize 28 -> 56, patch: { preferences: { fontSize: 56 } }
+// Skipping the first multiplyFontSize and keeping the second leaves fontSize at 56,
+// not 28 (what re-running "multiply by 2" against the skipped state would give).
+```
+
+**How it works:** both examples record absolute resulting values as their patches (this package has no reducer, so there's nothing else *to* record — see [Example 4](#4-a-guided-time-travel-debugging-session)) — the difference is purely about whether replaying patches out of original order coincidentally still produces a *correct* result. Toggling a boolean is its own inverse regardless of order/skipping, so additive-in-spirit cases like it tolerate skip/sweep correctly; "multiply by 2" is relative to whatever value preceded it, so skipping an earlier multiplication and keeping a later one's *absolute* patch produces a value the real (non-skipped) action sequence would never have reached.
+
+## 33. Testing that `persist`'s `partialize` excludes the right nested fields
+
+```typescript
+test('partialize keeps only preferences, drops session', () => {
+  const partialize = (state: { preferences: object; session: object }) => ({ preferences: state.preferences });
+  const state = { preferences: { theme: 'dark' }, session: { token: 'secret' } };
+
+  const persisted = partialize(state);
+
+  expect(persisted).toEqual({ preferences: { theme: 'dark' } });
+  expect(persisted).not.toHaveProperty('session');
+});
+```
+
+**How it works:** testing `partialize` as a plain function, independent of `persist`/`createStore` entirely, is possible because it's just `(state: S) => PersistedState` with no dependency on the store machinery around it — this catches the easy mistake of a `partialize` that accidentally includes a sensitive nested field (here, `session.token`) without needing to spin up `localStorage` mocks, an actual `persist`-wrapped store, or any async rehydration machinery at all.
+
+## 34. A nested-state store with optimistic update and structural rollback via immer
+
+```typescript
+const useBoardStore = create<{ board: { columns: Column[] } }>()(
+  immer((set, get) => ({
+    board: { columns: [] },
+    moveTask: (taskId: string, fromCol: string, toCol: string) => {
+      const snapshot = JSON.parse(JSON.stringify(get().board)); // deep snapshot for rollback
+      set((state) => {
+        const from = state.board.columns.find((c) => c.id === fromCol)!;
+        const to = state.board.columns.find((c) => c.id === toCol)!;
+        const idx = from.tasks.findIndex((t) => t.id === taskId);
+        const [task] = from.tasks.splice(idx, 1);
+        to.tasks.push(task);
+      });
+      api.moveTask(taskId, toCol).catch(() => set((state) => { state.board = snapshot; }));
+    },
+  })),
+);
+```
+
+**How it works:** the rollback snapshot has to be a *deep* copy (`JSON.parse(JSON.stringify(...))`) rather than just `get().board` by reference, because the optimistic `set` immediately after mutates nested arrays in place via the immer draft — if the snapshot were a live reference into the same nested structure, the "before" copy would already reflect the "after" state by the time the network call's `.catch` tried to use it for rollback. This is the nested-immer equivalent of [Medium #9 of the simplify-medium examples](./09-state-management-simplify-medium.mdx#9-optimistic-updates-with-subscribe-based-error-recovery), generalized from "capture a reference" to "capture a deep copy," because immer's in-place draft mutation specifically invalidates the reference-capture trick that works fine for plain-spread updates.
+
+## 35. Scoping `devtools` to development only via the `enabled` option
+
+```typescript
+const useStore = create<Store>()(
+  devtools((set) => ({ count: 0 }), {
+    name: 'counter',
+    enabled: process.env.NODE_ENV !== 'production',
+  }),
+);
+```
+
+**How it works:** `devtools`'s default already checks `import.meta.env?.MODE !== 'production'` before looking for `window.__HEADLESSKIT_DEVTOOLS_EXTENSION__`, but an explicit `enabled` option overrides that default entirely — useful in setups where `import.meta.env` isn't populated the way the default check expects (e.g. some non-Vite bundlers), or where you want devtools enabled in a staging build that the default's production check would otherwise disable. When `enabled` evaluates falsy, `devtoolsImpl` skips the extension lookup entirely and just calls `fn(set, get, api)` directly — the middleware becomes a no-op wrapper with zero runtime cost beyond one extra function call.
+
+## 36. A nested settings store where `setOptions` changes `persist` behavior at runtime
+
+```typescript
+useSettingsStore.persist.setOptions({
+  partialize: (state) => ({ preferences: { theme: state.preferences.theme } }), // now excludes fontSize too
+});
+
+useSettingsStore.getState().setFontSize(18); // this change will NOT be persisted anymore
+```
+
+**How it works:** `persist.setOptions` mutates the middleware's internal `options` object in place (merging `newOptions` over the existing ones) — it does not re-run hydration or touch already-stored data, it only changes what happens on the *next* write. Calling `setFontSize` after this point still updates the live nested `preferences.fontSize` in memory (because `setOptions` doesn't touch `set` itself), but the next `setItem()` call writes a `partialize`d snapshot that now omits `fontSize`, so a page reload after this point would restore `theme` but not the just-set `fontSize`.
+
+## 37. Clearing persisted nested state entirely with `clearStorage`
+
+```typescript
+function logOut() {
+  useSessionStore.persist.clearStorage();   // removes the storage entry
+  useSessionStore.setState(useSessionStore.getInitialState(), true); // resets in-memory state too
+}
+```
+
+**How it works:** `clearStorage()` only calls `storage.removeItem(options.name)` — it does *not* touch the live in-memory state, so calling it alone leaves the current session's nested fields (token, user profile, etc.) fully populated in memory until the next `set`/reload. Pairing it with a full reset via `getInitialState()` (see [Example 23 of Medium](./09-state-management-simplify-medium.mdx#23-resetting-one-nested-section-back-to-its-initial-value) for the partial-section version) is what actually clears both the persisted *and* the live nested session data on logout.
+
+## 38. A custom nested `merge` that deep-merges instead of shallow-replacing
+
+```typescript
+function deepMerge<T>(target: T, source: Partial<T>): T {
+  const result = { ...target };
+  for (const key of Object.keys(source) as (keyof T)[]) {
+    const sv = source[key];
+    result[key] = sv && typeof sv === 'object' && !Array.isArray(sv)
+      ? deepMerge(target[key], sv as any)
+      : (sv as T[keyof T]);
+  }
+  return result;
+}
+
+persist(initializer, {
+  name: 'preferences',
+  merge: (persisted, current) => deepMerge(current, persisted as object),
+});
+```
+
+**How it works:** the default `merge` (`{ ...currentState, ...persistedState }`) only merges at the *top level* — exactly the [Basic #13](./08-state-management-simplify-basic.mdx#13-a-shallow-merge-gotcha-with-nested-objects) gotcha, but applied during rehydration instead of a normal `set`. If `partialize` only ever saved a subset of a nested object's fields (as in [Medium #14](./09-state-management-simplify-medium.mdx#14-persists-partialize-selecting-one-nested-sub-path)), the default `merge` would wholesale-replace that nested object on load and lose the unpersisted sibling fields; a recursive `deepMerge` for `merge` instead preserves fields at every nesting level that weren't part of what was persisted, restoring the same guarantee `partialize` alone can't provide on its own.
+
+## 39. Why a `subscribeWithSelector` listener with `fireImmediately` matters for nested initial sync
+
+```typescript
+store.subscribe(
+  (state) => state.user.preferences.theme,
+  (theme) => document.documentElement.setAttribute('data-theme', theme),
+  { fireImmediately: true },
+);
+```
+
+**How it works:** without `fireImmediately`, the listener only runs on the *next* change to `user.preferences.theme` — the DOM attribute would stay unset (or stale) until something actually changes the theme, even though the store already has a real value for it right now. `fireImmediately: true` makes `subscribeWithSelector`'s implementation call the listener once synchronously at subscribe-time with `(currentSlice, currentSlice)` (same value as both arguments, since there's no real "previous" yet), syncing external systems like the DOM to nested store state immediately on setup rather than waiting for the first divergence.
+
+## 40. A nested-state store consumed identically from Node and the browser
+
+```typescript
+// shared-store.ts — works in both environments unchanged
+import { createStore } from '@headlesskit/state-management-simplify';
+
+export const configStore = createStore<{ config: { apiUrl: string; retries: number } }>(() => ({
+  config: { apiUrl: 'https://api.example.com', retries: 3 },
+}));
+```
+
+```typescript
+// server.ts (Node) and client.ts (browser) both do this identically:
+configStore.getState().config.apiUrl;
+```
+
+**How it works:** the vanilla `createStore` has zero DOM or browser-global dependencies (unlike `devtools`, which reaches for `window.__HEADLESSKIT_DEVTOOLS_EXTENSION__`, or `persist`'s default storage, which reaches for `window.localStorage`) — a store built with just `createStore` and no middleware that touches browser globals runs identically in a Node script, a server request handler, and a browser tab, which is exactly why middleware like `unstable_ssrSafe` (see [Example 14](#14-unstable-ssrsafes-real-mechanism-it-throws-it-doesnt-isolate)) exists only to guard the *specific* middleware/usage patterns that do assume a browser-like environment, not the base store itself.
+
+## 41. Snapshotting nested state for a "compare before/after" debug panel
+
+```tsx
+function DebugDiff() {
+  const [snapshot, setSnapshot] = useState<AppState | null>(null);
+  const current = useAppStore();
+
+  return (
+    <div>
+      <button onClick={() => setSnapshot(current)}>Take snapshot</button>
+      {snapshot && (
+        <pre>{JSON.stringify({ before: snapshot, after: current }, null, 2)}</pre>
+      )}
+    </div>
+  );
+}
+```
+
+**How it works:** `useAppStore()` with no selector (intentionally, unlike every other example here) subscribes to the *entire* nested state object specifically so this debug-only component can capture a full snapshot on demand — this is the one legitimate use case [Basic #10](./08-state-management-simplify-basic.mdx#10-whole-state-subscription-vs-a-selector) warns against for normal components (re-rendering on every change), accepted deliberately here because the component's entire purpose is observing the whole tree, not rendering a specific value efficiently.
+
+## 42. A nested nested-state store with computed validation surfaced as a selector
+
+```typescript
+interface CheckoutStore {
+  checkout: { shipping: { address: string }; payment: { cardNumber: string } };
+}
+
+const selectIsCheckoutValid = (state: CheckoutStore) =>
+  state.checkout.shipping.address.length > 0 && state.checkout.payment.cardNumber.length === 16;
+
+function SubmitButton() {
+  const isValid = useCheckoutStore(selectIsCheckoutValid);
+  return <button disabled={!isValid}>Place order</button>;
+}
+```
+
+**How it works:** `selectIsCheckoutValid` reaches into two separate nested branches (`shipping` and `payment`) and reduces them to one boolean — the component only re-renders when that boolean's *value* flips, not on every keystroke in either nested field, even though both fields live deep in the tree and change independently; this is [Medium #22](./09-state-management-simplify-medium.mdx#22-deriving-a-nested-computed-value-without-storing-it)'s pattern applied to validation instead of a numeric total, and scales to arbitrarily many nested branches feeding one derived flag without ever storing `isValid` itself.
+
+## 43. Avoiding an infinite update loop from a selector that always returns a new nested object
+
+```typescript
+// BUG: returns a new object every call, even when nothing changed
+const useBuggy = () => useStore((state) => ({ ...state.user, fullName: `${state.user.first} ${state.user.last}` }));
+
+// FIX: derive the primitive, or wrap with useShallow
+const useFixed = () => useStore((state) => `${state.user.first} ${state.user.last}`);
+```
+
+**How it works:** the buggy selector spreads `state.user` into a brand-new object on every single call, including calls triggered by completely unrelated state changes — `useSyncExternalStoreWithSelector` (which the hook is built on) re-invokes the selector on every store update to check whether to re-render, and a selector that *always* returns a new reference means it always looks changed, which can cascade into render loops if anything downstream (e.g. a `useEffect` keyed on the returned object) re-triggers a `set`. Returning a primitive (string concatenation) sidesteps the issue entirely since primitives compare by value under `Object.is`; `useShallow` is the fix when you genuinely need an object back.
+
+## 44. Comparing `useStore(store, selector)` against the bound hook for the same nested store
+
+```tsx
+import { useStore } from '@headlesskit/state-management-simplify-react';
+
+const cartStore = createStore<{ cart: { items: Item[] } }>(() => ({ cart: { items: [] } }));
+const useCartStore = create(/* same shape, separately bound */);
+
+function A() {
+  const count = useStore(cartStore, (s) => s.cart.items.length); // unbound form
+  return <span>{count}</span>;
+}
+function B() {
+  const count = useCartStore((s) => s.cart.items.length); // bound hook form
+  return <span>{count}</span>;
+}
+```
+
+**How it works:** `useStore(api, selector)` and a bound hook from `create` both ultimately call the exact same `useSyncExternalStoreWithSelector` machinery — `create` is implemented as a thin wrapper that closes over one specific store and forwards to this same `useStore`, so there's no behavioral or performance difference between the two forms for the *same underlying store*; the only reason to reach for the unbound form is when, as in [Medium #25](./09-state-management-simplify-medium.mdx#25-a-nested-state-store-consumed-by-both-a-vanilla-module-and-a-react-component), the store was already created with the vanilla `createStore` for non-React consumers and you don't want a second, redundant hook-bound store.
+
+## 45. Profiling: when `useShallow` costs more than it saves on a large nested object
+
+```typescript
+// Ten primitive fields nested under `profile` — useShallow does 10 Object.is checks every call
+const profile = useStore(useShallow((state) => ({ ...state.profile })));
+
+// Cheaper: select the one or two fields actually rendered
+const { displayName, avatarUrl } = useStore(
+  useShallow((state) => ({ displayName: state.profile.displayName, avatarUrl: state.profile.avatarUrl })),
+);
+```
+
+**How it works:** `useShallow`'s comparator runs one `Object.is` check per own-enumerable-key on the returned object — spreading an entire ten-field nested object into the selector means ten comparisons on every store update, most of them comparing fields the component doesn't even render. Narrowing the selector to only the two fields actually used cuts that to two comparisons and, more importantly, means the component stops re-rendering at all for changes to the other eight fields — `useShallow` makes returning an object *safe*, but it doesn't make returning more fields than you need *free*.
+
+## 46. A nested-state store driving a `<select>` whose options also come from the store
+
+```tsx
+interface FormStore {
+  form: { country: string; availableCountries: string[] };
+  setCountry: (c: string) => void;
+}
+
+function CountrySelect() {
+  const country = useFormStore((state) => state.form.country);
+  const options = useFormStore((state) => state.form.availableCountries);
+  const setCountry = useFormStore((state) => state.setCountry);
+
+  return (
+    <select value={country} onChange={(e) => setCountry(e.target.value)}>
+      {options.map((c) => <option key={c} value={c}>{c}</option>)}
+    </select>
+  );
+}
+```
+
+**How it works:** three separate selector calls, each on one nested leaf or array — `country` (a string), `availableCountries` (an array reference that's stable as long as the action that sets it doesn't recreate it unnecessarily), and `setCountry` (a stable function reference, since actions are defined once at store-creation time and never reassigned). Each subscription independently re-renders only when its own slice changes, so typing-driven re-renders elsewhere in a larger form store don't cascade into this component re-rendering, as long as `country` and `availableCountries` themselves are untouched by whatever else changed.
+
+## 47. A nested-state reducer ported via `reducerMiddleware`, then incrementally migrated off it
+
+```typescript
+// Step 1: port the existing reducer unchanged (see Example 31)
+const useStore = create<AppState & { dispatch: Dispatch }>()(reducerMiddleware(appReducer, initialState));
+
+// Step 2: add a *new* action that bypasses the reducer entirely, alongside dispatch
+useStore.setState((state) => ({ cart: { ...state.cart, items: [] } })); // direct set, no action type
+
+// Both coexist: old call sites keep using dispatch({ type: ... }), new code uses setState directly
+```
+
+**How it works:** `reducerMiddleware` only intercepts `dispatch` — it never touches `api.setState` itself, so a store built with it can still be updated with a plain `setState` call exactly as if the middleware weren't there at all. This means migrating *away* from a ported Redux reducer doesn't require a flag-day rewrite: new code can call `setState` directly for new nested sections while old call sites keep dispatching actions through the unchanged reducer, and both update paths land on the same underlying store state.
+
+## 48. Detecting which nested branch changed inside a whole-state `subscribe` callback
+
+```typescript
+store.subscribe((state, prevState) => {
+  if (state.user !== prevState.user) console.log('user branch changed');
+  if (state.cart !== prevState.cart) console.log('cart branch changed');
+  if (state.preferences !== prevState.preferences) console.log('preferences branch changed');
+});
+```
+
+**How it works:** because every nested-section update replaces that section's object reference (per the shallow-merge convention every example in this doc follows), a plain `!==` reference check per top-level key is sufficient to know which *branches* moved on a given update, without needing `subscribeWithSelector`'s per-field machinery — this only works because nothing in this store ever mutates `user`/`cart`/`preferences` in place; the moment something does (e.g. an `immer` action without producing a fresh top-level key), this reference-equality trick silently stops detecting that branch's changes.
+
+## 49. A nested-state store where `getState()` is called from a non-reactive ref callback
+
+```tsx
+function AutoSaveTextarea() {
+  const valueRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const { document } = useEditorStore.getState();
+      if (valueRef.current && valueRef.current.value !== document.body) {
+        api.autosave(document); // periodic poll, not a subscription
+      }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  return <textarea ref={valueRef} defaultValue={useEditorStore.getState().document.body} />;
+}
+```
+
+**How it works:** the `setInterval` callback reads `useEditorStore.getState().document` fresh on every tick rather than subscribing — this is a deliberate alternative to `subscribe`-driven autosave (which would fire on *every* keystroke) in favor of a fixed polling cadence, trading immediacy for a hard cap on how often the expensive `autosave` call can run; `getState()` being a synchronous, always-current read (per [Basic #5](./08-state-management-simplify-basic.mdx#5-reading-state-once-without-subscribing)) is what makes this poll-instead-of-subscribe approach work without needing the component itself to re-render on every store update.
+
+## 50. End-to-end: a deeply nested store with devtools, persist, immer, SSR-guard, and tests
+
+```typescript
+// store.ts
+import { createStore, devtools, persist, unstable_ssrSafe, immer, createJSONStorage } from '@headlesskit/state-management-simplify';
+
+interface AppStore {
+  user: { profile: { name: string }; auth: { token: string | null } };
+  cart: { items: { id: string; qty: number }[] };
+}
+
+export const makeAppStore = () =>
+  createStore<AppStore>()(
+    unstable_ssrSafe(
+      devtools(
+        persist(
+          immer((set) => ({
+            user: { profile: { name: '' }, auth: { token: null } },
+            cart: { items: [] },
+          })),
+          { name: 'app', storage: createJSONStorage(() => localStorage), partialize: (s) => ({ user: { profile: s.user.profile } }) },
+        ),
+        { name: 'App' },
+      ),
+    ),
+  );
+
+// store.test.ts
+test('cart item push via immer draft does not mutate the previous items array', () => {
+  const store = makeAppStore();
+  const before = store.getState().cart.items;
+  store.setState((state) => { state.cart.items.push({ id: 'sku1', qty: 1 }); });
+  expect(store.getState().cart.items).not.toBe(before);
+});
+```
+
+**How it works:** the composition order resolves the same way as [Example 13](#13-three-middleware-composed-on-a-deeply-nested-multi-domain-store), with `unstable_ssrSafe` added as the new outermost layer — it's the one middleware here that needs to see whether it's running server-side *before* anything else in the stack does anything, since its entire job is to swap `api.setState` for a throwing stub when `typeof window === 'undefined'`, and that swap has to happen before `devtools`/`persist`/`immer` capture their own references to `set`. The test exercises the vanilla `createStore` form directly (no React, no `unstable_ssrSafe` triggering since `window` exists in the test environment) — the same "test the vanilla store, get the real component's logic for free" principle as [Example 6](#6-unit-testing-a-store-with-no-react-at-all) and [Example 18](#18-testing-a-nested-state-store-slice-in-isolation), now exercised against the full five-deep middleware-and-nesting stack instead of a bare store.

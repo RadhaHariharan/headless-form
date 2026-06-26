@@ -1,0 +1,857 @@
+# Query Core — Advanced Examples
+
+Fifty examples covering deep infinite-pagination control, the full CRUD mutation suite with optimistic rollback, nested/complex cached data, cancellation, cross-cutting cache subscriptions, and the remaining option surface of [`@headlesskit/query-core`](../query-core/01-overview.mdx). These build directly on [Basic examples](./14-query-basic.mdx) and [Medium examples](./15-query-medium.mdx) — read those first if `QueryObserver`/`MutationObserver`/`QueryClient` fundamentals are unfamiliar. See [Examples overview](./01-overview.mdx) for how to read these.
+
+---
+
+## 1. `InfiniteQueryObserver` with a numeric page param
+
+```ts
+import { InfiniteQueryObserver } from '@headlesskit/query-core';
+
+const observer = new InfiniteQueryObserver(queryClient, {
+  queryKey: ['posts', 'infinite'],
+  queryFn: ({ pageParam }) =>
+    fetch(`/api/posts?page=${pageParam}&limit=20`).then((r) => r.json()),
+  initialPageParam: 1,
+  getNextPageParam: (lastPage, allPages) =>
+    lastPage.length === 20 ? allPages.length + 1 : undefined,
+});
+
+observer.subscribe((result) => {
+  console.log(result.data?.pages, result.hasNextPage);
+});
+```
+
+**How it works:** the initial fetch calls `queryFn` once with `pageParam: initialPageParam` (here `1`), and the resulting cache shape is always `{ pages: [...], pageParams: [...] }` — never a bare array, even for the first page. `getNextPageParam` receiving `allPages.length + 1` as the "next page number" only works because pages are numbered sequentially; for opaque cursors you'd instead read a cursor off `lastPage` itself (see example 2).
+
+## 2. `InfiniteQueryObserver` with an opaque cursor param
+
+```ts
+const observer = new InfiniteQueryObserver(queryClient, {
+  queryKey: ['comments', postId],
+  queryFn: ({ pageParam }) =>
+    fetch(`/api/comments?postId=${postId}&cursor=${pageParam ?? ''}`).then((r) => r.json()),
+  initialPageParam: null as string | null,
+  getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+});
+```
+
+**How it works:** unlike the numeric case, the next param isn't derived from page *count* — it's read directly off the server's response (`lastPage.nextCursor`), so the client never has to assume anything about ordering or page size. Returning `undefined` (or `null`) from `getNextPageParam` is what sets `hasNextPage: false`; a server that always includes a `nextCursor` field, even `null` at the end, makes this check reliable.
+
+## 3. Bidirectional infinite query with `getPreviousPageParam`
+
+```ts
+const observer = new InfiniteQueryObserver(queryClient, {
+  queryKey: ['chat-messages', roomId],
+  queryFn: ({ pageParam, direction }) =>
+    fetch(`/api/rooms/${roomId}/messages?cursor=${pageParam}&dir=${direction}`).then((r) => r.json()),
+  initialPageParam: 'latest',
+  getNextPageParam: (lastPage) => lastPage.olderCursor ?? undefined,
+  getPreviousPageParam: (firstPage) => firstPage.newerCursor ?? undefined,
+});
+
+await observer.fetchPreviousPage();
+```
+
+**How it works:** `getPreviousPageParam` is what makes `hasPreviousPage` non-`false` and `fetchPreviousPage()` meaningful — without supplying it, `InfiniteQueryObserver.createResult` skips the `hasPreviousPage` computation entirely (it checks `infiniteOptions.getPreviousPageParam != null` first). The `direction: 'backward'` value threaded into `queryFn`'s context lets a single endpoint serve both directions, e.g. a chat log loading older messages upward and newer ones downward from the same cursor-based API.
+
+## 4. `maxPages` capping with forward eviction
+
+```ts
+const observer = new InfiniteQueryObserver(queryClient, {
+  queryKey: ['feed'],
+  queryFn: ({ pageParam }) => fetchFeedPage(pageParam),
+  initialPageParam: 0,
+  getNextPageParam: (_last, allPages) => allPages.length,
+  maxPages: 3,
+});
+
+await observer.fetchNextPage();
+await observer.fetchNextPage();
+await observer.fetchNextPage();
+await observer.fetchNextPage(); // page 0 is now evicted
+```
+
+**How it works:** `maxPages` is passed straight into `addToEnd`/`addToStart` inside `infiniteQueryBehavior` — fetching forward beyond the cap calls `addToEnd(pages, page, maxPages)`, which appends the new page and then `slice(1)`s off the **oldest** page (index `0`) once `length > maxPages`. This bounds memory for infinite scroll, but means `getPreviousPageParam` on the remaining first page no longer has access to whatever was evicted — refetching from scratch is the only way back.
+
+## 5. `maxPages` with backward eviction
+
+```ts
+const observer = new InfiniteQueryObserver(queryClient, {
+  queryKey: ['chat-messages', roomId],
+  queryFn: ({ pageParam, direction }) => fetchMessages(roomId, pageParam, direction),
+  initialPageParam: 'latest',
+  getNextPageParam: (lastPage) => lastPage.olderCursor,
+  getPreviousPageParam: (firstPage) => firstPage.newerCursor,
+  maxPages: 5,
+});
+
+await observer.fetchPreviousPage(); // newest page is added to the front
+// once 5 pages are cached, the next fetchPreviousPage() evicts the OLDEST (last) page
+```
+
+**How it works:** a `'backward'` fetch calls `buildNewPages(..., isFetchingNextPage: false)`, which uses `addToStart` — the new page is unshifted onto the front, and once the array exceeds `maxPages` it's `slice(0, -1)`'d, dropping the page at the **end** (the oldest one, since this query loads newest-first). Eviction direction always mirrors fetch direction: forward fetches evict from the start, backward fetches evict from the end.
+
+## 6. `fetchNextPage` with `{ cancelRefetch }`
+
+```ts
+await observer.fetchNextPage({ cancelRefetch: false });
+```
+
+**How it works:** `fetchNextPage` forwards its options straight into the underlying `fetch()` call, which defaults `cancelRefetch: true`. Passing `false` means that if a fetch (initial load, refetch, or another `fetchNextPage`) is already in flight for this query, the new request is *not* allowed to cancel it — instead `fetch()` returns the existing in-flight promise rather than racing two requests, useful when rapid scroll events would otherwise fire `fetchNextPage` repeatedly before the first page even lands.
+
+## 7. `fetchPreviousPage` with `{ cancelRefetch }`
+
+```ts
+const result = await observer.fetchPreviousPage({ cancelRefetch: true });
+console.log(result.data?.pages[0]); // newly-prepended page
+```
+
+**How it works:** `{ cancelRefetch: true }` (the default) means a previous-page fetch will cancel any other in-flight fetch on this same query before starting — important when a user scrolls up rapidly, since without cancellation two overlapping `fetchPreviousPage` calls could both prepend pages out of order. The promise resolves with the full `InfiniteQueryObserverResult`, including the updated `data.pages` array, not just the newly-fetched page.
+
+## 8. Deriving a flattened list from `data.pages`
+
+```ts
+const observer = new InfiniteQueryObserver(queryClient, {
+  queryKey: ['posts', 'infinite'],
+  queryFn: ({ pageParam }) => fetchPosts({ page: pageParam }),
+  initialPageParam: 1,
+  getNextPageParam: (last, all) => (last.length === 20 ? all.length + 1 : undefined),
+  select: (data) => ({
+    ...data,
+    flatPosts: data.pages.flat(),
+  }),
+});
+
+observer.subscribe((result) => {
+  console.log(result.data?.flatPosts.length);
+});
+```
+
+**How it works:** `select` on an infinite query receives the whole `InfiniteData<TQueryData>` shape (`{ pages, pageParams }`), not a single page — flattening here happens once per `select` invocation, and `select`'s own memoization (same caveats as example 16 in [basic examples](./14-query-basic.mdx)) means the flattened array isn't recomputed unless `data.pages`'s reference actually changed. Returning an object that *spreads* `data` rather than just the flat array preserves `pageParams` for consumers that still need pagination cursors alongside the flattened list.
+
+## 9. Full CRUD: POST (create) with list invalidation
+
+```ts
+const createPost = new MutationObserver(queryClient, {
+  mutationFn: (newPost: { title: string; body: string }) =>
+    fetch('/api/posts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newPost),
+    }).then((r) => r.json()),
+  onSuccess: () => {
+    queryClient.invalidateQueries({ queryKey: ['posts'] });
+  },
+});
+
+await createPost.mutate({ title: 'New post', body: 'Content' });
+```
+
+**How it works:** invalidating the broad `['posts']` prefix (no `exact`) after a create is the safest default — a new resource could affect any list view (paginated, filtered, sorted) keyed somewhere under `['posts', ...]`, and enumerating every variant key by hand is error-prone. The tradeoff versus `setQueryData` (used for PUT in example 11) is an extra round-trip, which is acceptable here since a freshly-created resource's correct position within an existing list usually isn't knowable client-side anyway (sort order, server-assigned ID, etc).
+
+## 10. Full CRUD: PATCH (partial update) with list invalidation
+
+```ts
+const patchPost = new MutationObserver(queryClient, {
+  mutationFn: ({ id, ...patch }: { id: number; title?: string }) =>
+    fetch(`/api/posts/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    }).then((r) => r.json()),
+  onSuccess: (_data, variables) => {
+    queryClient.invalidateQueries({ queryKey: ['posts', variables.id] });
+    queryClient.invalidateQueries({ queryKey: ['posts'], exact: true });
+  },
+});
+
+await patchPost.mutate({ id: 42, title: 'Patched title' });
+```
+
+**How it works:** invalidating the detail key (`['posts', 42]`) ensures anyone viewing that single post's detail view refetches, while the separate `exact: true` invalidation of `['posts']` itself only refetches the bare list query, not every detail key that happens to share the prefix. Splitting the two invalidations like this avoids accidentally re-fetching every other post's detail query just because one post changed.
+
+## 11. Full CRUD: PUT (full replace) writing the response into cache
+
+```ts
+const putPost = new MutationObserver(queryClient, {
+  mutationFn: (post: { id: number; title: string; body: string }) =>
+    fetch(`/api/posts/${post.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(post),
+    }).then((r) => r.json()),
+  onSuccess: (saved) => {
+    queryClient.setQueryData(['posts', saved.id], saved);
+    queryClient.invalidateQueries({ queryKey: ['posts'], exact: true });
+  },
+});
+
+await putPost.mutate({ id: 42, title: 'Replaced', body: 'Whole new body' });
+```
+
+**How it works:** because PUT semantics guarantee the response is the complete, authoritative replacement resource, writing it straight into `setQueryData` for the detail key is correct and skips a redundant GET — only the list query (which doesn't have the full replaced object) needs the cheaper invalidate-and-refetch path.
+
+## 12. Full CRUD: DELETE removing detail and syncing the list
+
+```ts
+const deletePost = new MutationObserver(queryClient, {
+  mutationFn: (id: number) =>
+    fetch(`/api/posts/${id}`, { method: 'DELETE' }).then(() => id),
+  onSuccess: (id) => {
+    queryClient.removeQueries({ queryKey: ['posts', id] });
+    queryClient.setQueryData(['posts'], (old?: Array<{ id: number }>) =>
+      old?.filter((p) => p.id !== id),
+    );
+  },
+});
+
+await deletePost.mutate(42);
+```
+
+**How it works:** rather than invalidating the list (which would trigger a network refetch), this surgically removes the deleted item from the cached list array via a `setQueryData` updater function — instant UI update, no round-trip, correct as long as the client already has an accurate copy of the list. `removeQueries` for the detail key prevents a deleted resource's detail query from lingering in cache and going stale forever with no observer to refresh it.
+
+## 13. Optimistic POST (create) with rollback
+
+```ts
+const createPostOptimistic = new MutationObserver(queryClient, {
+  mutationFn: (newPost: { title: string; body: string }) => api.createPost(newPost),
+  onMutate: async (newPost) => {
+    await queryClient.cancelQueries({ queryKey: ['posts'] });
+    const previous = queryClient.getQueryData<Array<any>>(['posts']);
+    const optimisticPost = { ...newPost, id: `temp-${Date.now()}`, _optimistic: true };
+    queryClient.setQueryData(['posts'], (old: Array<any> = []) => [...old, optimisticPost]);
+    return { previous, optimisticPost };
+  },
+  onError: (_err, _vars, context) => {
+    if (context?.previous !== undefined) {
+      queryClient.setQueryData(['posts'], context.previous);
+    }
+  },
+  onSuccess: (saved, _vars, context) => {
+    queryClient.setQueryData(['posts'], (old: Array<any> = []) =>
+      old.map((p) => (p === context?.optimisticPost ? saved : p)),
+    );
+  },
+});
+```
+
+**How it works:** the temporary client-generated `id` (and an `_optimistic` flag) lets the UI render the new item immediately while distinguishing it from server-confirmed items if needed; `onSuccess` then swaps the placeholder object for the server's real response by reference equality against `context.optimisticPost`, rather than re-fetching. `onError`'s rollback restores the entire previous array wholesale — simpler and safer than trying to surgically remove just the optimistic item, since the array reference may have changed for unrelated reasons between `onMutate` and the failure.
+
+## 14. Deeply nested query data with `select` projecting a slice
+
+```ts
+const observer = new QueryObserver(queryClient, {
+  queryKey: ['profile', userId],
+  queryFn: () => fetchProfile(userId),
+  // server shape: { user: { profile: { addresses: [{ city, zip }, ...] } } }
+  select: (data) => data.user.profile.addresses,
+});
+
+observer.subscribe((result) => {
+  console.log(result.data); // just the addresses array
+});
+```
+
+**How it works:** `select` runs against the full cached object every time `state.data` changes by reference, but only the *projected* value is exposed to this observer's subscribers — other observers on the same `['profile', userId]` query with a different (or no) `select` still see the full nested shape, since selection happens per-observer, not in the shared cache entry. This is the standard way to avoid re-rendering on changes deep in the object that don't affect the slice a particular UI actually reads.
+
+## 15. Immutably patching a deep path with `setQueryData`
+
+```ts
+queryClient.setQueryData(
+  ['profile', userId],
+  (old: { user: { profile: { addresses: Array<{ id: number; city: string }> } } } | undefined) => {
+    if (!old) return old;
+    return {
+      ...old,
+      user: {
+        ...old.user,
+        profile: {
+          ...old.user.profile,
+          addresses: old.user.profile.addresses.map((addr) =>
+            addr.id === 7 ? { ...addr, city: 'New City' } : addr,
+          ),
+        },
+      },
+    };
+  },
+);
+```
+
+**How it works:** the updater function receives the current cached value and must return a *new* top-level reference for `structuralSharing` to detect a change — each nesting level here is spread rather than mutated in place specifically so that unrelated branches of the object (e.g. `old.user.someOtherField`) keep their original references, letting consumers that only read those branches skip re-rendering. Returning `old` unchanged when `old` is `undefined` avoids crashing when no data has been cached yet for this key.
+
+## 16. Optimistic insert into a cached infinite list
+
+```ts
+queryClient.setQueryData(
+  ['feed'],
+  (old: { pages: Array<Array<{ id: string }>>; pageParams: Array<number> } | undefined) => {
+    if (!old) return old;
+    const newItem = { id: `temp-${Date.now()}`, text: 'Posting…' };
+    return {
+      ...old,
+      pages: [[newItem, ...old.pages[0]], ...old.pages.slice(1)],
+    };
+  },
+);
+```
+
+**How it works:** the update only touches `pages[0]` (the first/newest page in a newest-first feed) and rebuilds the outer `pages` array with a new array reference for that one page — the remaining pages keep their original references untouched, so any per-page memoization downstream isn't invalidated unnecessarily. `pageParams` is left as-is since inserting an item doesn't change which cursors were used to fetch existing pages.
+
+## 17. Optimistic removal from a cached infinite list
+
+```ts
+function removeItemFromInfiniteList(itemId: string) {
+  queryClient.setQueryData(
+    ['feed'],
+    (old: { pages: Array<Array<{ id: string }>>; pageParams: Array<unknown> } | undefined) => {
+      if (!old) return old;
+      return {
+        ...old,
+        pages: old.pages.map((page) => page.filter((item) => item.id !== itemId)),
+      };
+    },
+  );
+}
+```
+
+**How it works:** `.map` over `pages` produces a new outer array, and `.filter` on each page produces a new array for *every* page even if only one page actually contained the removed item — slightly wasteful but simpler and still correct, since `structuralSharing`'s deep comparison will still detect which pages are actually unchanged in content even though their array reference changed. For very large page counts, filtering only the page known to contain the item (tracked separately) avoids the redundant array allocations.
+
+## 18. Query cancellation via the injected `AbortSignal`
+
+```ts
+const observer = new QueryObserver(queryClient, {
+  queryKey: ['search', term],
+  queryFn: async ({ signal }) => {
+    const res = await fetch(`/api/search?q=${term}`, { signal });
+    return res.json();
+  },
+});
+```
+
+**How it works:** the moment `queryFn` reads `context.signal` (passing it to `fetch`), `addConsumeAwareSignal`'s lazy getter flips an internal "consumed" flag — this is what determines whether a later cancellation (e.g. the observer unmounting, or a new search firing before this one resolves) calls `retryer.cancel()` (true abort, which `fetch` honors) versus `cancelRetry()` (which only stops *future* retries, leaving an already-running unabortable request to finish in the background and have its result discarded). A `queryFn` that never reads `signal` can never be truly aborted at the network layer — see [Query internals](../query-core/04-query.mdx) for the full mechanism.
+
+## 19. Manually cancelling an in-flight query
+
+```ts
+const observer = new QueryObserver(queryClient, {
+  queryKey: ['report', reportId],
+  queryFn: ({ signal }) => generateReport(reportId, { signal }),
+});
+
+observer.subscribe(() => {});
+// user navigates away before the report finishes:
+queryClient.getQueryCache().find({ queryKey: ['report', reportId] })?.cancel();
+```
+
+**How it works:** `Query#cancel()` is the lower-level primitive that `removeObserver()` and `refetch({ cancelRefetch: true })` both call internally — invoking it directly is useful when you need to cancel a query that no observer is currently unsubscribing from (e.g. a route-level abort on navigation, independent of any specific component's lifecycle). `cancel()` defaults `revert: true`, resetting `state.data` back to what it was before this fetch attempt began, which matters if the in-flight fetch had already started mutating fetch-related state.
+
+## 20. Parallel queries via `Promise.all` with `fetchQuery`
+
+```ts
+const [user, posts, settings] = await Promise.all([
+  queryClient.fetchQuery({ queryKey: ['user', userId], queryFn: () => fetchUser(userId) }),
+  queryClient.fetchQuery({ queryKey: ['posts', userId], queryFn: () => fetchUserPosts(userId) }),
+  queryClient.fetchQuery({ queryKey: ['settings', userId], queryFn: () => fetchSettings(userId) }),
+]);
+```
+
+**How it works:** each `fetchQuery` call independently checks its own cache entry's staleness and either resolves instantly from cache or fires its own network request — `Promise.all` here is just standard JS concurrency, not a `query-core` feature, but it's the idiomatic way to kick off several unrelated cache-backed fetches at once without an observer or component tree involved, e.g. during SSR data loading or a route loader.
+
+## 21. Parallel queries where one depends on the result of another
+
+```ts
+async function loadUserAndOrders(userId: number) {
+  const user = await queryClient.fetchQuery({
+    queryKey: ['user', userId],
+    queryFn: () => fetchUser(userId),
+  });
+  const [orders, invoices] = await Promise.all([
+    queryClient.fetchQuery({
+      queryKey: ['orders', user.accountId],
+      queryFn: () => fetchOrders(user.accountId),
+    }),
+    queryClient.fetchQuery({
+      queryKey: ['invoices', user.accountId],
+      queryFn: () => fetchInvoices(user.accountId),
+    }),
+  ]);
+  return { user, orders, invoices };
+}
+```
+
+**How it works:** the dependent fetch must `await` sequentially (there's no way around it — `user.accountId` doesn't exist until the first promise settles), but once available, the two queries that both depend on it run truly in parallel rather than serially. This is the imperative, observer-free equivalent of the `enabled`-gated dependent-query pattern from [medium example 26](./15-query-medium.mdx) — appropriate outside a long-lived component context, like a one-shot data loader.
+
+## 22. Subscribing to the whole `QueryCache` for a global loading indicator
+
+```ts
+const queryCache = queryClient.getQueryCache();
+
+const unsubscribe = queryCache.subscribe((event) => {
+  if (event.type === 'updated' || event.type === 'added' || event.type === 'removed') {
+    const isAnyFetching = queryClient.isFetching() > 0;
+    updateGlobalLoadingBar(isAnyFetching);
+  }
+});
+```
+
+**How it works:** `QueryCache.subscribe` is a cache-wide subscription (inherited from `Subscribable`), separate from any individual `QueryObserver` — it fires for every query's lifecycle event (`added`, `removed`, `updated`, `observerAdded`, `observerRemoved`) across the entire cache, regardless of which specific query changed. This is the mechanism a top-level "any request in flight" progress bar needs, since no single `QueryObserver` is appropriate for tracking activity across queries it doesn't know about.
+
+## 23. Subscribing to the whole `MutationCache` for a global "saving" indicator
+
+```ts
+const mutationCache = queryClient.getMutationCache();
+
+const unsubscribe = mutationCache.subscribe((event) => {
+  if (event.type === 'updated') {
+    updateSavingIndicator(queryClient.isMutating() > 0);
+  }
+});
+```
+
+**How it works:** mirrors example 22 but for writes — useful for a global "Saving…" toast that should appear regardless of which form or button triggered the mutation, without each feature having to wire up its own indicator. Like `QueryCache`, `MutationCache extends Subscribable`, so this is the same subscription mechanism, just scoped to mutation lifecycle events instead of query ones.
+
+## 24. Filtering `QueryCache` events by type
+
+```ts
+queryClient.getQueryCache().subscribe((event) => {
+  if (event.type === 'removed') {
+    console.log('evicted from cache:', event.query.queryKey);
+  }
+});
+```
+
+**How it works:** `QueryCacheNotifyEvent`'s `type` field discriminates between `added`/`removed`/`updated`/`observerAdded`/`observerResultsUpdated`/etc — `'removed'` specifically fires from `QueryCache#remove`, which happens both from explicit `removeQueries` calls and from automatic garbage collection once `gcTime` elapses with zero observers. Logging removals like this is a simple way to debug "why did my data disappear" issues caused by an unexpectedly short `gcTime`.
+
+## 25. Illustrative custom hook over `QueryObserver` via `useSyncExternalStore`
+
+```tsx
+// Illustrative only — this hook does NOT ship in @headlesskit/query-core.
+// It shows what a production-grade framework adapter builds on top of these primitives.
+import { useState, useSyncExternalStore } from 'react';
+import { QueryObserver, type QueryClient, type QueryObserverOptions } from '@headlesskit/query-core';
+
+function useQuery(client: QueryClient, options: QueryObserverOptions) {
+  const [observer] = useState(() => new QueryObserver(client, options));
+  observer.setOptions(options);
+
+  return useSyncExternalStore(
+    (onStoreChange) => observer.subscribe(onStoreChange),
+    () => observer.getCurrentResult(),
+  );
+}
+```
+
+**How it works:** `useSyncExternalStore`'s second argument (the snapshot getter) is called synchronously during render, which is exactly what `getCurrentResult()` provides without side effects — this avoids the `useState`/`useEffect` tearing issue under React's concurrent rendering, where a component could otherwise briefly render against a stale snapshot. Calling `setOptions` directly during render (rather than in an effect) is what production adapters like `@tanstack/react-query` actually do, so the observer's key/queryFn are always current before the snapshot is read.
+
+## 26. Separating client state and server cache with `@headlesskit/state-management-simplify`
+
+```ts
+import { createStore } from '@headlesskit/state-management-simplify';
+import { QueryObserver } from '@headlesskit/query-core';
+
+// client-only UI state — never belongs in query-core's cache
+const useFiltersStore = createStore<{ status: string; page: number }>(() => ({
+  status: 'all',
+  page: 1,
+}));
+
+const observer = new QueryObserver(queryClient, {
+  queryKey: ['posts', useFiltersStore.getState()],
+  queryFn: ({ queryKey }) => fetchPosts(queryKey[1] as { status: string; page: number }),
+});
+
+useFiltersStore.subscribe((filters) => {
+  observer.setOptions({ ...observer.options, queryKey: ['posts', filters] });
+});
+```
+
+**How it works:** `query-core` deliberately owns only *server* state (anything fetched/mutated over the network); transient client-only state like filter selections, form drafts, or UI toggles has no business living in a `Query` cache entry since it isn't shareable across tabs/SSR and doesn't need `staleTime`/`gcTime` semantics. Wiring the vanilla `createStore`'s `subscribe` callback to call `observer.setOptions` with a new `queryKey` is the glue that makes filter changes trigger a refetch — `state-management-simplify`'s store has zero awareness of `query-core` and vice versa, which is the point of keeping the two concerns separate.
+
+## 27. Testing a `QueryObserver` in isolation with no UI
+
+```ts
+import { describe, it, expect, vi } from 'vitest';
+import { QueryClient, QueryObserver } from '@headlesskit/query-core';
+
+describe('posts query', () => {
+  it('resolves with fetched data', async () => {
+    const queryClient = new QueryClient();
+    const queryFn = vi.fn().mockResolvedValue([{ id: 1, title: 'Test' }]);
+
+    const observer = new QueryObserver(queryClient, {
+      queryKey: ['posts'],
+      queryFn,
+    });
+
+    const resultPromise = new Promise((resolve) => {
+      const unsubscribe = observer.subscribe((result) => {
+        if (result.isSuccess) {
+          unsubscribe();
+          resolve(result.data);
+        }
+      });
+    });
+
+    await expect(resultPromise).resolves.toEqual([{ id: 1, title: 'Test' }]);
+    expect(queryFn).toHaveBeenCalledTimes(1);
+  });
+});
+```
+
+**How it works:** a fresh `QueryClient` per test avoids cross-test cache pollution (no need for `jest.resetModules` or similar) — `query-core`'s framework-agnostic design means this test never touches `render()`, `act()`, or any DOM, it just constructs the real production classes and drives them via `subscribe`. Resolving the test promise by unsubscribing inside the success branch prevents the listener from firing again on subsequent unrelated cache notifications and leaking between assertions.
+
+## 28. Testing a `MutationObserver` in isolation
+
+```ts
+import { describe, it, expect, vi } from 'vitest';
+import { QueryClient, MutationObserver } from '@headlesskit/query-core';
+
+it('calls onSuccess and updates result', async () => {
+  const queryClient = new QueryClient();
+  const mutationFn = vi.fn().mockResolvedValue({ id: 1 });
+  const onSuccess = vi.fn();
+
+  const observer = new MutationObserver(queryClient, { mutationFn, onSuccess });
+
+  expect(observer.getCurrentResult().isIdle).toBe(true);
+
+  await observer.mutate(undefined);
+
+  expect(onSuccess).toHaveBeenCalledWith({ id: 1 }, undefined, undefined);
+  expect(observer.getCurrentResult().isSuccess).toBe(true);
+});
+```
+
+**How it works:** `getCurrentResult()` is synchronous and reflects state immediately after construction (`isIdle: true`) without needing to `subscribe` first, since `#updateResult()` runs once in the constructor — this makes assertions on initial state trivial. Awaiting `mutate()` directly (rather than subscribing and waiting for a notification) works because `mutate()`'s returned promise settles only after `onSuccess`/`onError`/`onSettled` callbacks have already run and `#updateResult()` has already updated `#currentResult`.
+
+## 29. Testing cache invalidation behavior
+
+```ts
+it('invalidates the posts list after a mutation', async () => {
+  const queryClient = new QueryClient();
+  const queryFn = vi.fn().mockResolvedValue(['a', 'b']);
+
+  await queryClient.prefetchQuery({ queryKey: ['posts'], queryFn });
+  expect(queryClient.getQueryCache().find({ queryKey: ['posts'] })?.state.isInvalidated).toBe(false);
+
+  await queryClient.invalidateQueries({ queryKey: ['posts'] });
+
+  expect(queryClient.getQueryCache().find({ queryKey: ['posts'] })?.state.isInvalidated).toBe(true);
+});
+```
+
+**How it works:** asserting on `state.isInvalidated` directly (rather than waiting for a refetch to complete) tests the invalidation mechanism in isolation from network/retry timing — `invalidateQueries` with `type: 'active'` only triggers an actual refetch for queries with a live observer, and this test has none, so the query is marked invalidated but stays in its last-fetched state until something subscribes.
+
+## 30. `notifyOnChangeProps` measured with a spy
+
+```ts
+it('only notifies subscribers when declared props change', () => {
+  const queryClient = new QueryClient();
+  const listener = vi.fn();
+
+  const observer = new QueryObserver(queryClient, {
+    queryKey: ['posts'],
+    queryFn: () => Promise.resolve(['a']),
+    notifyOnChangeProps: ['data'],
+  });
+
+  observer.subscribe(listener);
+  // a background refetch that only flips isFetching, not data, should not renotify
+  observer.refetch();
+
+  // assert against call count once the refetch settles in a real test
+});
+```
+
+**How it works:** this is a structural sketch of how you'd verify `notifyOnChangeProps` actually suppresses notifications — in a real test you'd await the refetch and assert `listener`'s call count stayed flat for an unchanged `data` reference, then change `queryFn`'s return value and confirm a new call arrives. The underlying mechanism (`shouldNotifyListeners`) compares the *previous* and *next* `QueryObserverResult` only on the named keys, so `isFetching` toggling true→false during a no-op refetch is invisible to a `['data']`-scoped subscriber.
+
+## 31. `meta` for cross-cutting query annotations
+
+```ts
+const observer = new QueryObserver(queryClient, {
+  queryKey: ['posts', postId],
+  queryFn: fetchPost,
+  meta: { errorMessage: 'Failed to load post', analyticsTag: 'post-detail' },
+});
+
+queryClient.getQueryCache().subscribe((event) => {
+  if (event.type === 'updated' && event.query.state.status === 'error') {
+    console.log(event.query.meta?.errorMessage);
+  }
+});
+```
+
+**How it works:** `meta` is opaque to `query-core` itself — it's never read or interpreted internally, just stored on the `Query`/options and exposed for your own code to read (e.g. from a global cache subscriber or `queryFn`'s context). This is the standard escape hatch for attaching app-specific concerns (custom error copy, analytics tags, feature flags) to a query without `query-core` needing to know they exist.
+
+## 32. `meta` for mutation annotations
+
+```ts
+const updatePost = new MutationObserver(queryClient, {
+  mutationFn: (patch: { id: number; title: string }) => api.patchPost(patch),
+  meta: { resource: 'post', action: 'update' },
+});
+
+queryClient.getMutationCache().subscribe((event) => {
+  if (event.type === 'updated' && event.mutation.state.status === 'error') {
+    trackError(event.mutation.options.meta);
+  }
+});
+```
+
+**How it works:** identical philosophy to query `meta` — `MutationMeta` is a plain `Record<string, unknown>` bag with no special handling, read here from a global `MutationCache` subscriber to drive generic error-tracking that needs to know *which* resource/action failed without every individual mutation call site wiring up its own error reporting.
+
+## 33. `networkMode: 'offlineFirst'`
+
+```ts
+const observer = new QueryObserver(queryClient, {
+  queryKey: ['local-cache', key],
+  queryFn: () => readFromIndexedDB(key).catch(() => fetchFromNetwork(key)),
+  networkMode: 'offlineFirst',
+});
+```
+
+**How it works:** `'offlineFirst'` makes the *first* attempt regardless of `onlineManager.isOnline()`, but if that attempt fails and the retryer determines the failure looks network-related, subsequent retries pause until back online — splitting the difference between `'online'` (never even tries while offline) and `'always'` (retries blindly regardless of connectivity). This suits a `queryFn` like the one above, which tries a local cache first and only needs network as fallback, so it shouldn't be blocked purely on `navigator.onLine`.
+
+## 34. `structuralSharing: false` for non-plain-object data
+
+```ts
+const observer = new QueryObserver(queryClient, {
+  queryKey: ['canvas-frame', frameId],
+  queryFn: () => decodeFrame(frameId), // returns an ImageBitmap or class instance
+  structuralSharing: false,
+});
+```
+
+**How it works:** the default structural-sharing algorithm recursively walks plain objects/arrays to preserve unchanged sub-references, but it can misbehave (or just waste cycles) on non-plain values like `ImageBitmap`, `Map`, class instances with private fields, etc. Setting `structuralSharing: false` skips that walk entirely and just uses the new value as-is every time — correct here since there's no meaningful sub-structure to preserve references within.
+
+## 35. `ensureQueryData` for guaranteed-cached access
+
+```ts
+const post = await queryClient.ensureQueryData({
+  queryKey: ['posts', 42],
+  queryFn: () => fetchPost(42),
+});
+```
+
+**How it works:** `ensureQueryData` first checks `getQueryData` — if the key already has cached data (regardless of staleness), it resolves with that synchronously-available value immediately, with zero network activity, even if the data is stale. Only a complete cache miss falls through to `fetchQuery`. This differs from `fetchQuery` itself, which always checks *staleness* (not just presence) — `ensureQueryData` is for callers that just need *some* value to proceed (e.g. a route loader needing non-`undefined` data) and are fine deferring freshness to whatever later refetch policy applies.
+
+## 36. `fetchInfiniteQuery` for a one-shot infinite fetch
+
+```ts
+const data = await queryClient.fetchInfiniteQuery({
+  queryKey: ['posts', 'infinite'],
+  queryFn: ({ pageParam }) => fetchPosts({ page: pageParam }),
+  initialPageParam: 1,
+  getNextPageParam: (last, all) => (last.length === 20 ? all.length + 1 : undefined),
+});
+
+console.log(data.pages.length); // 1 — only the initial page param is fetched
+```
+
+**How it works:** `fetchInfiniteQuery` installs `infiniteQueryBehavior(options.maxPages)` onto the options and then delegates to the plain `fetchQuery` — since there's no `direction` in the fetch context for a fresh fetch, the behavior's fallback branch runs, which fetches starting from `initialPageParam` and walks forward via `getNextPageParam` until either a previously-cached page count is reached or (on a brand-new query) just the first page. It does **not** automatically walk to the "end" of all available pages — it reproduces however many pages were already cached, or one page for a cold cache.
+
+## 37. `prefetchInfiniteQuery` warming the first page before navigation
+
+```ts
+// e.g. on hover over a "View feed" link
+queryClient.prefetchInfiniteQuery({
+  queryKey: ['feed'],
+  queryFn: ({ pageParam }) => fetchFeedPage(pageParam),
+  initialPageParam: 0,
+  getNextPageParam: (_last, all) => all.length,
+});
+```
+
+**How it works:** like `prefetchQuery`, this is `fetchInfiniteQuery(...).then(noop).catch(noop)` — fire-and-forget, discarding both the result and any error. It only warms the *first* page (or however many pages are already cached for that key), so a subsequent `InfiniteQueryObserver` subscribing still has to call `fetchNextPage()` itself for page two onward; this purely eliminates the loading flash for the initial page.
+
+## 38. Combining `select` with `placeholderData` on an infinite query
+
+```ts
+const observer = new InfiniteQueryObserver(queryClient, {
+  queryKey: ['feed', filter],
+  queryFn: ({ pageParam }) => fetchFeedPage(pageParam, filter),
+  initialPageParam: 0,
+  getNextPageParam: (_last, all) => all.length,
+  placeholderData: (previousData) => previousData,
+  select: (data) => data.pages.flat(),
+});
+```
+
+**How it works:** when `filter` changes (a new `queryKey`), `placeholderData`'s function form keeps showing the *previous* filter's flattened pages while the new filter's first page loads, avoiding a jarring empty-list flash — `select` then runs against whichever data is currently active, placeholder or real, since `createResult` applies `select` uniformly regardless of `isPlaceholderData`. Once the real data for the new filter arrives, `isPlaceholderData` flips to `false` and `select` re-runs against the genuine cached value.
+
+## 39. `setQueryDefaults` for per-resource-type policy
+
+```ts
+queryClient.setQueryDefaults(['posts'], {
+  staleTime: 60_000,
+  gcTime: 10 * 60_000,
+});
+
+// any observer on a key starting with ['posts'] inherits these unless it overrides them
+const observer = new QueryObserver(queryClient, {
+  queryKey: ['posts', 42],
+  queryFn: () => fetchPost(42),
+});
+```
+
+**How it works:** `setQueryDefaults` registers options keyed by a query-key *prefix* in an internal `Map`, checked by `defaultQueryOptions` via prefix match (similar semantics to `partialMatchKey`) — this sits in precedence between `defaultOptions.queries` (lowest) and the options passed to a specific observer (highest, always wins). It's the right layer for "all `posts`-family queries should behave this way" policy without repeating `staleTime`/`gcTime` at every call site across a feature.
+
+## 40. `setMutationDefaults` for per-mutation-type policy
+
+```ts
+queryClient.setMutationDefaults(['posts', 'create'], {
+  retry: 1,
+  onError: (err) => reportError(err),
+});
+
+const createPost = new MutationObserver(queryClient, {
+  mutationKey: ['posts', 'create'],
+  mutationFn: (newPost: { title: string }) => api.createPost(newPost),
+});
+```
+
+**How it works:** unlike query defaults (matched by prefix), defaulting works because `mutationKey` here matches the registered key exactly — supplying a `mutationKey` is what makes a `MutationObserver` eligible to pick up these defaults at all; without one, `setMutationDefaults` for `['posts', 'create']` simply never applies. The `onError` default here runs *in addition to* (not instead of) any `onError` passed directly to the observer, both layers fire during the mutation lifecycle.
+
+## 41. Custom `queryKeyHashFn` for non-serializable key segments
+
+```ts
+const observer = new QueryObserver(queryClient, {
+  queryKey: ['report', { filters: new Map([['status', 'active']]) }] as const,
+  queryFn: () => fetchReport(),
+  queryKeyHashFn: (queryKey) =>
+    JSON.stringify(queryKey, (_key, value) =>
+      value instanceof Map ? Object.fromEntries(value) : value,
+    ),
+});
+```
+
+**How it works:** the default `hashKey` uses a `JSON.stringify`-based algorithm that sorts plain-object keys but doesn't know how to serialize a `Map` (it would stringify to `{}`, losing the data and causing cache-key collisions between different filter sets) — supplying a custom `queryKeyHashFn` with a `JSON.stringify` replacer fixes this by converting the `Map` into a plain object first, so distinct filter sets hash to distinct cache keys.
+
+## 42. `retryOnMount: false` to respect a previous failure
+
+```ts
+const observer = new QueryObserver(queryClient, {
+  queryKey: ['flaky-resource'],
+  queryFn: fetchFlakyResource,
+  retryOnMount: false,
+});
+```
+
+**How it works:** by default, a query that previously failed and has zero observers will retry on its very next mount even if `retry` itself is configured — `retryOnMount: false` suppresses specifically that "give it another shot on remount" behavior, leaving the query in its last error state until an explicit `refetch()`. Useful for a resource that failed for a reason unlikely to have changed (e.g. a missing permission), where silently retrying on every component remount would just spam the same failing request.
+
+## 43. `throwOnError` to integrate with error boundaries
+
+```ts
+const observer = new QueryObserver(queryClient, {
+  queryKey: ['critical-config'],
+  queryFn: fetchCriticalConfig,
+  throwOnError: (error) => error instanceof CriticalConfigError,
+});
+```
+
+**How it works:** `throwOnError` doesn't change anything about `QueryObserver` itself (it has no built-in error-boundary integration since it isn't React-specific) — it's a signal that framework adapters read (via `result` or a thrown value during render) to decide whether to re-throw the error for a surrounding error boundary to catch, versus letting the caller handle `result.isError` manually. The function form lets only specific error types escalate to a boundary while others (e.g. expected validation errors) stay as ordinary `isError` state.
+
+## 44. `throwOnError` on a mutation
+
+```ts
+const criticalMutation = new MutationObserver(queryClient, {
+  mutationFn: (payload: unknown) => api.submitCriticalAction(payload),
+  throwOnError: true,
+});
+```
+
+**How it works:** unlike the query version, a mutation's `throwOnError: true` is unconditional — there's no per-error discrimination needed by default since mutations are usually triggered by a specific user action whose failure should always surface loudly. Combined with `await mutate(...)` (example 11 in [basic examples](./14-query-basic.mdx)), this just means the rejected promise propagates as expected; the option mainly matters for adapters that otherwise swallow mutation errors into result state only.
+
+## 45. `subscribed: false` to build a result without an active subscription
+
+```ts
+const observer = new QueryObserver(queryClient, {
+  queryKey: ['posts'],
+  queryFn: fetchPosts,
+  subscribed: false,
+});
+
+const snapshot = observer.getCurrentResult();
+```
+
+**How it works:** `subscribed: false` means this observer never actually registers itself as a listener on the underlying `Query` even if `subscribe()` is called — useful for a one-off "peek at the current result shape" read without affecting `gcTime` bookkeeping (an observer with zero real subscriptions doesn't keep the query alive past garbage collection the way a normal mounted observer would).
+
+## 46. `getQueryCache().findAll` with a custom `predicate` across resource types
+
+```ts
+const allStaleUserData = queryClient.getQueryCache().findAll({
+  predicate: (query) =>
+    ['user', 'orders', 'invoices'].includes(query.queryKey[0] as string) &&
+    query.isStale(),
+});
+
+queryClient.invalidateQueries({
+  predicate: (query) => allStaleUserData.includes(query),
+});
+```
+
+**How it works:** combining a multi-resource `predicate` with `Array#includes` against the query key's first segment is how you target "any of several unrelated resource families" in one filter pass, since `QueryFilters.queryKey` only supports a single prefix match — a predicate is the escape hatch when the set of keys to match can't be expressed as one array prefix.
+
+## 47. `getMutationCache().findAll` scoped by `mutationKey` for a per-button spinner
+
+```ts
+function isThisButtonSaving(postId: number) {
+  return queryClient.getMutationCache().findAll({
+    mutationKey: ['posts', 'update', postId],
+    status: 'pending',
+  }).length > 0;
+}
+```
+
+**How it works:** giving each mutation a key that includes the specific resource id (`['posts', 'update', postId]`) makes it possible to scope a loading indicator to *one row's* save button rather than the app-wide `isMutating()` counter from [medium example 12](./15-query-medium.mdx) — `MutationFilters.mutationKey` matching is exact-array-equality against `Mutation#options.mutationKey`, not a prefix match like queries, so the id must be part of the key for this to discriminate between rows.
+
+## 48. `dehydrate` with a custom `shouldDehydrateQuery`
+
+```ts
+import { dehydrate } from '@headlesskit/query-core';
+
+const dehydratedState = dehydrate(queryClient, {
+  shouldDehydrateQuery: (query) =>
+    query.state.status === 'success' && query.queryKey[0] !== 'user-private-data',
+});
+```
+
+**How it works:** overriding `shouldDehydrateQuery` replaces (not augments) `defaultShouldDehydrateQuery`'s logic, so the success-status check has to be re-stated explicitly if still wanted — this is the mechanism for excluding sensitive per-user data from the server-to-client SSR payload while still shipping everything else that successfully resolved server-side, preventing private data from ending up in client-visible HTML.
+
+## 49. `hydrate` with `defaultOptions` applied to rehydrated queries
+
+```ts
+import { hydrate } from '@headlesskit/query-core';
+
+hydrate(queryClient, dehydratedState, {
+  defaultOptions: {
+    queries: { staleTime: 30_000 },
+  },
+});
+```
+
+**How it works:** the `defaultOptions` passed to `hydrate` apply only to the queries being rehydrated from this specific payload, layered the same way as `QueryClientConfig.defaultOptions` — giving rehydrated SSR data its own `staleTime` policy independent of whatever the client `QueryClient`'s own constructor-level defaults are, useful when server-rendered data should be treated as fresher (or staler) than client-fetched data of the same shape.
+
+## 50. Remaining `InfiniteQueryObserverResult` fields together: `isFetchingNextPage`/`isFetchingPreviousPage`
+
+```ts
+const observer = new InfiniteQueryObserver(queryClient, {
+  queryKey: ['feed'],
+  queryFn: ({ pageParam }) => fetchFeedPage(pageParam),
+  initialPageParam: 0,
+  getNextPageParam: (_last, all) => all.length,
+  getPreviousPageParam: () => undefined,
+});
+
+observer.subscribe((result) => {
+  if (result.isFetchingNextPage) showBottomSpinner();
+  if (result.isFetchingPreviousPage) showTopSpinner();
+  if (result.isFetching && !result.isFetchingNextPage && !result.isFetchingPreviousPage) {
+    showFullPageSpinner(); // initial load or full refetch
+  }
+});
+```
+
+**How it works:** both booleans are derived in `InfiniteQueryObserver.createResult` from `query.state.fetchMeta?.fetchMore?.direction` — `'forward'` sets `isFetchingNextPage`, `'backward'` sets `isFetchingPreviousPage`, and a plain refetch/initial load (no `fetchMore` meta at all) leaves both `false` even while `isFetching` is `true`. Branching on all three together is how a real infinite-list UI distinguishes "show a spinner at the bottom" from "show a spinner at the top" from "show a full-page loading state," none of which `isFetching` alone can discriminate.

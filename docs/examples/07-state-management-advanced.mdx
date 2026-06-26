@@ -1,0 +1,905 @@
+# State Management — Advanced Examples
+
+Fifty examples covering architecture-level concerns: devtools integration, normalized entity graphs, undo/redo, performance, SSR, testing, and where this package's responsibilities end and [`@headlesskit/state-management-toolkit`](../state-management-toolkit/01-overview.mdx)'s begin.
+
+---
+
+## 1. Connecting a plain store to the time-travel Inspector
+
+```typescript
+import { createStore } from '@headlesskit/state-management';
+import { installDevtools } from '@headlesskit/state-management-devtools';
+
+const { inspectorStore } = installDevtools(); // populates window.__HEADLESSKIT_DEVTOOLS_EXTENSION__
+
+const store = createStore(
+  rootReducer,
+  window.__HEADLESSKIT_DEVTOOLS_EXTENSION__?.({ name: 'plain-store' }),
+);
+```
+
+**How it works:** [`@headlesskit/state-management-devtools`'s connector](../state-management-devtools/05-create-devtools-extension.mdx) is duck-typed against this package's `StoreEnhancer`/`StoreCreator` shapes specifically so it works with a *plain* `createStore` call, not just `state-management-toolkit`'s `configureStore` — calling the extension directly as a function (`extension({ name })`) returns a real enhancer you can pass as `createStore`'s second argument. From here, jumping/skipping/sweeping actions through [`Inspector`](../state-management-devtools-react/03-inspector.mdx) genuinely replays this store's real reducer (see [Example 4](#4-the-full-time-travel-walkthrough)).
+
+## 2. Hand-writing the "lifted store" pattern
+
+```typescript
+function withTimeTravel(reducer: Reducer) {
+  const history: unknown[] = [];
+  let index = -1;
+
+  return (state: unknown, action: { type: string; jumpTo?: number }) => {
+    if (action.type === '@@JUMP') return history[action.jumpTo ?? index];
+    const next = reducer(state, action);
+    history.splice(++index);
+    history.push(next);
+    return next;
+  };
+}
+
+const store = createStore(withTimeTravel(rootReducer));
+```
+
+**How it works:** this is a simplified, single-file version of exactly what [the lifted-state engine](../state-management-devtools/06-lifted-state.mdx) does for real — wrap the actual reducer so that every dispatch is recorded into a history array instead of just computing the next value, and a special `@@JUMP` action can move a `currentIndex` pointer backward without losing the recorded future. The real engine additionally supports skip/sweep/commit and replays from a `committedState` baseline rather than `history[0]`, but the core trick (the reducer *is* the history machine) is identical.
+
+## 3. A hand-rolled `createSlice`
+
+```typescript
+function createSlice<S>(name: string, initialState: S, reducers: Record<string, (state: S, action: any) => S>) {
+  const actionCreators = Object.fromEntries(
+    Object.keys(reducers).map((key) => [key, (payload?: unknown) => ({ type: `${name}/${key}`, payload })]),
+  );
+  const reducer = (state = initialState, action: { type: string; payload?: unknown }) => {
+    const key = action.type.startsWith(`${name}/`) ? action.type.slice(name.length + 1) : undefined;
+    return key && reducers[key] ? reducers[key](state, action) : state;
+  };
+  return { reducer, actions: actionCreators };
+}
+
+const counterSlice = createSlice('counter', { count: 0 }, {
+  increment: (state) => ({ count: state.count + 1 }),
+  setCount: (state, action) => ({ count: action.payload as number }),
+});
+```
+
+**How it works:** this reimplements the core idea behind `state-management-toolkit`'s `createSlice` — co-locating a reducer with auto-namespaced, auto-generated action creators (`counter/increment`, `counter/setCount`) so you stop hand-writing matching `case` labels and creator functions separately. The toolkit's real version additionally uses Immer for "mutating" syntax inside reducers and generates fully-typed action creators — this hand-rolled version is the unguarded, no-dependency version of the same pattern.
+
+## 4. The full time-travel walkthrough
+
+Building on [Example 1](#1-connecting-a-plain-store-to-the-time-travel-inspector):
+
+```typescript
+store.dispatch({ type: 'increment' }); // count: 1
+store.dispatch({ type: 'increment' }); // count: 2
+store.dispatch({ type: 'increment' }); // count: 3
+
+// In the Inspector UI: click the first "increment" row in the action list.
+store.getState(); // { count: 1} — the LIVE store, not a preview copy
+```
+
+**How it works:** because the devtools enhancer replaces `getState`/`dispatch` with versions backed by [`getEffectiveState(liftedState)`](../state-management-devtools/06-lifted-state.mdx#geteffectivestateliftedstate), clicking a row in the Inspector's action list calls `inspectorStore.jumpToState(name, index)`, which moves `currentStateIndex` and immediately changes what *this exact* `store.getState()` call returns elsewhere in your app — there's no separate "devtools preview" state to reconcile.
+
+## 5. Server-side store creation with hydration
+
+```typescript
+// server: render with a preloadedState matching what the client will load
+const serverStore = createStore(rootReducer, { counter: { count: 42 } });
+const html = renderToString(serverStore.getState());
+
+// client: hydrate from the server-embedded state instead of recomputing from scratch
+const clientStore = createStore(rootReducer, window.__PRELOADED_STATE__);
+```
+
+**How it works:** `createStore`'s second argument is `preloadedState` (when it's not itself a `StoreEnhancer` — the function detects which by checking if it's callable) — passing it skips running the reducer's `@@INIT` default-state computation and starts from your provided state instead, which is exactly what SSR hydration needs: the client's first render must match the server's, not recompute independently and risk drifting.
+
+## 6. A typed `dispatch` wrapper
+
+```typescript
+type AppDispatch = <A extends CounterAction | TodoAction>(action: A) => A;
+const dispatch = store.dispatch as AppDispatch;
+
+dispatch({ type: 'increment' });        // ✓ typed
+dispatch({ type: 'totally-fake' });     // ✗ compile error
+```
+
+**How it works:** the base `Store<S, A>`'s `dispatch` is already typed against whatever `A` you specify at `createStore<S, A>(...)`, but in larger codebases it's common to export a narrower, explicitly-named `AppDispatch` type (mirroring `AppState`/`RootState` conventions) so consuming code imports one clear contract instead of reaching into the store's own generic instantiation.
+
+## 7. Manual optimistic updates with rollback middleware
+
+```typescript
+const optimisticMiddleware = (api) => (next) => (action) => {
+  if (action.type !== 'todos/toggleOptimistic') return next(action);
+  const result = next({ type: 'todos/toggle', id: action.id });
+  api_call(action.id).catch(() => api.dispatch({ type: 'todos/toggle', id: action.id })); // revert on failure
+  return result;
+};
+```
+
+**How it works:** the middleware applies the "optimistic" change immediately via a synchronous `next(...)` call (so the UI updates this tick), then fires the real network request — if it fails, dispatching the *same* toggle action again is the rollback, since `toggle` is its own inverse here. This works specifically because the action happens to be reversible by re-dispatching it; non-reversible actions need to capture and restore prior state explicitly, as in the [forms package's rollback example](./04-forms-advanced.mdx#6-optimistic-submit-with-rollback-on-failure).
+
+## 8. A hand-rolled "listener middleware"
+
+```typescript
+const listeners: Array<{ matcher: (a: any) => boolean; effect: (a: any, api: any) => void }> = [];
+
+const listenerMiddleware = (api) => (next) => (action) => {
+  const result = next(action);
+  listeners.filter((l) => l.matcher(action)).forEach((l) => l.effect(action, api));
+  return result;
+};
+
+listeners.push({
+  matcher: (a) => a.type === 'todos/add',
+  effect: (action, api) => console.log('a todo was added:', action.todo, 'total now:', api.getState().todos.length),
+});
+```
+
+**How it works:** running side effects *after* `next(action)` (rather than before) means `api.getState()` inside an effect reflects the post-dispatch state — this is the manual version of `state-management-toolkit`'s `listenerMiddleware`, which adds matcher helpers (`isAnyOf`, action-creator matching, debounce/throttle/cancellation) on top of exactly this "run effects after specific actions" core idea.
+
+## 9. Composing two independently-created stores
+
+```typescript
+const authStore = createStore(authReducer);
+const cartStore = createStore(cartReducer);
+
+authStore.subscribe(() => {
+  if (!authStore.getState().isLoggedIn) cartStore.dispatch({ type: 'cart/clear' });
+});
+```
+
+**How it works:** nothing requires a single global store — two fully independent `createStore` calls can still coordinate via plain `subscribe` callbacks reacting to one store's changes by dispatching into another. This is a legitimate alternative to one giant `combineReducers` tree when two domains are genuinely decoupled (e.g. a host app and an embedded micro-frontend each owning their own store).
+
+## 10. A manual memoized selector
+
+```typescript
+function createMemoizedSelector<S, R>(selector: (state: S) => R) {
+  let lastState: S | undefined;
+  let lastResult: R;
+  return (state: S): R => {
+    if (state !== lastState) {
+      lastResult = selector(state);
+      lastState = state;
+    }
+    return lastResult;
+  };
+}
+
+const selectCompletedTodos = createMemoizedSelector((state: RootState) => state.todos.filter((t) => t.done));
+```
+
+**How it works:** caches by *reference* equality of the whole input `state` slice — since reducers always return a new reference when something changes (see [Basic #5](./05-state-management-basic.mdx#5-a-switch-based-reducer-with-several-action-types)) and the same reference when nothing did, comparing `state !== lastState` is a cheap, correct way to skip recomputing `selector` on every call. This is exactly the single-argument case of what a library like `state-management-toolkit`'s `createSelector` generalizes to multiple input selectors.
+
+## 11. Testing middleware with a fake store API
+
+```typescript
+test('blocks admin actions for non-admins', () => {
+  const next = vi.fn();
+  const api = { getState: () => ({ auth: { isAdmin: false } }), dispatch: vi.fn() };
+  requireAuth(api)(next)({ type: 'admin/deleteUser' });
+  expect(next).not.toHaveBeenCalled();
+});
+```
+
+**How it works:** since middleware is just nested functions, testing it needs no real store — construct a minimal `api` object with whatever `getState()`/`dispatch` shape the middleware under test actually reads, call the middleware manually with a spy `next`, and assert on whether (and with what) `next` was called. This isolates the middleware's branching logic from the rest of the dispatch pipeline entirely.
+
+## 12. A full normalized multi-entity state graph, maintained by hand
+
+```typescript
+interface Author { id: string; name: string }
+interface Post { id: string; title: string; authorId: string; commentIds: string[] }
+interface Comment { id: string; postId: string; authorId: string; text: string }
+
+interface EntitiesState {
+  authors: { byId: Record<string, Author>; allIds: string[] };
+  posts: { byId: Record<string, Post>; allIds: string[] };
+  comments: { byId: Record<string, Comment>; allIds: string[] };
+}
+
+const initialEntities: EntitiesState = {
+  authors: { byId: {}, allIds: [] },
+  posts: { byId: {}, allIds: [] },
+  comments: { byId: {}, allIds: [] },
+};
+```
+
+**How it works:** a "graph" here just means three normalized tables that reference each other by id — `Post.authorId` points into `authors.byId`, `Comment.postId` points into `posts.byId`, and `Post.commentIds` is the inverse of `Comment.postId`, kept as a denormalized convenience array so rendering a post's comments doesn't require scanning every comment. Nothing about `combineReducers` or `createStore` understands this graph structure — it's plain nested objects all the way down, and every relationship is a string id meaning "look this up in a sibling slice," maintained entirely by the reducers that touch it.
+
+## 13. A reducer that inserts a comment and maintains both sides of the relationship
+
+```typescript
+function commentsReducer(state = initialEntities.comments, action: CommentAction) {
+  switch (action.type) {
+    case 'comments/added':
+      return {
+        byId: { ...state.byId, [action.comment.id]: action.comment },
+        allIds: [...state.allIds, action.comment.id],
+      };
+    default: return state;
+  }
+}
+
+function postsReducer(state = initialEntities.posts, action: CommentAction | PostAction) {
+  switch (action.type) {
+    case 'comments/added': // a comment action that THIS slice also reacts to, to keep commentIds in sync
+      return {
+        ...state,
+        byId: {
+          ...state.byId,
+          [action.comment.postId]: {
+            ...state.byId[action.comment.postId],
+            commentIds: [...state.byId[action.comment.postId].commentIds, action.comment.id],
+          },
+        },
+      };
+    default: return state;
+  }
+}
+```
+
+**How it works:** maintaining "both sides" of a one-to-many relationship without an adapter means two *different* slice reducers (`comments`, `posts`) both have to handle the *same* action type (`'comments/added'`), each updating its own half of the relationship — the comment itself goes into `comments.byId`, and the post's `commentIds` array gets the new id appended. There's no transactional guarantee here beyond "both reducers run synchronously inside the same `dispatch` call" (true of any `combineReducers` tree); if you add a third place needing to react to `comments/added`, you add a third `case` in a third reducer, which is exactly the kind of fan-out an entity adapter's relationship helpers (or normalizing at the API boundary) exists to avoid.
+
+## 14. A reducer that cascades a delete across three normalized tables
+
+```typescript
+function deleteAuthor(state: EntitiesState, authorId: string): EntitiesState {
+  const orphanedPostIds = state.posts.allIds.filter((id) => state.posts.byId[id].authorId === authorId);
+  const orphanedCommentIds = state.comments.allIds.filter((id) => orphanedPostIds.includes(state.comments.byId[id].postId));
+
+  return {
+    authors: {
+      byId: Object.fromEntries(state.authors.allIds.filter((id) => id !== authorId).map((id) => [id, state.authors.byId[id]])),
+      allIds: state.authors.allIds.filter((id) => id !== authorId),
+    },
+    posts: {
+      byId: Object.fromEntries(state.posts.allIds.filter((id) => !orphanedPostIds.includes(id)).map((id) => [id, state.posts.byId[id]])),
+      allIds: state.posts.allIds.filter((id) => !orphanedPostIds.includes(id)),
+    },
+    comments: {
+      byId: Object.fromEntries(state.comments.allIds.filter((id) => !orphanedCommentIds.includes(id)).map((id) => [id, state.comments.byId[id]])),
+      allIds: state.comments.allIds.filter((id) => !orphanedCommentIds.includes(id)),
+    },
+  };
+}
+```
+
+**How it works:** this single function rebuilds *all three* tables in one pass specifically because the cascade has two hops — deleting an author orphans their posts, and deleting those posts in turn orphans their comments — so the comment ids to remove (`orphanedCommentIds`) have to be computed from the *post* ids being removed, not directly from the author id. Writing this as one root-level function rather than three independent slice reducers reacting to the same action is a deliberate choice here: a multi-hop cascade across normalized tables is exactly the case where keeping each slice's reducer "pure and local" (as in [Medium #8](./06-state-management-medium.mdx#8-cascading-a-delete-across-cross-referencing-slices)) gets harder to reason about, because slice B's correctness now depends on knowing which ids slice A just removed.
+
+## 15. A reusable normalization helper, built from scratch
+
+```typescript
+function normalize<T extends { id: string }>(items: T[]): { byId: Record<string, T>; allIds: string[] } {
+  return {
+    byId: Object.fromEntries(items.map((item) => [item.id, item])),
+    allIds: items.map((item) => item.id),
+  };
+}
+
+function denormalize<T>(table: { byId: Record<string, T>; allIds: string[] }): T[] {
+  return table.allIds.map((id) => table.byId[id]);
+}
+
+// usage when a server response arrives already-nested
+const { posts, authors, comments } = serverResponse;
+const normalizedPosts = normalize(posts.map(({ author, comments: c, ...rest }) => ({ ...rest, authorId: author.id, commentIds: c.map((x) => x.id) })));
+```
+
+**How it works:** `normalize` is the one true general-purpose operation this package has no built-in for — turn an array of objects with an `id` field into the `{ byId, allIds }` shape used throughout this section — and `denormalize` is its exact inverse, used when something (a list UI, a CSV export) genuinely needs an ordered array back instead of the lookup-optimized shape. Writing it once as a standalone generic function means every reducer and every "data just arrived from the server" transform site calls the *same* normalization logic, rather than each one reimplementing `Object.fromEntries(items.map(...))` slightly differently and risking subtle inconsistencies (e.g. one site forgetting to also produce `allIds`).
+
+## 16. A "deep merge" reducer for partial nested updates from a server payload
+
+```typescript
+function deepMerge<T>(target: T, patch: Partial<T>): T {
+  if (typeof patch !== 'object' || patch === null) return patch as T;
+  const result: any = { ...target };
+  for (const key in patch) {
+    const patchValue = (patch as any)[key];
+    result[key] = typeof patchValue === 'object' && patchValue !== null && !Array.isArray(patchValue)
+      ? deepMerge((target as any)?.[key] ?? {}, patchValue)
+      : patchValue;
+  }
+  return result;
+}
+
+// reducer
+case 'user/patchedFromServer':
+  return deepMerge(state, action.patch); // e.g. { settings: { notifications: { sms: true } } } — only sms changes
+```
+
+**How it works:** unlike `updateNestedField` (which takes one explicit path), `deepMerge` walks an arbitrarily-shaped *partial* object and only descends into keys the patch actually mentions — every key present in `patch` gets recursively merged (or directly assigned, for non-object values and arrays, which are replaced wholesale rather than merged), and every key absent from `patch` is left untouched because `{ ...target }` already carried it over. Arrays are deliberately *not* deep-merged here (an array patch fully replaces the target array) because "merge array indices" is ambiguous without knowing whether the array represents an ordered list or a set — a real decision a generic deep-merge utility has to make explicit, unlike Immer's `produce`, which sidesteps the question entirely by tracking mutations rather than merging two trees.
+
+## 17. Composing logging, validation, and persistence middleware — and why order matters
+
+```typescript
+const logger = (api) => (next) => (action) => { console.log('action', action); return next(action); };
+const validate = (api) => (next) => (action) =>
+  action.type === 'posts/added' && !action.post.title ? action : next(action); // block invalid, don't log success after
+const persistToLocalStorage = (api) => (next) => (action) => {
+  const result = next(action);
+  localStorage.setItem('app-state', JSON.stringify(api.getState()));
+  return result;
+};
+
+const store = createStore(rootReducer, applyMiddleware(logger, validate, persistToLocalStorage));
+```
+
+**How it works:** `applyMiddleware(logger, validate, persistToLocalStorage)` chains them in exactly that order — `logger` always runs and always logs, even for actions `validate` is about to reject, because `logger` calls `next` *before* `validate` ever sees the action; if `validate` were listed *first*, a rejected action would never reach `logger` at all, so it would log only successfully-validated actions. `persistToLocalStorage` is listed last specifically so its `api.getState()` read (after `next(action)`) reflects state *after* the reducer ran — if it were listed first, its inner `next(action)` would still run the reducer before the persistence call below it, so the order between `validate` and `persistToLocalStorage` doesn't actually change correctness here, only `logger`'s position relative to `validate` does.
+
+## 18. Swapping middleware order to reject invalid actions silently before they're observed
+
+```typescript
+// validate FIRST: rejected actions never reach logger or persistence — no trace they were attempted
+applyMiddleware(validate, logger, persistToLocalStorage);
+```
+
+**How it works:** moving `validate` to the front means it's now the outermost wrapper, so a rejected `posts/added` action never calls `next`, meaning `logger`'s middleware function is never even invoked for that dispatch — not "invoked but skipped," genuinely never called. This is the right order if rejected actions should leave *zero* trace (e.g. they were a client bug, not worth logging); the order in [Example 17](#17-composing-logging-validation-and-persistence-middleware--and-why-order-matters) is the right order if you want an audit trail that includes rejected attempts. `applyMiddleware`'s contract doesn't have an opinion on which is "correct" — that's an application-level decision encoded entirely in argument order.
+
+## 19. A from-scratch undo/redo implementation over nested state
+
+```typescript
+interface Undoable<S> { past: S[]; present: S; future: S[] }
+
+function undoable<S>(reducer: Reducer<S>) {
+  const initialState: Undoable<S> = { past: [], present: reducer(undefined as any, { type: '@@INIT' }), future: [] };
+
+  return (state = initialState, action: any): Undoable<S> => {
+    if (action.type === 'UNDO') {
+      if (state.past.length === 0) return state;
+      const previous = state.past[state.past.length - 1];
+      return { past: state.past.slice(0, -1), present: previous, future: [state.present, ...state.future] };
+    }
+    if (action.type === 'REDO') {
+      if (state.future.length === 0) return state;
+      const [next, ...rest] = state.future;
+      return { past: [...state.past, state.present], present: next, future: rest };
+    }
+    const newPresent = reducer(state.present, action);
+    if (newPresent === state.present) return state; // no real change — don't grow the history
+    return { past: [...state.past, state.present], present: newPresent, future: [] };
+  };
+}
+
+const store = createStore(undoable(combineReducers({ posts: postsReducer, authors: authorsReducer })));
+store.dispatch({ type: 'UNDO' }); // reverts the entire combined nested tree to its previous snapshot
+```
+
+**How it works:** `undoable` wraps any reducer (including a `combineReducers`-built one) in a higher-order reducer that stores the *entire* nested state tree as one snapshot per history entry, rather than tracking undo per-slice — `UNDO`/`REDO` are entirely new action types this wrapper intercepts before ever calling the inner `reducer`, and every other action falls through to `reducer(state.present, action)` followed by pushing the *previous* present onto `past` and clearing `future` (a new action after an undo discards the redo history, same as most editors). The `newPresent === state.present` reference check is what stops no-op actions (an unhandled action type, or an action a slice's `default` branch ignores) from polluting the undo stack with duplicate snapshots — exactly the same reference-equality discipline from [Basic #5](./05-state-management-basic.mdx#5-a-switch-based-reducer-with-several-action-types), now load-bearing for correctness rather than just performance.
+
+## 20. Undo/redo with selective fields excluded from history
+
+```typescript
+function undoableExcept<S extends Record<string, unknown>>(reducer: Reducer<S>, excludeKeys: string[]) {
+  const base = undoable(reducer);
+  return (state: any, action: any) => {
+    const result = base(state, action);
+    if (action.type === 'UNDO' || action.type === 'REDO') {
+      // restore excluded keys from the CURRENT present, not the historical snapshot
+      const currentExcluded = Object.fromEntries(excludeKeys.map((k) => [k, state.present[k]]));
+      return { ...result, present: { ...result.present, ...currentExcluded } };
+    }
+    return result;
+  };
+}
+
+const store = createStore(undoableExcept(combineReducers({ posts: postsReducer, ui: uiReducer }), ['ui']));
+```
+
+**How it works:** some nested slices (UI state like `sidebarOpen` or a `selectedTabId`) usually shouldn't snap backward just because the user pressed undo on their data — this wrapper runs the normal `undoable` logic first, then on `UNDO`/`REDO` specifically, overwrites the excluded keys in the *restored* present with their values from *before* the undo/redo ran (`state.present[k]`, captured before `base` was called). This is a real limitation of snapshotting the whole tree per [Example 19](#19-a-from-scratch-undo-redo-implementation-over-nested-state): the snapshot doesn't know which branches are "data" versus "UI," so excluding branches has to be bolted on afterward rather than designed in from the start, unlike a real undo library that lets you scope history to specific reducers up front.
+
+## 21. Testing the undo/redo wrapper in isolation
+
+```typescript
+test('UNDO reverts to the previous present and shifts it into future', () => {
+  const reducer = undoable(counterReducer);
+  let state = reducer(undefined, { type: '@@INIT' });
+  state = reducer(state, { type: 'increment' }); // present: { count: 1 }
+  state = reducer(state, { type: 'increment' }); // present: { count: 2 }
+
+  const undone = reducer(state, { type: 'UNDO' });
+  expect(undone.present).toEqual({ count: 1 });
+  expect(undone.future).toEqual([{ count: 2 }]);
+});
+```
+
+**How it works:** because `undoable` returns an ordinary reducer (still just `(state, action) => state`), testing it needs no store either — call it directly through a sequence of real actions plus an `UNDO`, then assert on the resulting `present`/`past`/`future` shape. This test specifically exercises the *history bookkeeping*, not the wrapped `counterReducer`'s own logic (which has its own tests, per [Medium #19](./06-state-management-medium.mdx#19-testing-a-reducer-that-manages-nested-state-in-isolation)) — the two are tested independently because `undoable` is generic over any inner reducer.
+
+## 22. Graduating a normalized nested-entity scenario to `state-management-toolkit`, side-by-side
+
+```typescript
+// ---- BEFORE: this package, hand-rolled (Examples 12-15) ----
+interface Post { id: string; title: string; authorId: string }
+const initialPosts = { byId: {} as Record<string, Post>, allIds: [] as string[] };
+
+function postsReducer(state = initialPosts, action: { type: string; post?: Post }) {
+  switch (action.type) {
+    case 'posts/added':
+      return { byId: { ...state.byId, [action.post!.id]: action.post! }, allIds: [...state.allIds, action.post!.id] };
+    default: return state;
+  }
+}
+const selectAllPosts = (state: { posts: typeof initialPosts }) => state.posts.allIds.map((id) => state.posts.byId[id]);
+
+// ---- AFTER: state-management-toolkit, same scenario ----
+import { createEntityAdapter, createSlice } from '@headlesskit/state-management-toolkit';
+
+const postsAdapter = createEntityAdapter<Post>();
+const postsSlice = createSlice({
+  name: 'posts',
+  initialState: postsAdapter.getInitialState(),
+  reducers: { postAdded: postsAdapter.addOne },
+});
+const { selectAll: selectAllPostsToolkit } = postsAdapter.getSelectors();
+```
+
+**How it works:** both versions store the exact same logical shape (an id-keyed lookup plus an ordered list of ids — `{ byId, allIds }` by hand versus the adapter's `{ entities, ids }`), and both versions' "add" operation does the same merge-into-the-map-plus-append-to-the-list work — the difference is entirely in who writes that logic. `postsAdapter.addOne` is a pre-built case reducer that can be dropped straight into `createSlice`'s `reducers` map (it already matches the `(state, action) => state` shape `createSlice` expects, with the entity expected at `action.payload`), and `postsAdapter.getSelectors()` generates `selectAllPostsToolkit` instead of hand-writing `selectAllPosts`'s one-line `.map`. Critically, `createSlice`'s reducers are Immer-backed internally, so `postsAdapter.addOne` can describe its effect as a draft mutation under the hood even though the *manual* `postsReducer` above had to spread by hand — same observable behavior, fewer lines, one more dependency.
+
+## 23. Reference-equality discipline as the core performance model for large nested trees
+
+```typescript
+// SLOW: a selector that always returns a NEW array, defeating any memoization downstream
+const selectVisiblePosts = (state: RootState) => state.posts.allIds.map((id) => state.posts.byId[id]).filter((p) => !p.archived);
+
+// FAST: memoize on the specific nested slice this selector actually reads
+const selectVisiblePosts = createMemoizedSelector((state: RootState) =>
+  state.posts.allIds.map((id) => state.posts.byId[id]).filter((p) => !p.archived),
+);
+```
+
+**How it works:** this package has no built-in batching, structural sharing beyond what your reducers choose to do, or memoization — for a large nested tree, the *only* lever you have is making sure unrelated branches keep their object references across dispatches (the spread-only-what-changed discipline from [Basic #18](./05-state-management-basic.mdx#18-a-two-level-deep-nested-object-update)) so that selectors and `React.memo`-wrapped components reading those branches can cheaply bail out on `===` instead of deep-comparing. A selector that recomputes (and reallocates) a derived array on every call, regardless of whether its inputs changed, defeats that discipline entirely downstream — every consumer sees a "new" array every render, however carefully the reducers themselves preserved references upstream.
+
+## 24. Why a single root reducer's reference changes on every dispatch (and why that's fine)
+
+```typescript
+const prevState = store.getState();
+store.dispatch({ type: 'ui/toggleSidebar' }); // touches ONLY state.ui
+const nextState = store.getState();
+
+nextState !== prevState;             // true — combineReducers always returns a new top-level object... 
+nextState.posts === prevState.posts; // ...but unrelated slices keep their reference
+nextState.ui !== prevState.ui;       // only the slice that actually changed gets a new reference
+```
+
+**How it works:** `combineReducers`'s generated reducer always builds a fresh top-level object on every dispatch (it has no way to know in advance whether any slice will change without calling all of them first), so checking `nextState !== prevState` alone tells you nothing about whether anything *meaningful* changed — the actual performance-relevant comparisons are always one level down, per-slice, which is exactly why the discipline in [Example 23](#23-reference-equality-discipline-as-the-core-performance-model-for-large-nested-trees) targets specific branches rather than the root.
+
+## 25. SSR: avoiding hydration mismatches from non-deterministic reducers
+
+```typescript
+// BUG: Date.now() in a default reducer value runs differently on server vs. client
+function sessionReducer(state = { startedAt: Date.now() }, action: any) { return state; }
+
+// FIX: inject the timestamp via preloadedState, computed once on the server
+const serverStore = createStore(rootReducer, { session: { startedAt: Date.now() } });
+const html = renderToString(serverStore.getState());
+// embed window.__PRELOADED_STATE__ = serverStore.getState() in the HTML response
+
+const clientStore = createStore(rootReducer, window.__PRELOADED_STATE__); // same startedAt as the server
+```
+
+**How it works:** a reducer's default-state expression runs once per `createStore` call — on the server, that's during the request; on the client, that's during page load, which is a *different* moment in time — so any reducer whose default state captures something non-deterministic (the clock, `Math.random()`, `crypto.randomUUID()`) will produce a different value in each environment unless that value is computed once (on the server) and threaded through as `preloadedState`, exactly as in [Example 5](#5-server-side-store-creation-with-hydration). This is the nested-state-aware version of the same hydration-correctness concern: it applies to any depth in the tree, not just top-level fields.
+
+## 26. SSR: per-request stores, never a module-level singleton
+
+```typescript
+// BUG: one store shared across every request on the server — state leaks between users!
+export const store = createStore(rootReducer);
+
+// FIX: a factory, called fresh for every incoming request
+export function createAppStore(preloadedState?: RootState) {
+  return createStore(rootReducer, preloadedState);
+}
+```
+
+**How it works:** in a long-lived server process (as opposed to a serverless function that cold-starts per request), a module-level `createStore(...)` call runs exactly once when the module first loads and is then reused for every subsequent request — any `dispatch` from request A's handler mutates state that request B's handler would also read, a cross-request data leak that has nothing to do with this package specifically but is a direct consequence of `createStore` returning a long-lived mutable closure (`currentState`) rather than something inherently request-scoped. The fix is purely architectural: export a factory function and call it once per request in your server framework's request-handling code, not once at module load.
+
+## 27. A normalized state graph's selector needs three levels of lookup
+
+```typescript
+function selectCommentWithPostAndAuthor(state: RootState, commentId: string) {
+  const comment = state.comments.byId[commentId];
+  const post = state.posts.byId[comment.postId];
+  const author = state.authors.byId[post.authorId]; // two hops: comment -> post -> author
+  return { ...comment, post: { ...post, author } };
+}
+```
+
+**How it works:** every additional hop in a normalized relationship graph is one more `byId` lookup chained onto the previous one's result — there's no query language or join helper in this package, so "the author of the post this comment belongs to" is expressed exactly as literally as that sentence, three sequential property reads. This is fine at small-to-medium scale; at large scale with many call sites needing the same multi-hop join, that's the point at which a memoized selector (combining each hop's lookup with `createSelector`-style input selectors) or `state-management-toolkit`'s adapter-backed `selectById` calls (which short-circuit a missing id more gracefully) start paying for themselves.
+
+## 28. Defending a normalized graph against a dangling foreign key
+
+```typescript
+function selectPostWithAuthor(state: RootState, postId: string) {
+  const post = state.posts.byId[postId];
+  if (!post) return undefined;
+  const author = state.authors.byId[post.authorId]; // may be undefined if the author was deleted without cascading
+  return { ...post, author: author ?? { id: post.authorId, name: '(deleted author)' } };
+}
+```
+
+**How it works:** nothing in a hand-rolled normalized graph enforces referential integrity — if a cascade like [Example 14](#14-a-reducer-that-cascades-a-delete-across-three-normalized-tables) is missed or skipped for some code path, `post.authorId` can end up pointing at an id that no longer exists in `authors.byId`, and a selector that blindly does `state.authors.byId[post.authorId]` gets back `undefined` rather than throwing (object index access never throws), silently propagating a "missing" value downstream until something tries to read `author.name` and crashes. Defending against this means every selector that crosses a relationship boundary needs an explicit fallback, exactly the kind of foreign-key integrity a real database (or, short of that, careful cascade-everywhere discipline) guarantees and this package fundamentally does not.
+
+## 29. A composite middleware stack ordering exercise: logging, validation, and persistence together with nested payloads
+
+```typescript
+const stack = applyMiddleware(
+  logger,                  // 1. observes every action, including ones validate will reject
+  validate,                // 2. rejects invalid posts/comments before they reach the reducer
+  normalizeIncomingPost,   // 3. reshapes nested server payloads into normalized form (only sees VALID actions)
+  persistToLocalStorage,   // 4. innermost — its next(action) is the actual dispatch to the reducer
+);
+const store = createStore(combineReducers({ posts: postsReducer, authors: authorsReducer }), stack);
+```
+
+**How it works:** each middleware's position encodes an assumption about what it should and shouldn't see — `logger` first means it logs rejected attempts too (an audit trail, as in [Example 17](#17-composing-logging-validation-and-persistence-middleware--and-why-order-matters)); `validate` second means nothing after it ever processes an invalid action; `normalizeIncomingPost` third means it only ever reshapes payloads that already passed validation, so it doesn't need its own defensive checks for malformed input; `persistToLocalStorage` last means `api.getState()` inside it reflects state *after* both validation and normalization succeeded. Reordering any two of these changes real behavior, not just code organization — there is no "right" order independent of what each middleware is meant to assume about the actions reaching it.
+
+## 30. Testing a full cascade reducer with multiple normalized tables
+
+```typescript
+test('deleting an author cascades to posts and comments', () => {
+  const state: EntitiesState = {
+    authors: normalize([{ id: 'a1', name: 'Ada' }]),
+    posts: normalize([{ id: 'p1', title: 'Hi', authorId: 'a1', commentIds: ['c1'] }]),
+    comments: normalize([{ id: 'c1', postId: 'p1', authorId: 'a1', text: 'nice' }]),
+  };
+
+  const next = deleteAuthor(state, 'a1');
+
+  expect(next.authors.allIds).toEqual([]);
+  expect(next.posts.allIds).toEqual([]);    // cascaded: post belonged to the deleted author
+  expect(next.comments.allIds).toEqual([]); // cascaded two hops: comment belonged to the cascaded post
+});
+```
+
+**How it works:** testing a multi-hop cascade means constructing a fixture state where the relationship actually exists across all three tables, then asserting that *every* table affected by the cascade ends up empty — a test that only checked `next.authors` would pass even if the cascade into `posts`/`comments` were silently broken, since `deleteAuthor`'s three return branches are otherwise structurally independent code in the same function. This is the integration-style counterpart to [Medium #19](./06-state-management-medium.mdx#19-testing-a-reducer-that-manages-nested-state-in-isolation)'s single-reducer nested test — here "isolation" means isolating the whole graph-mutation function from a real store, not isolating one slice from its siblings.
+
+## 31. A hand-rolled "selectors with cache invalidation per dependency" pattern
+
+```typescript
+function createSelector<S, D1, D2, R>(dep1: (s: S) => D1, dep2: (s: S) => D2, combiner: (d1: D1, d2: D2) => R) {
+  let lastDep1: D1, lastDep2: D2, lastResult: R, hasRun = false;
+  return (state: S): R => {
+    const d1 = dep1(state), d2 = dep2(state);
+    if (!hasRun || d1 !== lastDep1 || d2 !== lastDep2) {
+      lastResult = combiner(d1, d2);
+      lastDep1 = d1; lastDep2 = d2; hasRun = true;
+    }
+    return lastResult;
+  };
+}
+
+const selectPostsWithAuthors = createSelector(
+  (state: RootState) => state.posts,
+  (state: RootState) => state.authors,
+  (posts, authors) => posts.allIds.map((id) => ({ ...posts.byId[id], author: authors.byId[posts.byId[id].authorId] })),
+);
+```
+
+**How it works:** this generalizes [Example 10](#10-a-manual-memoized-selector)'s single-input memoization to two independently-tracked dependencies — the combiner only reruns when *either* `state.posts` or `state.authors` changes reference, so a dispatch that only touches an unrelated third slice (like `ui`) leaves both dependencies referentially equal and the cached result is reused untouched. This is a hand-rolled version of exactly what `state-management-toolkit`'s real `createSelector` does generically for any number of input selectors — the manual version here is capped at two for readability, but the principle (cache key = tuple of dependency references, not the whole state) scales to as many inputs as you're willing to list.
+
+## 32. Detecting an accidentally-broken reference-equality optimization
+
+```typescript
+function badPostsReducer(state = initialPosts, action: any) {
+  switch (action.type) {
+    case 'posts/touch':
+      return { ...state }; // BUG: spreads even though nothing inside actually changed
+    default: return state;
+  }
+}
+
+test('touch should be a true no-op, not just unhandled', () => {
+  const state = initialPosts;
+  expect(badPostsReducer(state, { type: 'posts/touch' })).toBe(state); // FAILS — {...state} is a new reference
+});
+```
+
+**How it works:** `{ ...state }` is a classic "looks harmless" bug specifically *because* it's the exact same syntax used everywhere else in this house style to correctly signal a real change — here it's applied to an action that should have been a complete no-op (or simply unhandled, falling to `default`), and the result is a new top-level reference even though every field's value is identical to before. Any selector memoized per [Example 31](#31-a-hand-rolled-selectors-with-cache-invalidation-per-dependency-pattern) on `state.posts` would treat this as "posts changed" and recompute, and any `React.memo`-wrapped component reading `state.posts` would re-render — purely because of one unnecessary spread, which is exactly why `toBe` reference checks on supposedly-unhandled actions are worth writing as tests, not just asserted informally by code review.
+
+## 33. Throttling a high-frequency action with middleware (no toolkit debounce helper available)
+
+```typescript
+const throttleMiddleware = (windowMs: number) => {
+  let lastRun = 0;
+  return (api) => (next) => (action) => {
+    if (action.type !== 'cursor/moved') return next(action); // only throttle this specific action type
+    const now = Date.now();
+    if (now - lastRun < windowMs) return action; // drop it — too soon since the last one
+    lastRun = now;
+    return next(action);
+  };
+};
+
+const store = createStore(rootReducer, applyMiddleware(throttleMiddleware(50)));
+```
+
+**How it works:** this package's `applyMiddleware` has no concept of timing or scheduling built in — `state-management-toolkit`'s `listenerMiddleware` adds debounce/throttle as configuration options on top, but at this layer it's hand-rolled exactly like any other middleware: closed-over mutable state (`lastRun`) persists across calls because the middleware function itself is created once and reused for every dispatch, and the early `return action` (without calling `next`) is the same "drop this action" technique from [Medium #5](./06-state-management-medium.mdx#5-a-middleware-that-conditionally-blocks-an-action), just gated on elapsed time instead of an auth check.
+
+## 34. A "command pattern" middleware for grouping several nested updates into one logical action
+
+```typescript
+const batchMiddleware = (api) => (next) => (action) => {
+  if (action.type !== 'batch') return next(action);
+  action.actions.forEach((a: any) => next(a)); // dispatch each inner action through the SAME middleware chain position
+  return action;
+};
+
+store.dispatch({
+  type: 'batch',
+  actions: [
+    { type: 'posts/added', post: { id: 'p1', title: 'Hi', authorId: 'a1' } },
+    { type: 'authors/added', author: { id: 'a1', name: 'Ada' } },
+  ],
+});
+```
+
+**How it works:** because `store.subscribe` notifies listeners once per `dispatch` call (see [Basic #3](./05-state-management-basic.mdx#3-subscribing-to-every-state-change)) but `batchMiddleware` calls `next` once *per inner action* rather than once for the whole batch, subscribers actually fire once per inner action here, not once total — true batching (one notification for N state changes) would require collecting the results and notifying manually, which this package's store doesn't expose a hook for. This example is included specifically to show the limit of what middleware alone can do: it can group *dispatching*, but not *notification*, without deeper surgery on the store itself.
+
+## 35. Building a tiny "create entity adapter" from scratch, mirroring the toolkit's shape
+
+```typescript
+function createBasicEntityAdapter<T extends { id: string }>() {
+  const getInitialState = () => ({ ids: [] as string[], entities: {} as Record<string, T> });
+  return {
+    getInitialState,
+    addOne: (state: ReturnType<typeof getInitialState>, action: { payload: T }) => ({
+      ids: state.ids.includes(action.payload.id) ? state.ids : [...state.ids, action.payload.id],
+      entities: { ...state.entities, [action.payload.id]: action.payload },
+    }),
+    removeOne: (state: ReturnType<typeof getInitialState>, action: { payload: string }) => ({
+      ids: state.ids.filter((id) => id !== action.payload),
+      entities: Object.fromEntries(Object.entries(state.entities).filter(([id]) => id !== action.payload)),
+    }),
+    getSelectors: () => ({
+      selectAll: (state: ReturnType<typeof getInitialState>) => state.ids.map((id) => state.entities[id]),
+      selectById: (state: ReturnType<typeof getInitialState>, id: string) => state.entities[id],
+    }),
+  };
+}
+```
+
+**How it works:** this deliberately mirrors `state-management-toolkit`'s real `createEntityAdapter` shape (`{ ids, entities }`, `addOne`/`removeOne`/`getSelectors`) but without Immer — `addOne`'s `state.ids.includes(...)` check exists because, unlike the real adapter (which can rely on a `Set`-like dedupe internally via Immer-tracked mutation), this plain-object version has to guard against re-adding a duplicate id manually, or `ids` would grow an array with the same id twice while `entities` stayed correctly deduplicated. Comparing this side-by-side with [Example 22](#22-graduating-a-normalized-nested-entity-scenario-to-state-management-toolkit-side-by-side) shows exactly what the real adapter is buying you: not a different state shape, but the dedup/merge bookkeeping done for you, immutably, on every CRUD call.
+
+## 36. Why this package's `dispatch` return value matters for chained synchronous logic
+
+```typescript
+function dispatchAndCheck(store: Store, action: any) {
+  const dispatched = store.dispatch(action); // returns the SAME action object, by contract
+  if (dispatched.type === 'todos/add' && store.getState().todos.length > 100) {
+    store.dispatch({ type: 'todos/trimOldest' });
+  }
+}
+```
+
+**How it works:** `dispatch`'s return value is just the action you passed in (see its implementation: `return action` at the end) — there's no result-of-the-reducer or promise involved, so any logic that wants to react to *the new state* after a dispatch has to call `store.getState()` separately afterward, as this function does, rather than trying to read something off `dispatch`'s return value. This synchronous, no-promise contract is also why "what if the reducer is slow" isn't a question this package's API surface has an answer for — there's no async dispatch path at all, only synchronous function calls all the way down.
+
+## 37. A "feature flag" middleware that nests a check inside action handling
+
+```typescript
+const featureFlagged = (flags: Record<string, boolean>) => (api) => (next) => (action) => {
+  const requiredFlag = action.meta?.requiresFlag;
+  if (requiredFlag && !flags[requiredFlag]) return action; // silently no-op if the flag is off
+  return next(action);
+};
+
+store.dispatch({ type: 'posts/added', post: {...}, meta: { requiresFlag: 'newPostsUi' } });
+```
+
+**How it works:** the `meta` field on an action is a plain convention (not a contract this package enforces — it just requires `{ type: string }`) for attaching out-of-band information that shouldn't be confused with the action's actual payload; here, `meta.requiresFlag` lets a single generic middleware gate *any* action type behind a flag, rather than writing a bespoke `if` check inside every reducer that needs to be flag-aware. This pattern is identical in spirit to `meta.requestId` used for tracking in-flight async actions, or `meta.optimistic` flags used by undo middleware — `meta` is the conventional place for "information about the action" as opposed to "the data the reducer needs."
+
+## 38. Comparing manual undo/redo against what an Immer-based slice could do instead
+
+```typescript
+// This package: undo/redo needs the explicit { past, present, future } wrapper from Example 19
+const store = createStore(undoable(rootReducer));
+
+// state-management-toolkit equivalent: still no built-in undo/redo helper —
+// the SAME wrapper pattern is needed, but reducers inside it can use Immer "mutating" syntax
+const undoableSlice = createSlice({
+  name: 'posts',
+  initialState: { past: [], present: postsAdapter.getInitialState(), future: [] },
+  reducers: {
+    postAdded: (state, action) => {
+      state.past.push(state.present);          // Immer draft mutation — looks imperative, stays immutable
+      postsAdapter.addOne(state.present, action);
+      state.future = [];
+    },
+  },
+});
+```
+
+**How it works:** neither package ships undo/redo — it's equally a "build it yourself" concern at both layers, which is worth calling out explicitly since toolkit migration guides can give the impression the toolkit solves *everything* this package doesn't. What the toolkit *does* change is how the history-pushing code reads: `state.past.push(...)` directly mutates an Immer draft and is safe, whereas the plain-package version must write `past: [...state.past, state.present]` immutably by hand, as in [Example 19](#19-a-from-scratch-undo-redo-implementation-over-nested-state) — the undo/redo *design* (snapshot present before changing it, clear future on a new action) is identical in both; only the spread-vs-mutate ergonomics differ.
+
+## 39. A manual "structural sharing" sanity check for a large nested tree
+
+```typescript
+function countChangedTopLevelKeys(prev: Record<string, unknown>, next: Record<string, unknown>): number {
+  return Object.keys(next).filter((key) => next[key] !== prev[key]).length;
+}
+
+store.subscribe(() => {
+  const changed = countChangedTopLevelKeys(prevState, store.getState());
+  if (changed > 1) console.warn(`${changed} top-level slices changed in one dispatch — expected exactly 1`);
+  prevState = store.getState();
+});
+```
+
+**How it works:** in a well-behaved `combineReducers` tree, a single action should usually change exactly one top-level slice (the one whose action-type namespace it belongs to) — this subscriber-based check is a cheap runtime assertion that catches violations of that expectation (like the intentional cross-slice cascade in [Medium #8](./06-state-management-medium.mdx#8-cascading-a-delete-across-cross-referencing-slices), which legitimately changes two) versus a *bug* where a reducer spreads its state unnecessarily on an action it should have ignored, per [Example 32](#32-detecting-an-accidentally-broken-reference-equality-optimization). It's a development-time tool, not something to ship to production — the point is surfacing accidental reference churn while you're still writing reducers, before it becomes a real performance regression in a large tree.
+
+## 40. SSR with nested nested state and selective hydration (skip transient UI state)
+
+```typescript
+// server
+const serverStore = createStore(rootReducer);
+serverStore.dispatch({ type: 'posts/added', post: { id: 'p1', title: 'Hi', authorId: 'a1' } });
+
+const { ui, ...persistable } = serverStore.getState(); // never send UI state (modals, hover state) to the client
+const html = `<script>window.__PRELOADED_STATE__ = ${JSON.stringify(persistable)}</script>` + renderToString(serverStore.getState());
+
+// client
+const clientPreloaded = { ...window.__PRELOADED_STATE__, ui: uiReducer(undefined, { type: '@@INIT' }) };
+const clientStore = createStore(rootReducer, clientPreloaded);
+```
+
+**How it works:** `preloadedState` doesn't have to be the server's *entire* `getState()` output — here the `ui` slice (ephemeral, client-only concerns like "is this dropdown open") is deliberately excluded from what's serialized into the HTML response, both to avoid leaking server-only UI state and to avoid bloating the payload with state that's meaningless on a fresh page load, and the client reconstructs that slice's true initial value separately by calling `uiReducer(undefined, { type: '@@INIT' })` directly rather than receiving it from the server at all.
+
+## 41. A devtools-aware middleware that skips logging in production
+
+```typescript
+const conditionalLogger = (api) => (next) => (action) => {
+  const result = next(action);
+  if (process.env.NODE_ENV !== 'production') console.log('action', action, 'state', api.getState());
+  return result;
+};
+
+const store = createStore(
+  rootReducer,
+  process.env.NODE_ENV !== 'production'
+    ? applyMiddleware(conditionalLogger)
+    : undefined,
+);
+```
+
+**How it works:** `applyMiddleware(...)` and any other enhancer are just plain values to `createStore` — there's nothing wrong with computing which enhancer (or none at all) to pass based on a build-time or runtime flag, which is exactly how both this kind of logging middleware and the devtools enhancer from [Example 1](#1-connecting-a-plain-store-to-the-time-travel-inspector) are conventionally excluded from production bundles, either via this kind of runtime check or (better, for bundle size) a build-time dead-code-elimination pass keyed on `process.env.NODE_ENV`.
+
+## 42. Testing a selector that spans the normalized entity graph
+
+```typescript
+test('selectCommentWithPostAndAuthor joins across three tables', () => {
+  const state: RootState = {
+    comments: normalize([{ id: 'c1', postId: 'p1', authorId: 'a1', text: 'nice' }]),
+    posts: normalize([{ id: 'p1', title: 'Hi', authorId: 'a1' }]),
+    authors: normalize([{ id: 'a1', name: 'Ada' }]),
+  };
+
+  const result = selectCommentWithPostAndAuthor(state, 'c1');
+  expect(result.post.author.name).toBe('Ada');
+});
+```
+
+**How it works:** testing a cross-table selector means constructing a *consistent* fixture across all the tables it joins — the comment's `postId` must actually exist in the `posts` fixture, and that post's `authorId` must exist in `authors`, or the selector under test would either throw or silently return `undefined` for unrelated reasons that have nothing to do with the join logic itself. This is the kind of test that catches a selector's join *order* being wrong (e.g. accidentally using `comment.authorId` instead of `post.authorId` for the author lookup) even when each individual table's data looks correct in isolation.
+
+## 43. A minimal "request deduplication" middleware using nested action metadata
+
+```typescript
+const inFlightRequests = new Set<string>();
+
+const dedupeRequests = (api) => (next) => (action) => {
+  if (action.type !== 'posts/fetchRequested') return next(action);
+  if (inFlightRequests.has(action.postId)) return action; // already fetching this one — drop the duplicate
+  inFlightRequests.add(action.postId);
+  const result = next(action);
+  fetchPost(action.postId).finally(() => inFlightRequests.delete(action.postId));
+  return result;
+};
+```
+
+**How it works:** the `Set` here is middleware-local mutable state, closed over once when `dedupeRequests` is created — it persists for the lifetime of the middleware (effectively, the store), tracking which fetches are currently in flight independent of anything in the actual Redux-managed `state` tree, because "is this specific fetch currently pending" is transient coordination state that doesn't belong in the serializable, time-travelable state tree the devtools record. This is the same "middleware owns its own closure-scoped state, not the store's state" pattern as the throttle middleware in [Example 33](#33-throttling-a-high-frequency-action-with-middleware-no-toolkit-debounce-helper-available).
+
+## 44. Replaying recorded actions to reconstruct nested state for a bug report
+
+```typescript
+function replayActions(reducer: Reducer, actions: Array<{ type: string; [key: string]: unknown }>) {
+  return actions.reduce((state, action) => reducer(state, action), reducer(undefined, { type: '@@INIT' }));
+}
+
+// support tooling: a user reports a bug; you have their recorded action log
+const reconstructedState = replayActions(rootReducer, userActionLog);
+console.log(reconstructedState); // the exact nested state the user was looking at when the bug occurred
+```
+
+**How it works:** because reducers are pure functions of `(state, action)`, the *entire* state tree at any point in a session is fully determined by the ordered list of actions dispatched since the start — `replayActions` exploits exactly that property, starting from the same `@@INIT` default state every store starts from and folding each recorded action through the reducer in order. This is the same principle the devtools Inspector's time-travel relies on internally (see [Example 2](#2-hand-writing-the-lifted-store-pattern)), applied here outside of any live store, purely as a debugging tool for reconstructing what a user saw from a recorded action log.
+
+## 45. A nested-state-aware "deep equal" check, used sparingly and deliberately
+
+```typescript
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
+  const aKeys = Object.keys(a as object), bKeys = Object.keys(b as object);
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every((key) => deepEqual((a as any)[key], (b as any)[key]));
+}
+
+// used only at a SPECIFIC boundary, e.g. deciding whether to actually call setState in a UI binding
+if (!deepEqual(prevProps.post, nextProps.post)) rerender();
+```
+
+**How it works:** this is the deliberate opposite of the reference-equality discipline in [Example 23](#23-reference-equality-discipline-as-the-core-performance-model-for-large-nested-trees) — it recursively walks the *entire* structure rather than trusting reference identity, which is correct but O(size of the tree) on every call, the exact cost reference-equality checks exist to avoid. The comment "used only at a specific boundary" is the important part: reaching for `deepEqual` broadly across a large nested-state app defeats the whole point of disciplined immutable updates; it's a tool for the rare case where you genuinely can't trust references (e.g. comparing state that arrived from `JSON.parse`d `localStorage`, which never shares references with anything in memory) — see [Medium #25](./06-state-management-medium.mdx#25-testing-a-reducer-in-isolation) for why `toBe`/reference checks are normally preferred in this codebase's own tests.
+
+## 46. A composite SSR + devtools + persistence enhancer stack, composed correctly
+
+```typescript
+import { compose, applyMiddleware, createStore } from '@headlesskit/state-management';
+
+const composedEnhancer = compose(
+  applyMiddleware(logger, persistToLocalStorage),
+  withPersistence('app-state'), // a plain enhancer, not middleware — see Medium #24
+  typeof window !== 'undefined' ? window.__HEADLESSKIT_DEVTOOLS_EXTENSION__?.({ name: 'app' }) ?? ((f: any) => f) : ((f: any) => f),
+);
+
+const store = createStore(rootReducer, preloadedStateFromSSR, composedEnhancer);
+```
+
+**How it works:** `compose` accepts any mix of enhancers — `applyMiddleware(...)`'s result is one enhancer, a hand-rolled `StoreEnhancer` like `withPersistence` is another, and the devtools extension is a third — and folds them into a single function `createStore` can accept as its third argument (alongside `preloadedState` as the second, per the overload in [Example 5](#5-server-side-store-creation-with-hydration)). The `typeof window !== 'undefined'` guard and the `?? ((f) => f)` identity-function fallback both exist because this same composed code might run on the server (no `window`, so the devtools extension must become a no-op) as well as the client (where it might also be absent if the browser extension isn't installed) — without that fallback, `compose` would receive `undefined` instead of a function and throw.
+
+## 47. Performance: avoiding O(n) array scans in a normalized table at scale
+
+```typescript
+// SLOW at scale: .find scans the whole array every single lookup
+function selectPostByIdSlow(state: RootState, id: string) {
+  return state.postsArray.find((p) => p.id === id); // O(n) per lookup, n = total posts
+}
+
+// FAST regardless of scale: byId lookup is O(1)
+function selectPostByIdFast(state: RootState, id: string) {
+  return state.posts.byId[id]; // O(1) — this is the entire reason to normalize in the first place
+}
+```
+
+**How it works:** this is the concrete performance payoff that motivates normalizing in the first place (introduced informally back in [Medium #6](./06-state-management-medium.mdx#6-a-normalized-entities-slice-by-hand)) — once a list of entities is large enough that "find one in production" is the question, an array shape (whatever its other ergonomic benefits) costs you a linear scan on every single lookup, while an object keyed by id is a hash-map lookup, constant time regardless of how many entities exist. The trade-off normalization makes in exchange is the bookkeeping cost shown throughout this section — every insert/update/delete has to maintain `allIds`/`ids` *and* `byId`/`entities` in sync by hand (or via an adapter), rather than just pushing onto a flat array.
+
+## 48. SSR streaming: why this package's synchronous dispatch is actually a good fit
+
+```typescript
+// each chunk of a streamed SSR response can dispatch into the SAME server-side store
+// as data becomes available, then re-render incrementally
+const serverStore = createStore(rootReducer);
+
+async function handleRequest(res: ServerResponse) {
+  serverStore.dispatch({ type: 'posts/fetchRequested' });
+  res.write(renderShell(serverStore.getState())); // render what's available immediately
+
+  const posts = await fetchPostsFromDb();
+  serverStore.dispatch({ type: 'posts/received', posts });
+  res.write(renderPostsSection(serverStore.getState())); // render the rest once data arrives
+}
+```
+
+**How it works:** because `dispatch` is fully synchronous (see [Basic #13](./05-state-management-basic.mdx#13-dispatching-several-actions-in-sequence)) and `getState()` always reflects the result of the most recent dispatch immediately, a streaming SSR handler can interleave `dispatch` calls with `await`ed async work and `res.write` calls without any risk of reading a stale or half-updated state — there's no internal queue or batching this package would need to flush first. This pairs naturally with streaming renderers (React's `renderToPipeableStream` or similar) that themselves render incrementally as data becomes available.
+
+## 49. Testing an enhancer that wraps `createStore` itself
+
+```typescript
+test('withLogging enhancer logs the initial state once', () => {
+  const logs: unknown[] = [];
+  const originalLog = console.log;
+  console.log = (...args) => logs.push(args);
+
+  createStore((state = { count: 0 }) => state, withLogging);
+
+  console.log = originalLog;
+  expect(logs).toEqual([['store created with initial state', { count: 0 }]]);
+});
+```
+
+**How it works:** testing an enhancer (as opposed to middleware, [Example 11](#11-testing-middleware-with-a-fake-store-api)) means calling the *real* `createStore` with the enhancer under test, since an enhancer's whole job is wrapping `createStore` itself — there's no smaller unit to isolate it from. Spying on `console.log` (saving and restoring the original) is the standard way to assert on a side effect without a mocking library; the assertion checks the exact call arguments the enhancer's internal `console.log('store created with initial state', store.getState())` call (from [Medium #15](./06-state-management-medium.mdx#15-a-minimal-store-enhancer)) actually produces.
+
+## 50. Graduating to `@headlesskit/state-management-toolkit`
+
+```typescript
+// Before: this package
+const store = createStore(combineReducers({ counter: counterReducer }), applyMiddleware(thunkMiddleware));
+
+// After: configureStore does the equivalent setup, plus devtools + sensible default middleware
+import { configureStore } from '@headlesskit/state-management-toolkit';
+const store = configureStore({ reducer: { counter: counterSlice.reducer } });
+```
+
+**How it works:** `state-management-toolkit` is built *on top of* this package — `configureStore` calls the very same `createStore`/`combineReducers`/`applyMiddleware`/`compose` you've been using throughout this section, just with opinionated defaults (a real thunk middleware, dev-mode serializability/immutability checks, devtools wiring) pre-applied. Nothing you learned here is wasted once you reach for the toolkit — it's additive, not a different mental model, and every hand-rolled pattern in this file (normalization, undo/redo, deep merge, entity graphs) maps onto something the toolkit either generates for you (`createEntityAdapter`) or still leaves you to build (undo/redo, deep merge), now just with Immer-backed ergonomics underneath.

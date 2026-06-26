@@ -18,6 +18,8 @@
     "@headlesskit/state-management-toolkit": "workspace:*",
     "@headlesskit/state-management-simplify": "workspace:*",
     "@headlesskit/state-management-simplify-react": "workspace:*",
+    "@headlesskit/state-management-devtools": "workspace:*",
+    "@headlesskit/state-management-devtools-react": "workspace:*",
     "prism-react-renderer": "^2.4.1"
   },
   "devDependencies": {

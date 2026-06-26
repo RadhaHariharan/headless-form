@@ -1,0 +1,523 @@
+# Forms — Medium Examples
+
+Thirty examples combining two or three basic concepts from [Forms — Basic](./02-forms-basic.mdx) into realistic patterns, with a focus on nested objects, arrays of objects, and the remaining field-validator options.
+
+---
+
+## 1. Validate on blur instead of every keystroke
+
+```tsx
+const form = useForm({
+  initialValues: { email: '' },
+  validate: { email: isEmail('Enter a valid email') },
+  validateInputOnBlur: ['email'],
+});
+```
+
+**How it works:** `validateInputOnBlur` accepts either `true` (every field) or a list of paths — only those fields re-run validation on `onBlur`, leaving everything else validated only at submit time. This gives users feedback as soon as they leave a field, without the more aggressive (and often annoying) `validateInputOnChange`.
+
+## 2. Debounced change validation
+
+```tsx
+const form = useForm({
+  initialValues: { username: '' },
+  validate: { username: isNotEmpty('Required') },
+  validateInputOnChange: ['username'],
+  validateDebounce: 300,
+});
+```
+
+**How it works:** with `validateInputOnChange` enabled, every keystroke would normally re-run validation; `validateDebounce` delays that re-run until the user has paused typing for the given number of milliseconds, coalescing a burst of changes into a single validation pass. This matters most when validation is expensive (see [async validation](#10-async-validation-eg-checking-username-availability) below) — debouncing also avoids firing a network request per keystroke.
+
+## 3. A custom, configurable field validator
+
+```tsx
+import { useForm, createStringValidator } from '@headlesskit/forms-react';
+
+const password = createStringValidator({ minLength: 8, pattern: /[0-9]/ });
+
+const form = useForm({
+  initialValues: { password: '' },
+  validate: { password: (value) => password(value, 'password') },
+});
+```
+
+**How it works:** `createStringValidator`/`createNumberValidator`/`createArrayValidator`/etc. are *factories*, not `ValidationRule`s themselves — they return a `FieldValidatorFunction<T>` of shape `(value, fieldName) => string | null`, so you call it with the field's value to actually get an error message (or `null`). Wrapping it in an inline function (as above) adapts it to the `ValidationRule` shape `validate` expects; `toValidationRule(validator)` does the same adaptation for you if you want to reuse a validator across multiple `validate` configs.
+
+## 4. Cross-field validation (confirm password)
+
+```tsx
+import { useForm, matchesField } from '@headlesskit/forms-react';
+
+const form = useForm({
+  initialValues: { password: '', confirmPassword: '' },
+  validate: {
+    confirmPassword: matchesField('password', 'Passwords do not match'),
+  },
+});
+```
+
+**How it works:** `matchesField` reads a *second* path (`'password'`) out of the full `Values` object at validation time and compares it against the field being validated (`'confirmPassword'`) — every `ValidationRule` actually receives `(value, values)`, not just `value`; the single-field validators in [Basic](./02-forms-basic.mdx) simply ignore the second argument.
+
+## 5. `matchesField` across nested paths
+
+```tsx
+import { useForm, matchesField } from '@headlesskit/forms-react';
+
+const form = useForm({
+  initialValues: {
+    billing: { email: '' },
+    shipping: { confirmEmail: '' },
+  },
+  validate: {
+    'shipping.confirmEmail': matchesField('billing.email', 'Must match billing email'),
+  },
+});
+```
+
+**How it works:** the path `matchesField` reads from is just another dotted string — there's no restriction that the two paths share a common parent, or even live at the same nesting depth. `getPath(values, 'billing.email')` is called fresh on every validation run, so it always compares against the *current* value of the other field, not a stale snapshot captured when the rule was created.
+
+## 6. A dynamic list of fields
+
+```tsx
+const form = useForm({ initialValues: { emails: [{ address: '' }] } });
+
+{form.getValues().emails.map((_, index) => (
+  <input key={form.key(`emails.${index}.address`)} {...form.getInputProps(`emails.${index}.address`)} />
+))}
+<button type="button" onClick={() => form.insertListItem('emails', { address: '' })}>Add email</button>
+<button type="button" onClick={() => form.removeListItem('emails', 0)}>Remove first</button>
+```
+
+**How it works:** array paths are just dot-notation strings (`'emails.0.address'`) — fully type-checked against `Values` via `DeepKeys`. `insertListItem`/`removeListItem`/`reorderListItem` mutate the array immutably under the hood and re-key every affected uncontrolled input (since indices shift), which is why mapping with `form.key(...)` per item — not React's own `index` as `key` — is what keeps each input's actual typed-in DOM value attached to the right array slot after a reorder.
+
+## 7. Arrays of objects: add, remove, and reorder rows
+
+```tsx
+const form = useForm({
+  initialValues: { lineItems: [{ sku: '', qty: 1 }] },
+});
+
+function moveUp(index: number) {
+  if (index === 0) return;
+  form.reorderListItem('lineItems', { from: index, to: index - 1 });
+}
+
+<button type="button" onClick={() => form.insertListItem('lineItems', { sku: '', qty: 1 })}>
+  Add row
+</button>
+<button type="button" onClick={() => moveUp(1)}>Move row 1 up</button>
+<button type="button" onClick={() => form.removeListItem('lineItems', 0)}>Remove row 0</button>
+```
+
+**How it works:** `reorderListItem` takes a `{ from, to }` pair rather than two separate arguments, matching the shape you'd get from a drag-and-drop library's `onDragEnd` payload directly. Internally it removes the item at `from` and re-inserts it at `to` in one immutable array replacement — every row after the lower of the two indices gets a new dirty/key state, which is unavoidable since their *positional* path (`lineItems.2.sku`) now points at different underlying data even though no row's own fields changed.
+
+## 8. Per-row validation for an array of objects
+
+```tsx
+const form = useForm({
+  initialValues: { lineItems: [{ sku: '', qty: 1 }] },
+  validate: (values) =>
+    values.lineItems.reduce((errors, item, i) => {
+      if (!item.sku) errors[`lineItems.${i}.sku`] = 'SKU is required';
+      if (item.qty < 1) errors[`lineItems.${i}.qty`] = 'Quantity must be at least 1';
+      return errors;
+    }, {} as Record<string, string>),
+});
+```
+
+**How it works:** using the function form of `validate` (rather than a static rules object) is what lets per-row validation scale with the array's actual length at validation time — a static `{ 'lineItems.0.sku': ... }` object would silently stop validating row 1 the moment `insertListItem` adds it, since its keys were fixed when `useForm` was called. The returned `FormErrors` object is still flat, keyed by the same `lineItems.${i}.sku` strings `getInputProps`/`errors` expect.
+
+## 9. Conditionally showing a field
+
+```tsx
+const employmentStatus = form.getInputProps('employmentStatus').value;
+
+{employmentStatus === 'employed' && (
+  <input key={form.key('employerName')} {...form.getInputProps('employerName')} />
+)}
+```
+
+**How it works:** reading a controlled field's current value through `getInputProps(...).value` (rather than `getValues()`) ties the conditional render to whatever re-render already happened for that field — in uncontrolled mode this only works reliably if `employmentStatus` is itself validated/touched-tracked so its changes actually re-render the component; for a purely presentational toggle like this, switching that one field to `mode: 'controlled'` (the package's other supported mode) is often simpler than fighting the uncontrolled model.
+
+## 10. Async validation (e.g. checking username availability)
+
+```tsx
+const form = useForm({
+  initialValues: { username: '' },
+  validate: async (values) => {
+    const taken = await api.isUsernameTaken(values.username);
+    return taken ? { username: 'Already taken' } : {};
+  },
+});
+```
+
+**How it works:** `validate` can be a function instead of a rules object, and that function may return a `Promise<FormErrors>` — `form.validate()`/`onSubmit` both `await` it automatically, and `form.validating` flips to `true` for the duration so you can show a spinner. Combine with [debounced change validation](#2-debounced-change-validation) so an async check doesn't fire on every keystroke.
+
+## 11. Transforming values before they reach your submit handler
+
+```tsx
+const form = useForm({
+  initialValues: { birthDate: '1990-01-01', name: '  Ada  ' },
+  transformValues: (values) => ({
+    birthDate: new Date(values.birthDate),
+    name: values.name.trim(),
+  }),
+});
+
+form.onSubmit((values) => {
+  values.birthDate; // a real Date, not a string
+});
+```
+
+**How it works:** `transformValues` runs once, after validation passes, converting `Values` (what your inputs are bound to — usually plain strings/booleans/numbers) into `TransformedValues` (whatever shape your API actually wants). This keeps your `<input>`-facing types simple while still giving `onValid` rich, ready-to-use data — the same mechanism [`schemaResolver`](./04-forms-advanced.mdx) builds on for schema-typed output.
+
+## 12. Transforming nested values mid-pipeline
+
+```tsx
+const form = useForm({
+  initialValues: { address: { street: '  Main St  ', city: 'Boston' }, total: '19.99' },
+  transformValues: (values) => ({
+    address: { ...values.address, street: values.address.street.trim() },
+    total: Number(values.total),
+  }),
+});
+
+form.onSubmit((values) => {
+  values.address.street; // trimmed
+  values.total; // a real number
+});
+```
+
+**How it works:** `transformValues` receives the *whole* `Values` tree in one call, not per-field — so transforming one nested leaf (`address.street`) while leaving siblings (`address.city`) untouched means spreading the parent object yourself, exactly as you would with `setFieldValue`'s immutable-patch semantics. There's no automatic deep-merge here; whatever shape you return *is* `TransformedValues`, nested or not.
+
+## 13. Combining multiple nested paths in one form
+
+```tsx
+const form = useForm({
+  initialValues: {
+    billing: { address: { street: '', city: '', zip: '' } },
+    shipping: { address: { street: '', city: '', zip: '' } },
+    sameAsBilling: true,
+  },
+  validate: {
+    'billing.address.city': isNotEmpty('City is required'),
+    'shipping.address.city': (value, values) =>
+      values.sameAsBilling ? null : isNotEmpty('City is required')(value, values),
+  },
+});
+
+<input key={form.key('billing.address.city')} {...form.getInputProps('billing.address.city')} />
+{!form.getValues().sameAsBilling && (
+  <input key={form.key('shipping.address.city')} {...form.getInputProps('shipping.address.city')} />
+)}
+```
+
+**How it works:** two structurally identical nested sub-objects (`billing.address` and `shipping.address`) coexist fine as separate dotted paths — `DeepKeys<Values>` walks each branch of the type independently, so `'billing.address.city'` and `'shipping.address.city'` are both valid, distinctly-typed paths even though they share a shape. The `sameAsBilling` flag is read from the *second* `validate` argument (the whole `values` object), letting one path's validation depend on another field's current value, same mechanism as `matchesField`.
+
+## 14. `createFormContext` with a child reading one nested leaf
+
+```tsx
+import { createFormContext } from '@headlesskit/forms-react';
+
+const [ProfileFormProvider, useProfileForm] = createFormContext<{
+  account: { username: string };
+  profile: { bio: string; address: { city: string } };
+}>();
+
+function CityField() {
+  const form = useProfileForm();
+  return <input key={form.key('profile.address.city')} {...form.getInputProps('profile.address.city')} />;
+}
+```
+
+**How it works:** the context hook's generic `Values` shape carries all the way down into `CityField`, so `form.key('profile.address.city')` is type-checked against the full nested shape even though `CityField` never sees `initialValues` itself — it only calls the *context* hook, which reads whatever form instance the nearest `Provider` supplied. This is the nested-object version of [example 2 in Advanced](./04-forms-advanced.mdx): the only difference is the leaf path being read is three levels deep instead of one.
+
+## 15. Reacting to a field's changes elsewhere in the form
+
+```tsx
+useEffect(() => {
+  return form.watch('country', ({ value }) => {
+    form.setFieldValue('region', '');
+  });
+}, []);
+```
+
+**How it works:** `watch` is a raw subscription independent of rendering — the handler fires synchronously whenever that exact path changes, even from a programmatic `setFieldValue` call, and returns an unsubscribe function for cleanup. By default a watcher on `'country'` does *not* fire when a sibling like `'address.country'` changes; set `cascadeUpdates: true` on `useForm` if you need ancestor paths to also notify watchers on descendant changes (and vice versa).
+
+## 16. Watching a nested path and its dirty/touched payload
+
+```tsx
+useEffect(() => {
+  return form.watch('address.zip', ({ value, previousValue, dirty, touched }) => {
+    if (dirty && value.length === 5) lookupCityFromZip(value).then((city) => {
+      form.setFieldValue('address.city', city);
+    });
+  });
+}, []);
+```
+
+**How it works:** every `watch` callback receives the same `WatchPayload` shape (`{ previousValue, value, touched, dirty }`) regardless of nesting depth — `dirty`/`touched` here reflect *that exact path* (`'address.zip'`), not the parent `address` object as a whole, so this fires once per zip edit rather than once per any address field edit. Setting a sibling nested leaf (`address.city`) from inside the handler is the same cheap leaf-patch as any other `setFieldValue` call — `address.street` is untouched.
+
+## 17. A reusable Zod schema for a moderately nested shape
+
+```tsx
+import { z } from 'zod';
+import { useForm, schemaResolver } from '@headlesskit/forms-react';
+
+const schema = z.object({
+  name: z.string().min(1),
+  address: z.object({
+    street: z.string().min(1),
+    city: z.string().min(1),
+    zip: z.string().regex(/^\d{5}$/),
+  }),
+});
+
+const form = useForm({
+  initialValues: { name: '', address: { street: '', city: '', zip: '' } },
+  validate: schemaResolver(schema),
+});
+```
+
+**How it works:** `schemaResolver` walks each Standard Schema issue's `path` array (e.g. `['address', 'zip']`) and joins it with `.` to produce the exact dotted string (`'address.zip'`) that `form.errors` is keyed by — so a nested Zod object schema maps onto nested form paths with zero manual translation, the same flat-`FormErrors` shape as a hand-written `validate` rules object.
+
+## 18. Required-from-an-array validation with `createArrayValidator`
+
+```tsx
+import { useForm, createArrayValidator, toValidationRule } from '@headlesskit/forms-react';
+
+const skillsRule = createArrayValidator({ minItems: 1, maxItems: 5, uniqueItems: true });
+
+const form = useForm({
+  initialValues: { skills: [] as string[] },
+  validate: { skills: toValidationRule(skillsRule, 'Skills') },
+});
+```
+
+**How it works:** when `minItems` is set, `createArrayValidator` defers its generic "required" message and instead reports the more specific `"Skills must have at least 1 item"` once the count check runs — so an empty array gets one clear message instead of two competing ones. `uniqueItems` is checked independently via a `Set` size comparison, so a 5-item array with one duplicate fails `uniqueItems` even though it already satisfies `minItems`/`maxItems`.
+
+## 19. Allow/forbid specific array values with `createArrayValidator`
+
+```tsx
+import { useForm, createArrayValidator, toValidationRule } from '@headlesskit/forms-react';
+
+const rolesRule = createArrayValidator({
+  allowedValues: ['admin', 'editor', 'viewer'],
+  forbiddenValues: ['superadmin'],
+});
+
+const form = useForm({
+  initialValues: { roles: [] as string[] },
+  validate: { roles: toValidationRule(rolesRule, 'Roles') },
+});
+```
+
+**How it works:** `allowedValues` and `forbiddenValues` are checked independently of each other and of `minItems`/`uniqueItems` — `allowedValues` filters for items *not* in the whitelist and reports them by name (`"Roles contains invalid selections: hacker"`), while `forbiddenValues` filters for items that *are* in the blacklist. A value could simultaneously be absent from `allowedValues` and present in `forbiddenValues`; `allowedValues` is checked first, so that error wins.
+
+## 20. Custom array validation and per-rule messages
+
+```tsx
+import { useForm, createArrayValidator, toValidationRule } from '@headlesskit/forms-react';
+
+const cartRule = createArrayValidator({
+  minItems: 1,
+  customValidation: (items) => (items.length > 20 ? 'Cart is suspiciously large' : null),
+  messages: { minItems: 'Your cart is empty' },
+});
+
+const form = useForm({
+  initialValues: { cart: [] as string[] },
+  validate: { cart: toValidationRule(cartRule, 'Cart') },
+});
+```
+
+**How it works:** `messages` lets you override just the specific message key that would otherwise fire (here, `minItems`'s default `"{fieldName} must have at least 1 item"` becomes `"Your cart is empty"`), while every other rule keeps its default wording. `customValidation` always runs *last*, after every built-in check passes — so it's the right place for a check (item count ceiling, total value cap) that doesn't correspond to any of the factory's named options.
+
+## 21. String validator: character class and start/end constraints
+
+```tsx
+import { useForm, createStringValidator } from '@headlesskit/forms-react';
+
+const handle = createStringValidator({
+  allowedCharacters: 'alphanumeric',
+  shouldNotStartWith: /^[0-9]/,
+  shouldStartWith: '@',
+});
+
+const form = useForm({
+  initialValues: { handle: '' },
+  validate: { handle: (value) => handle(value, 'Handle') },
+});
+```
+
+**How it works:** `allowedCharacters: 'alphanumeric'` rejects the whole string if *any* character falls outside `[a-zA-Z0-9]` (or `[a-zA-Z0-9\s]` when `allowSpaces: true`); `shouldStartWith`/`shouldNotStartWith` run as separate, later checks against the trimmed value, so `'@bob1'` only passes the character-class check if `@` is treated as allowed too — in practice you'd combine `allowedCharacters: 'custom'` with a `customPattern` that includes `@` rather than mixing `'alphanumeric'` with a required `@` prefix, since the example above would actually fail at the character-class step before `shouldStartWith` ever runs.
+
+## 22. String validator: content requirements and forbidden words
+
+```tsx
+import { useForm, createStringValidator } from '@headlesskit/forms-react';
+
+const bio = createStringValidator({
+  required: false,
+  maxLength: 280,
+  mustNotContain: /https?:\/\//,
+  forbiddenWords: ['spam', 'crypto'],
+});
+
+const form = useForm({
+  initialValues: { bio: '' },
+  validate: { bio: (value) => bio(value, 'Bio') },
+});
+```
+
+**How it works:** `required: false` short-circuits the whole validator for an empty value — `mustNotContain`/`forbiddenWords` never run against `''`, so this field is genuinely optional, not "optional but still checked for links." `forbiddenWords` matching is substring-based (`checkValue.includes(word)`), not word-boundary-aware, so `'crypto'` also rejects `'cryptocurrency'`; `caseSensitive: false` would lowercase both the value and the word list before that comparison.
+
+## 23. String validator: custom messages with the `{fieldName}` placeholder
+
+```tsx
+import { useForm, createStringValidator } from '@headlesskit/forms-react';
+
+const slug = createStringValidator({
+  allowedCharacters: 'custom',
+  customPattern: /^[a-z0-9-]+$/,
+  messages: { allowedCharacters: '{fieldName} may only contain lowercase letters, digits, and hyphens' },
+});
+
+const form = useForm({
+  initialValues: { slug: '' },
+  validate: { slug: (value) => slug(value, 'Slug') },
+});
+```
+
+**How it works:** every `create*Validator`'s `messages` option is checked *before* the built-in default for that specific failure key — `getMessage` does a simple `rules.messages?.[key] || defaultMessage` lookup, then replaces every `{fieldName}` occurrence with the second argument you pass the validator (`'Slug'` here), so the same custom-message config produces a correctly-worded error no matter what field name you call it with.
+
+## 24. Number validator: precision, multiples, and forbidden values
+
+```tsx
+import { useForm, createNumberValidator } from '@headlesskit/forms-react';
+
+const price = createNumberValidator({
+  min: 0,
+  precision: 2,
+  multipleOf: 0.01,
+  forbiddenValues: [0],
+});
+
+const form = useForm({
+  initialValues: { price: '' },
+  validate: { price: (value) => price(value, 'Price') },
+});
+```
+
+**How it works:** `precision` counts digits after the decimal point on the *parsed* number's `toString()` representation, so a price typed as `"9.999"` fails `precision: 2` even though it would pass `multipleOf: 0.01` if rounded first — the two checks don't coordinate with each other, they just both run in sequence. `forbiddenValues` is checked with `.includes`, an exact-match comparison against the coerced number, so `price` rejects exactly `0`, not "anything below some epsilon."
+
+## 25. Number validator: sign and integer constraints
+
+```tsx
+import { useForm, createNumberValidator } from '@headlesskit/forms-react';
+
+const adjustment = createNumberValidator({ integer: true, negative: true, max: -1 });
+
+const form = useForm({
+  initialValues: { adjustment: '' },
+  validate: { adjustment: (value) => adjustment(value, 'Adjustment') },
+});
+```
+
+**How it works:** `negative` and `positive` are independent boolean checks (`numValue >= 0` / `numValue <= 0`), not derived from `min`/`max` — so `negative: true, max: -1` are two separate constraints that happen to overlap (both reject `0`), and a validator could legally combine `positive: true` with a `max` below zero, which would make every input fail. `integer` runs via `Number.isInteger`, after coercion, so the string `"5.0"` parses to the integer `5` and passes, while `"5.5"` correctly fails.
+
+## 26. Date validator: future/past and date-time precision
+
+```tsx
+import { useForm, createDateValidator, toValidationRule } from '@headlesskit/forms-react';
+
+const appointment = createDateValidator({ inFuture: true });
+const deadline = createDateValidator({ inFutureDateTime: true });
+
+const form = useForm({
+  initialValues: { appointmentDate: '', deadline: '' },
+  validate: {
+    appointmentDate: toValidationRule(appointment, 'Appointment date'),
+    deadline: toValidationRule(deadline, 'Deadline'),
+  },
+});
+```
+
+**How it works:** `inFuture` compares at **local-day** granularity (`checkDate.setHours(0,0,0,0)` against today's midnight), so a date of "today" always fails it — even one second before midnight. `inFutureDateTime` instead compares the exact instant against `Date.now()`, so a `Date` carrying an explicit time of "today, 11:59pm" can pass `inFutureDateTime` right up until that moment, a meaningfully different rule for a deadline-style field versus a calendar-day field.
+
+## 27. Date validator: custom messages and a format hint
+
+```tsx
+import { useForm, createDateValidator, toValidationRule } from '@headlesskit/forms-react';
+
+const eventDate = createDateValidator({
+  dateFormat: 'YYYY-MM-DD',
+  minDate: '2024-01-01',
+  messages: { minDate: 'Events cannot be scheduled before {fieldName} 2024' },
+});
+
+const form = useForm({
+  initialValues: { eventDate: '' },
+  validate: { eventDate: toValidationRule(eventDate, 'event date') },
+});
+```
+
+**How it works:** `dateFormat` does nothing to how parsing works (parsing is always handled by `parseLocalDate`'s fixed `YYYY-MM-DD`/ISO logic) — it only enriches the `invalidDate` message with a format hint for the user, e.g. `"event date must be a valid date (Format: YYYY-MM-DD)"`. The `messages.minDate` override here still gets the `{fieldName}` substitution applied, even though the resulting sentence reads a little oddly with a lowercase field name spliced in — a reminder that the placeholder does a literal string replace, not a smart capitalization-aware one.
+
+## 28. Checkbox validator: `mustBeFalse` for an opt-out
+
+```tsx
+import { useForm, createCheckboxValidator, toValidationRule } from '@headlesskit/forms-react';
+
+const noSpam = createCheckboxValidator({ mustBeFalse: true });
+
+const form = useForm({
+  initialValues: { optOutOfUpdates: false },
+  validate: { optOutOfUpdates: toValidationRule(noSpam, 'Opt out') },
+});
+```
+
+**How it works:** `mustBeFalse` is the mirror image of `mustBeTrue` from [Basic](./02-forms-basic.mdx) — and when it's set, the generic `required` check is explicitly skipped (`!rules.mustBeFalse && !boolValue`), because for an opt-out checkbox, *unchecked* is the valid state, not a missing-required-field state. Without that skip, a freshly-rendered unchecked opt-out box would incorrectly report "required" before the user has done anything wrong.
+
+## 29. Checkbox validator: coercion from string/number representations
+
+```tsx
+import { createCheckboxValidator } from '@headlesskit/forms';
+
+const consent = createCheckboxValidator({ mustBeTrue: true });
+
+consent('on', 'Consent');   // null — 'on' coerces to true
+consent('1', 'Consent');    // null
+consent(1, 'Consent');      // null
+consent('false', 'Consent'); // "Consent must be accepted"
+```
+
+**How it works:** because `createCheckboxValidator` is imported straight from `@headlesskit/forms` here (not the React wrapper), this example runs with zero DOM/React involved — useful for unit-testing the coercion rules in isolation. The coercion table is explicit and narrow: only the strings `'true'`/`'1'`/`'on'` (case-insensitively) and the number `1` count as truthy; every other string, including `'false'`, falls through `Boolean(value)` and a non-empty string is still *truthy* by JS rules — so it's specifically the listed truthy forms that flip a checkbox to "checked," not a loose `Boolean()` coercion alone.
+
+## 30. `useField` standalone usage for one nested-feeling field
+
+```tsx
+import { useField } from '@headlesskit/forms-react';
+
+function ZipLookupField({ onCityFound }: { onCityFound: (city: string) => void }) {
+  const zip = useField({
+    initialValue: '',
+    validate: (value) => (/^\d{5}$/.test(value) ? null : 'Enter a 5-digit ZIP'),
+  });
+
+  const handleBlur = async () => {
+    const result = zip.validate();
+    if (!result.hasError) onCityFound(await api.lookupCity(zip.getValue()));
+  };
+
+  return (
+    <div>
+      <input value={zip.getValue()} onChange={(e) => zip.setValue(e.target.value)} onBlur={handleBlur} />
+      {zip.error && <span>{zip.error}</span>}
+    </div>
+  );
+}
+```
+
+**How it works:** `useField` manages its own store entirely independent of any parent `useForm` — `ZipLookupField` could be dropped next to a nested `address.zip` field bound through `getInputProps` and the two would have no awareness of each other at all. This makes it the right tool for a field whose validation/lookup behavior is genuinely standalone (like triggering a side-effect on successful validation) even when, conceptually, its result will eventually be copied into a bigger nested form via `form.setFieldValue('address.city', ...)` from the parent.

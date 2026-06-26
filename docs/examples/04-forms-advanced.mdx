@@ -1,0 +1,908 @@
+# Forms — Advanced Examples
+
+Fifty examples covering architecture-level concerns: schema validation, deep nesting, composition, performance, SSR/native, and testing. Assumes you've read [Basic](./02-forms-basic.mdx) and [Medium](./03-forms-medium.mdx).
+
+---
+
+## 1. Zod (or any Standard Schema) validation
+
+```tsx
+import { z } from 'zod';
+import { useForm, schemaResolver } from '@headlesskit/forms-react';
+
+const schema = z.object({ email: z.string().email(), age: z.coerce.number().min(18) });
+
+const form = useForm({
+  initialValues: { email: '', age: '' },
+  validate: schemaResolver(schema),
+});
+```
+
+**How it works:** `schemaResolver` adapts any [Standard Schema](https://standardschema.dev)-compliant validator (Zod ≥3.24, Valibot, ArkType, etc.) into the `(values) => FormErrors | Promise<FormErrors>` shape `validate` expects, by calling the schema's `~standard.validate(value)` method and mapping its issues onto field paths. It doesn't care which schema library produced the issues — only that the library implements the Standard Schema interface — so swapping Zod for Valibot later is a one-line change.
+
+## 2. Sharing one form across deeply nested components
+
+```tsx
+import { createFormContext } from '@headlesskit/forms-react';
+
+const [CheckoutFormProvider, useCheckoutForm] = createFormContext<{ card: string; address: string }>();
+
+function CardField() {
+  const form = useCheckoutForm();
+  return <input key={form.key('card')} {...form.getInputProps('card')} />;
+}
+
+function Checkout() {
+  const form = useCheckoutForm({ initialValues: { card: '', address: '' } });
+  return (
+    <CheckoutFormProvider form={form}>
+      <CardField />
+    </CheckoutFormProvider>
+  );
+}
+```
+
+**How it works:** `createFormContext<Values>()` returns a `[Provider, useFormContext, useForm]` tuple bound to *that* generic `Values` shape — `CardField` calls the *context* hook (no options needed, it just reads the form the nearest `Provider` supplied), while `Checkout` calls the *creating* hook (with `initialValues` etc.) and hands the result to the `Provider`. This avoids prop-drilling `form` through every intermediate component, while still giving `CardField` full type safety on which paths exist.
+
+## 3. A fully decoupled custom field component
+
+```tsx
+import { useField } from '@headlesskit/forms-react';
+
+function StarRating({ initialValue }: { initialValue: number }) {
+  const field = useField({ initialValue, validate: (v) => (v > 0 ? null : 'Pick a rating') });
+  return (
+    <div>
+      {[1, 2, 3, 4, 5].map((n) => (
+        <button key={n} type="button" onClick={() => field.setValue(n)}>
+          {n <= field.getValue() ? '★' : '☆'}
+        </button>
+      ))}
+      {field.error && <span>{field.error}</span>}
+    </div>
+  );
+}
+```
+
+**How it works:** `useField` is `useForm`'s single-field sibling — it manages its own tiny store with no dependency on a parent `useForm`/`createFormContext` at all, which is why `StarRating` can be dropped into *any* form (or no form) and still validate itself. This is the right tool when a field's interaction model (clicking stars, not typing) doesn't map onto `getInputProps`'s `onChange`/`onBlur` contract.
+
+## 4. A reusable `<FormField>` wrapper
+
+```tsx
+function FormField({ form, path, label }: { form: any; path: string; label: string }) {
+  const { error, ...inputProps } = form.getInputProps(path);
+  return (
+    <label>
+      {label}
+      <input key={form.key(path)} {...inputProps} />
+      {error && <span className="error">{error}</span>}
+    </label>
+  );
+}
+
+<FormField form={form} path="email" label="Email" />
+```
+
+**How it works:** `getInputProps` always includes `error` in its return value (`withError` defaults to `true`) — destructuring it off before spreading the rest onto `<input>` is what stops React from warning about an unknown `error` DOM attribute, while still letting the wrapper render it itself. Centralizing this in one component is how real apps avoid repeating the destructure-and-render-error dance at every single field.
+
+## 5. Nested arrays of objects with per-item validation
+
+```tsx
+const form = useForm({
+  initialValues: { team: [{ name: '', role: 'member' }] },
+  validate: {
+    'team.0.name': isNotEmpty('Required'),
+    // generated per-index below, not hardcoded to index 0
+  },
+});
+
+function buildTeamValidation(count: number) {
+  return Object.fromEntries(
+    Array.from({ length: count }, (_, i) => [`team.${i}.name`, isNotEmpty('Required')]),
+  );
+}
+```
+
+**How it works:** because `validate` is a plain object (or a function — see below), there's no special "array validation" API; you generate the path keys yourself, in sync with the array's current length. For a list whose length changes at runtime, prefer the `validate` *function* form (`(values) => values.team.reduce(...)`) over a static object, since a static object's keys are fixed at `useForm()` call time and won't grow when `insertListItem` adds a new row.
+
+## 6. Optimistic submit with rollback on failure
+
+```tsx
+const previous = form.getValues();
+form.setValues({ status: 'saved' }); // optimistic
+try {
+  await api.save(form.getValues());
+} catch {
+  form.setValues(previous); // rollback
+  form.setErrors({ root: 'Save failed — reverted' });
+}
+```
+
+**How it works:** `setValues` accepts a full or partial `Values` object and merges it in immediately (synchronously, before the network call resolves) — capturing `getValues()` beforehand gives you an exact snapshot to restore if the request fails, which is cheaper and more correct than trying to manually undo individual field mutations.
+
+## 7. Persisting a draft to `localStorage`
+
+```tsx
+const form = useForm({ initialValues: loadDraft() ?? { subject: '', body: '' } });
+
+useEffect(() => form.subscribe(() => {
+  localStorage.setItem('draft', JSON.stringify(form.getValues()));
+}), []);
+```
+
+**How it works:** `subscribe` is the raw observer underneath everything else in this package (even `useForm`'s own re-renders go through it) — it fires on *every* store mutation, not just value changes, so for a high-frequency save you'd typically debounce the `localStorage.setItem` call. `getValues()` (not the React-reactive `values`) is used here because this callback runs outside React's render cycle entirely.
+
+## 8. Sharing one validation schema across web and React Native
+
+```tsx
+// shared-schema.ts — no React, no DOM, just @headlesskit/forms
+import { isEmail, isNotEmpty } from '@headlesskit/forms';
+export const signupValidation = { email: isEmail('Invalid'), name: isNotEmpty('Required') };
+
+// web: forms-react
+import { useForm } from '@headlesskit/forms-react';
+const form = useForm({ initialValues: { email: '', name: '' }, validate: signupValidation });
+
+// native: forms-react-native
+import { useForm, getTextInputProps } from '@headlesskit/forms-react-native';
+const nativeForm = useForm({ initialValues: { email: '', name: '' }, validate: signupValidation });
+const { error, ...props } = getTextInputProps(nativeForm, 'email');
+```
+
+**How it works:** `ValidationRule`s from `@headlesskit/forms` have no DOM dependency at all, so a `validate` config is 100% portable between `forms-react` (web `<input>`) and `forms-react-native` (`<TextInput>`) — only the *prop adapter* differs (`getInputProps` vs. `getTextInputProps`), because that's the only layer that actually touches platform-specific event shapes.
+
+## 9. A wizard with per-step gating
+
+```tsx
+async function goToStep2() {
+  const result = await form.validateField('step1.email');
+  if (!result.hasError) setStep(2);
+}
+```
+
+**How it works:** `validateField` (unlike `isValid`) runs the rule for one path *and writes the result into `form.errors`*, so the field's error message appears in the UI immediately if it fails — exactly what you want when gating "Next" on a wizard step, versus `isValid(path)` which only *reads* validity without mutating displayed errors (handy for a progress indicator that shouldn't flash error text).
+
+## 10. Normalizing thrown errors from a schema library
+
+```tsx
+const form = useForm({
+  validate: schemaResolver(schema),
+  resolveValidationError: (err) => (err instanceof CustomSchemaError ? err.humanMessage : 'Invalid'),
+});
+```
+
+**How it works:** `resolveValidationError` is the package's catch-all for "my async validator/resolver threw instead of returning an error" — rather than letting an unexpected exception crash validation entirely, the thrown value is routed through this function to produce a normal `TError`, keeping the rest of the form's error-handling code path uniform regardless of whether a validator returned an error or threw one.
+
+## 11. Maximizing performance: isolating hot fields
+
+```tsx
+function SearchBox() {
+  // Its own tiny store — typing here can't possibly re-render the 40-field form below it.
+  const field = useField({ initialValue: '' });
+  return <input value={field.getValue()} onChange={(e) => field.setValue(e.target.value)} />;
+}
+```
+
+**How it works:** every `useField`/`useForm` call is an independent store with its own `useSyncExternalStore` subscription — there is no shared "form context" re-render tax unless you explicitly share one via `createFormContext`. For a field that updates on every keystroke and has nothing to do with the rest of a large form (a live search box above a 40-field settings form, say), giving it its own `useField` instance means its high-frequency updates literally cannot touch the other 40 fields' render tree.
+
+## 12. Unit-testing a form store with no React at all
+
+```typescript
+import { createFormStore, isNotEmpty } from '@headlesskit/forms';
+
+test('rejects an empty name', async () => {
+  const form = createFormStore({
+    initialValues: { name: '' },
+    validate: { name: isNotEmpty('Required') },
+  });
+
+  const result = await form.validate();
+  expect(result.hasErrors).toBe(true);
+  expect(form.errors.name).toBe('Required');
+});
+```
+
+**How it works:** `createFormStore` (from the framework-agnostic `@headlesskit/forms`, not `forms-react`) is the exact same store `useForm` creates internally — testing validation logic, transforms, or array-field mutations against it directly means your test suite exercises real production code with zero React, zero `render()`, and zero DOM, which is both faster and immune to incidental React-rendering changes breaking unrelated validation tests.
+
+## 13. A deeply nested "complete object" form (3+ levels)
+
+```tsx
+const form = useForm({
+  initialValues: {
+    company: {
+      name: '',
+      hq: {
+        address: { street: '', city: '', country: '' },
+        timezone: 'UTC',
+      },
+    },
+  },
+  validate: {
+    'company.name': isNotEmpty('Required'),
+    'company.hq.address.city': isNotEmpty('Required'),
+    'company.hq.address.country': isNotEmpty('Required'),
+  },
+});
+
+<input key={form.key('company.hq.address.city')} {...form.getInputProps('company.hq.address.city')} />
+```
+
+**How it works:** `DeepKeys<Values>` recurses through every plain-object level of `Values` to build the full union of valid dotted paths, so `'company.hq.address.city'` (four segments deep) is exactly as type-checked as a one-level path — there's no configurable nesting-depth limit in the type or the runtime `getPath`/`setPath` walkers, which just keep following `.` segments until they run out. The practical limit is readability of the dotted strings themselves, not the library.
+
+## 14. Cross-level validation in a deeply nested object
+
+```tsx
+const form = useForm({
+  initialValues: {
+    company: { hq: { address: { country: 'US' } }, taxId: '' },
+  },
+  validate: (values) => {
+    const errors: Record<string, string> = {};
+    if (values.company.hq.address.country === 'US' && !values.company.taxId) {
+      errors['company.taxId'] = 'Tax ID is required for US companies';
+    }
+    return errors;
+  },
+});
+```
+
+**How it works:** because the whole-form `validate` function receives the entire `Values` tree, a rule that depends on a value three levels deep (`company.hq.address.country`) influencing an error on a sibling at a shallower level (`company.taxId`) needs no special "cross-level" API — it's just two different paths read out of the same object, same mechanism as `matchesField`, just inlined instead of factored into a named helper.
+
+## 15. Wholesale nested-subobject replace vs. leaf patch
+
+```tsx
+const form = useForm({ initialValues: { address: { street: '', city: '', zip: '' } } });
+
+// Leaf patch: only `city` changes; `street`/`zip` keep their object identity.
+form.setFieldValue('address.city', 'Boston');
+
+// Wholesale replace: the entire `address` object is swapped, including untouched fields.
+form.setFieldValue('address', { street: '1 Main St', city: 'Boston', zip: '02108' });
+```
+
+**How it works:** both calls go through the same `setPath`-based immutable update, but at different path depths — patching `'address.city'` produces a *new* `address` object with `city` replaced and `street`/`zip` carried over **by reference** (so `isDirty('address.street')` stays `false`), while patching `'address'` itself replaces the whole object wholesale, so every leaf under it is considered changed for dirty-comparison purposes even if the new object happens to contain identical string values to the old one (dirty comparison is by `deepEqual` value, not reference, so identical values would still resolve `isDirty` to `false` — but the object reference itself did change, which matters for any code memoizing on `address` by reference).
+
+## 16. A full multi-step wizard backed by one deeply nested values object
+
+```tsx
+const form = useForm({
+  initialValues: {
+    account: { email: '', password: '' },
+    profile: { name: '', address: { city: '', country: '' } },
+    plan: { tier: 'free', billingCycle: 'monthly' },
+  },
+});
+
+const steps = ['account', 'profile', 'plan'] as const;
+
+async function isStepValid(step: typeof steps[number]) {
+  const paths = Object.keys(form.getValues()[step]).map((k) => `${step}.${k}` as const);
+  const results = await Promise.all(paths.map((p) => form.validateField(p)));
+  return results.every((r) => !r.hasError);
+}
+```
+
+**How it works:** every step in this wizard is just a top-level key of one shared nested `Values` object — `isStepValid` derives which paths belong to a step by reading the *keys* of that step's nested sub-object at runtime, rather than hardcoding a path list, so adding a field to `profile.address` automatically gets picked up by step 2's gate without touching the wizard logic. `validateField` is run per leaf rather than calling `form.validate()` (which would validate *all* steps, including ones the user hasn't reached yet).
+
+## 17. Dynamic nested arrays-of-arrays (line items with sub-lists)
+
+```tsx
+const form = useForm({
+  initialValues: {
+    invoice: { lineItems: [{ description: '', taxes: [{ label: 'VAT', rate: 0.2 }] }] },
+  },
+});
+
+function addTax(itemIndex: number) {
+  form.insertListItem(`invoice.lineItems.${itemIndex}.taxes`, { label: '', rate: 0 });
+}
+
+function removeTax(itemIndex: number, taxIndex: number) {
+  form.removeListItem(`invoice.lineItems.${itemIndex}.taxes`, taxIndex);
+}
+
+<input
+  key={form.key(`invoice.lineItems.0.taxes.0.rate`)}
+  {...form.getInputProps(`invoice.lineItems.0.taxes.0.rate`)}
+/>
+```
+
+**How it works:** `insertListItem`/`removeListItem` take a dotted *path to the array*, which can itself be built from another array's index (`` `invoice.lineItems.${itemIndex}.taxes` ``) — there's no dedicated "nested array" API, just composing template-string paths with the same `DeepKeys` machinery that types `tags.${number}`. The cost is that every level of nesting you add an item to re-keys (via `form.key`) every sibling at *and below* that level whose index shifted, so a deeply nested array-of-arrays with frequent inserts re-mounts more DOM than a flat array would.
+
+## 18. Zod schema with deeply nested refinements
+
+```tsx
+import { z } from 'zod';
+import { schemaResolver } from '@headlesskit/forms-react';
+
+const schema = z
+  .object({
+    shipment: z.object({
+      package: z.object({ weightKg: z.number(), dimensions: z.object({ lengthCm: z.number() }) }),
+    }),
+  })
+  .refine(
+    (data) => data.shipment.package.weightKg > 0 || data.shipment.package.dimensions.lengthCm > 0,
+    { message: 'Provide either a weight or a dimension', path: ['shipment', 'package', 'weightKg'] },
+  );
+
+const form = useForm({
+  initialValues: { shipment: { package: { weightKg: 0, dimensions: { lengthCm: 0 } } } },
+  validate: schemaResolver(schema),
+});
+```
+
+**How it works:** a top-level `.refine()` that inspects multiple nested leaves still reports its issue against whichever single `path` array you give it — `schemaResolver` joins that path into `'shipment.package.weightKg'` exactly as it would for a leaf-level `z.string().min(1)` failure, so a cross-field, deeply-nested refinement and a simple nested type check both surface through the identical flat-`FormErrors` mechanism. Get the `path` wrong (or omit it) and Zod attaches the issue to the schema root instead, which `schemaResolver` maps to the `formRootRule` symbol key rather than any field path.
+
+## 19. Reading a root-level (whole-form) error from a schema
+
+```tsx
+import { formRootRule } from '@headlesskit/forms-react';
+
+const schema = z.object({ a: z.number(), b: z.number() }).refine((d) => d.a < d.b, {
+  message: 'a must be less than b',
+  // no `path` — issue attaches to the schema root
+});
+
+const form = useForm({ initialValues: { a: 0, b: 0 }, validate: schemaResolver(schema) });
+
+form.errors[formRootRule]; // "a must be less than b", when present
+```
+
+**How it works:** `formRootRule` is a exported `Symbol`-based key (not a string) used specifically so a whole-form error can live in the same flat `errors` record as field-path errors without ever colliding with a real path string like `'root'` (which could legitimately be a field name). `schemaResolver` falls back to this key whenever a Standard Schema issue's `path` array is empty, which is exactly what an un-pathed top-level `.refine()` produces.
+
+## 20. Avoiding re-renders of unrelated nested branches (controlled mode)
+
+```tsx
+const form = useForm({
+  mode: 'controlled',
+  initialValues: { profile: { name: '' }, settings: { theme: 'light' } },
+});
+
+const ThemeToggle = memo(function ThemeToggle() {
+  return <input type="checkbox" {...form.getInputProps('settings.theme', { type: 'checkbox' })} />;
+});
+```
+
+**How it works:** in `'controlled'` mode, *every* `setFieldValue` call — even on an unrelated branch like `profile.name` — re-renders any component that reads `form.values` at all, because `values` is one shared reactive object; `React.memo` only helps if `ThemeToggle`'s props (not `form` itself) are what's compared, which means the parent must avoid re-creating new prop objects on every render. This is precisely why [example 21](#21-true-render-isolation-for-large-nested-forms-uncontrolled--split-stores) below is the actually-effective version of this idea.
+
+## 21. True render isolation for large nested forms (uncontrolled + split stores)
+
+```tsx
+// One `useForm` per logical section, instead of one giant nested store.
+const profileForm = useForm({ mode: 'uncontrolled', initialValues: { name: '', bio: '' } });
+const settingsForm = useForm({ mode: 'uncontrolled', initialValues: { theme: 'light' } });
+
+function submitAll() {
+  Promise.all([profileForm.validate(), settingsForm.validate()]).then(([p, s]) => {
+    if (!p.hasErrors && !s.hasErrors) api.save({ ...profileForm.getValues(), ...settingsForm.getValues() });
+  });
+}
+```
+
+**How it works:** `mode: 'uncontrolled'` already avoids re-rendering on typing (per [Basic example 5](./02-forms-basic.mdx)), but a *shared* store still re-renders every subscriber on error/touched/dirty changes anywhere in the tree, because `useSyncExternalStore` subscribes to the whole store's snapshot, not per-path. Splitting one large nested form into multiple independent `useForm` instances — one per section that's edited/displayed independently — means a validation error in `settingsForm` literally cannot trigger a re-render in any component subscribed only to `profileForm`, which a single shared store (however deeply nested) can't achieve on its own.
+
+## 22. Unit-testing `createFormStore` with nested initial values
+
+```typescript
+import { createFormStore } from '@headlesskit/forms';
+
+test('setFieldValue patches a nested leaf without touching siblings', () => {
+  const form = createFormStore({
+    initialValues: { address: { street: '1 Main St', city: 'Boston', zip: '02108' } },
+  });
+
+  form.setFieldValue('address.city', 'Cambridge');
+
+  expect(form.getValues().address.city).toBe('Cambridge');
+  expect(form.getValues().address.street).toBe('1 Main St');
+  expect(form.isDirty('address.city')).toBe(true);
+  expect(form.isDirty('address.street')).toBe(false);
+});
+```
+
+**How it works:** testing nested-leaf patch semantics directly against `createFormStore` — with no `render()`, no React — is the fastest way to pin down exactly which siblings stay clean after a deep patch; this is the same assertion you'd want before relying on `React.memo`-based render isolation (example 20) actually working, since memoization only helps if the underlying store genuinely leaves sibling values/dirty-flags untouched.
+
+## 23. Unit-testing nested array mutations on the store
+
+```typescript
+import { createFormStore } from '@headlesskit/forms';
+
+test('reorderListItem moves a nested array item', () => {
+  const form = createFormStore({
+    initialValues: { cart: { items: [{ sku: 'A' }, { sku: 'B' }, { sku: 'C' }] } },
+  });
+
+  form.reorderListItem('cart.items', { from: 0, to: 2 });
+
+  expect(form.getValues().cart.items.map((i) => i.sku)).toEqual(['B', 'C', 'A']);
+});
+```
+
+**How it works:** `reorderListItem`'s path argument works identically whether the array lives at the top level (`'tags'`) or nested two levels deep (`'cart.items'`) — the store resolves the path with the same `getPath`/`setPath` walk either way, so this test exercises real production array-reordering logic against a nested array with zero DOM/React, catching off-by-one bugs in the `from`/`to` index math far faster than a rendered drag-and-drop test would.
+
+## 24. `forms-react-native`: nested field with `getTextInputProps`
+
+```tsx
+import { useForm, getTextInputProps } from '@headlesskit/forms-react-native';
+import { TextInput, Text } from 'react-native';
+
+const form = useForm({ initialValues: { profile: { address: { city: '' } } } });
+
+function CityInput() {
+  const { error, ...inputProps } = getTextInputProps(form, 'profile.address.city');
+  return (
+    <>
+      <TextInput key={form.key('profile.address.city')} {...inputProps} />
+      {error && <Text>{error}</Text>}
+    </>
+  );
+}
+```
+
+**How it works:** `getTextInputProps` is a thin adapter over `form.getInputProps` that swaps the DOM change-event contract for React Native's `onChangeText: (text: string) => void`, but the *path* argument works identically — nested paths like `'profile.address.city'` need no special handling because the adapter just forwards whatever `getInputProps` already resolved. `error` is included for convenience but isn't a real `TextInput` prop, so it must be destructured off before spreading the rest, same discipline as the DOM `<FormField>` wrapper in example 4.
+
+## 25. `forms-react-native`: nested boolean with `getSwitchProps`
+
+```tsx
+import { useForm, getSwitchProps } from '@headlesskit/forms-react-native';
+import { Switch } from 'react-native';
+
+const form = useForm({ initialValues: { settings: { notifications: { push: true } } } });
+
+<Switch {...getSwitchProps(form, 'settings.notifications.push')} />;
+```
+
+**How it works:** `getSwitchProps` is always controlled (`value`/`onValueChange`), unlike `getTextInputProps` which supports both modes — because RN's `<Switch>` has no uncontrolled `defaultValue` concept the way a DOM checkbox has `defaultChecked`. Internally it calls `form.getInputProps(path, { type: 'checkbox', withError: false, withFocus: false })` and reduces the result to just `checked`/`onChange`, so a nested boolean path works exactly the same as a top-level one — the adapter doesn't care about nesting depth at all.
+
+## 26. `forms-react-native`: submitting a nested form with `getSubmitHandler`
+
+```tsx
+import { useForm, getSubmitHandler } from '@headlesskit/forms-react-native';
+import { Button } from 'react-native';
+
+const form = useForm({
+  initialValues: { profile: { name: '' }, settings: { push: false } },
+  validate: { 'profile.name': isNotEmpty('Required') },
+});
+
+<Button
+  title="Save"
+  onPress={getSubmitHandler(form, (values) => api.save(values), (errors) => console.warn(errors))}
+/>;
+```
+
+**How it works:** `getSubmitHandler` wraps `form.onSubmit` and returns a zero-argument function suitable for `onPress`, internally passing a no-op stand-in event so `onSubmit`'s unconditional `event.preventDefault()` call (per `onSubmitPreventDefault: 'always'`) never throws on a platform with no real submit event. Validation still runs against the full nested `Values` tree exactly as on web — `'profile.name'`'s rule fires the same way whether the bound input is a DOM `<input>` or an RN `<TextInput>`.
+
+## 27. Draft persistence for a nested values object
+
+```tsx
+const DRAFT_KEY = 'application-draft';
+
+const form = useForm({
+  initialValues: loadDraft() ?? { applicant: { name: '', address: { city: '' } }, documents: [] },
+});
+
+function loadDraft() {
+  const raw = localStorage.getItem(DRAFT_KEY);
+  return raw ? JSON.parse(raw) : undefined;
+}
+
+useEffect(() => {
+  let timeout: ReturnType<typeof setTimeout>;
+  return form.subscribe(() => {
+    clearTimeout(timeout);
+    timeout = setTimeout(() => {
+      localStorage.setItem(DRAFT_KEY, JSON.stringify(form.getValues()));
+    }, 500);
+  });
+}, []);
+```
+
+**How it works:** `JSON.stringify(form.getValues())` round-trips the entire nested tree (objects, arrays, primitives) without any special handling — the only values that won't survive a reload are ones `JSON` can't represent, like a `Date` produced by `transformValues` (which runs *after* `getValues`, so the draft is unaffected) or a `File` from a document-upload array. Debouncing the actual `localStorage.setItem` call (rather than every `subscribe` firing) matters more here than in the flat-form version, since editing one nested leaf still triggers the same store-wide `subscribe` notification as any other change.
+
+## 28. Server-driven nested default values arriving asynchronously
+
+```tsx
+const form = useForm({ initialValues: { profile: { name: '', address: { city: '' } } } });
+
+useEffect(() => {
+  api.getProfile().then((serverProfile) => {
+    form.setInitialValues({ profile: serverProfile });
+    form.setValues({ profile: serverProfile });
+    form.resetDirty();
+  });
+}, []);
+```
+
+**How it works:** `setInitialValues` alone would update what `reset()`/`isDirty` compare *against* without touching the currently-displayed values — so it's paired with `setValues` to actually populate the form once the server response lands, and `resetDirty()` to clear out any dirty flags that might have been set against the old (empty) baseline before the real data arrived. Doing only `setValues` without `setInitialValues` first would leave every server-populated nested field looking "dirty" the instant it loads, since it now differs from the original empty `initialValues`.
+
+## 29. A composite checkout form: address + payment + cart items
+
+```tsx
+const form = useForm({
+  initialValues: {
+    address: { street: '', city: '', zip: '' },
+    payment: { cardNumber: '', expiry: '', cvc: '' },
+    cart: { items: [{ sku: '', qty: 1, price: 0 }] },
+  },
+  validate: {
+    'address.city': isNotEmpty('City is required'),
+    'payment.cardNumber': matches(/^\d{16}$/, 'Enter a 16-digit card number'),
+  },
+});
+
+const total = form.getValues().cart.items.reduce((sum, item) => sum + item.qty * item.price, 0);
+
+<button type="button" onClick={() => form.insertListItem('cart.items', { sku: '', qty: 1, price: 0 })}>
+  Add item
+</button>
+```
+
+**How it works:** this ties together three patterns from earlier examples into one form — a nested object (`address`), another nested object with regex validation (`payment`), and a nested array of objects (`cart.items`) — all coexisting as branches of one `Values` tree with no special composition API; `DeepKeys` just unions the valid paths across all three branches. `total` is derived by calling `getValues()` fresh on every render rather than stored as form state, since it's a pure function of `cart.items` and storing it separately would just be another thing that could go stale relative to the array.
+
+## 30. Validating the composite checkout form's cart items per-row
+
+```tsx
+const form = useForm({
+  initialValues: { cart: { items: [{ sku: '', qty: 1 }] } },
+  validate: (values) =>
+    values.cart.items.reduce((errors, item, i) => {
+      if (!item.sku) errors[`cart.items.${i}.sku`] = 'Required';
+      if (item.qty < 1) errors[`cart.items.${i}.qty`] = 'Must be at least 1';
+      return errors;
+    }, {} as Record<string, string>),
+});
+```
+
+**How it works:** the per-row validation pattern from [Medium example 8](./03-forms-medium.mdx) works identically when the array lives one level deeper (`cart.items` instead of a top-level `lineItems`) — the generated path strings (`` `cart.items.${i}.sku` ``) are simply longer, but the reduce-over-current-length approach is what makes this scale correctly as `insertListItem('cart.items', ...)` grows the array at runtime.
+
+## 31. Async cross-section validation in the checkout form (payment vs. cart total)
+
+```tsx
+const form = useForm({
+  initialValues: { payment: { cardNumber: '' }, cart: { items: [] as { price: number }[] } },
+  validate: async (values) => {
+    const total = values.cart.items.reduce((sum, i) => sum + i.price, 0);
+    if (total > 0) {
+      const ok = await api.cardSupportsAmount(values.payment.cardNumber, total);
+      if (!ok) return { 'payment.cardNumber': 'This card cannot process this amount' };
+    }
+    return {};
+  },
+});
+```
+
+**How it works:** the async whole-form `validate` function gets the full nested tree in one call, so a rule that depends on data from two unrelated branches (`cart.items` and `payment.cardNumber`) needs no extra wiring — it's the same mechanism as the synchronous cross-level example (14), just wrapped in an `async` function and awaited by `form.validate()`/`onSubmit` automatically, with `form.validating` flipping `true` for the duration of the network call.
+
+## 32. Setting a server error on a nested checkout field
+
+```tsx
+form.onSubmit(async (values) => {
+  try {
+    await api.checkout(values);
+  } catch (err) {
+    if (err.field) form.setFieldError(err.field, err.message); // e.g. 'payment.cardNumber'
+  }
+});
+```
+
+**How it works:** `setFieldError` doesn't care whether `err.field` is a top-level path or a nested one — `'payment.cardNumber'` is written into the same flat `errors` record exactly like a top-level `'email'` would be, and it clears automatically on the next edit to that field per `clearInputErrorOnChange` (default `true`), same as the flat-form version in [Medium example 12](./03-forms-medium.mdx#12-setting-a-field-error-from-a-server-response).
+
+## 33. Resetting just the cart section of a composite form
+
+```tsx
+function resetCart() {
+  const initial = form.getInitialValues();
+  form.setFieldValue('cart', initial.cart ?? { items: [] });
+}
+```
+
+**How it works:** there's no `resetSection`/`resetBranch` API — `resetField` only resets exactly one leaf path, not an entire nested subtree, so clearing a whole branch (`cart`) back to its initial shape means reading that branch out of `getInitialValues()` yourself and writing it back wholesale via `setFieldValue('cart', ...)`. This is the deliberate, manual version of the wholesale-replace behavior shown in example 15 — useful precisely because the built-in per-leaf `resetField` doesn't generalize to "reset this whole nested object."
+
+## 34. Performance: memoizing a derived value from a nested array
+
+```tsx
+const cartTotal = useMemo(
+  () => form.getValues().cart.items.reduce((sum, i) => sum + i.qty * i.price, 0),
+  [form.getValues().cart.items], // recomputed only when this exact array reference changes
+);
+```
+
+**How it works:** because `setFieldValue('cart.items.0.qty', ...)` produces a **new** `items` array (and a new `cart` object) per the immutable-patch semantics from example 15, `useMemo`'s reference-equality dependency check correctly invalidates whenever any item in the array actually changes — but it's worth noting this only works reliably in `'controlled'` mode (or by re-deriving on every render in uncontrolled mode), since in `'uncontrolled'` mode `form.getValues()` called during render may not reflect a change that hasn't yet triggered a re-render at all.
+
+## 35. Performance: a large nested form with isolated per-section subscriptions
+
+```tsx
+const [PersonalProvider, usePersonalForm] = createFormContext<{ name: string; dob: string }>();
+const [AddressProvider, useAddressForm] = createFormContext<{ city: string; zip: string }>();
+
+function BigSettingsPage() {
+  const personal = usePersonalForm({ initialValues: { name: '', dob: '' } });
+  const address = useAddressForm({ initialValues: { city: '', zip: '' } });
+  return (
+    <PersonalProvider form={personal}>
+      <AddressProvider form={address}>
+        <PersonalSection />
+        <AddressSection />
+      </AddressProvider>
+    </PersonalProvider>
+  );
+}
+```
+
+**How it works:** this is the multi-context extension of example 21 — instead of one giant nested `Values` object simulating "sections," each section gets its own `createFormContext` and its own store, so `PersonalSection`'s re-renders (from typing, validating, etc.) are subscribed to `personal`'s store only and cannot be triggered by anything happening in `address`. The tradeoff is submission: you now call `Promise.all([personal.validate(), address.validate()])` and merge `getValues()` from both yourself, rather than getting one combined nested object for free.
+
+## 36. Combining `cascadeUpdates` with nested watchers
+
+```tsx
+const form = useForm({
+  initialValues: { address: { country: 'US', region: '' } },
+  cascadeUpdates: true,
+});
+
+useEffect(() => {
+  return form.watch('address', () => {
+    // fires for changes to 'address' itself AND to 'address.country' / 'address.region'
+    console.log('something under address changed');
+  });
+}, []);
+```
+
+**How it works:** with `cascadeUpdates: false` (the default), a watcher on the parent path `'address'` would *not* fire when only `'address.country'` changes — watchers only fire for an exact path match. Setting `cascadeUpdates: true` makes a change to any descendant path also notify watchers registered on every ancestor path (and vice versa for descendant watchers on an ancestor change), which is the mechanism you need for a single "did anything in this nested branch change" watcher instead of one watcher per leaf.
+
+## 37. Distinguishing `isDirty('address')` from `isDirty('address.city')`
+
+```tsx
+const form = useForm({ initialValues: { address: { street: '1 Main St', city: 'Boston' } } });
+
+form.setFieldValue('address.city', 'Cambridge');
+
+form.isDirty('address.city'); // true — this exact leaf changed
+form.isDirty('address');      // true — a descendant changed, so the parent reads dirty too
+form.isDirty('address.street'); // false — untouched sibling
+```
+
+**How it works:** `isDirty` checking a parent path doesn't do a leaf-by-leaf walk — the store marks `'address'` dirty in the same operation as `'address.city'` whenever a `setPath` write happens, since structurally a changed child necessarily means the parent object reference (and its `deepEqual` comparison against `initialValues.address`) also differs. This is why `isDirty('address')` is a cheap way to ask "has anything in this branch changed" without listing every leaf yourself.
+
+## 38. `setValues` with a partial nested patch via updater function
+
+```tsx
+form.setValues((current) => ({
+  cart: { ...current.cart, items: [...current.cart.items, { sku: 'NEW', qty: 1 }] },
+}));
+```
+
+**How it works:** `setValues` accepts either a partial object or an updater function `(current) => partial` — the updater form is necessary here specifically because appending to a nested array safely requires reading the *current* `cart.items` first (to spread it), and `setValues`'s shallow-merge behavior means passing a bare partial object would need you to already have `current` in scope anyway. For just appending one item, `insertListItem('cart.items', { sku: 'NEW', qty: 1 })` (no `current` needed) is simpler — this pattern is for when the patch logic is more involved than a single insert.
+
+## 39. Validating a deeply nested array of arrays with Zod
+
+```tsx
+const schema = z.object({
+  invoice: z.object({
+    lineItems: z.array(
+      z.object({
+        description: z.string().min(1),
+        taxes: z.array(z.object({ label: z.string().min(1), rate: z.number().min(0).max(1) })),
+      }),
+    ),
+  }),
+});
+
+const form = useForm({
+  initialValues: { invoice: { lineItems: [{ description: '', taxes: [] }] } },
+  validate: schemaResolver(schema),
+});
+// A failure on the 2nd item's 1st tax's rate maps to: 'invoice.lineItems.1.taxes.0.rate'
+```
+
+**How it works:** Zod's `path` array for an issue inside a nested `z.array(z.object(...))` includes the numeric array indices as path segments (`['invoice', 'lineItems', 1, 'taxes', 0, 'rate']`) — `schemaResolver` joins all of them, numbers included, with `.` to produce the exact same dotted index-path string (`'invoice.lineItems.1.taxes.0.rate'`) that `form.getInputProps`/`form.key` already use for array elements, so no translation step is needed even at this nesting depth.
+
+## 40. Testing a deeply nested Zod-backed form store
+
+```typescript
+import { createFormStore } from '@headlesskit/forms';
+import { schemaResolver } from '@headlesskit/forms';
+import { z } from 'zod';
+
+test('reports a nested array validation error at the right path', async () => {
+  const schema = z.object({ invoice: z.object({ lineItems: z.array(z.object({ description: z.string().min(1) })) }) });
+  const form = createFormStore({
+    initialValues: { invoice: { lineItems: [{ description: '' }] } },
+    validate: schemaResolver(schema),
+  });
+
+  const result = await form.validate();
+  expect(result.hasErrors).toBe(true);
+  expect(form.errors['invoice.lineItems.0.description']).toBeDefined();
+});
+```
+
+**How it works:** combining `createFormStore` (no React) with `schemaResolver` and a real Zod schema tests the full nested-path-mapping pipeline from example 39 end-to-end — confirming the exact dotted key a deeply nested array error lands under is exactly the kind of regression a path-construction bug would silently break, and this test catches it without rendering a single component.
+
+## 41. Performance: debounced async validation on a nested leaf only
+
+```tsx
+const form = useForm({
+  initialValues: { billing: { promoCode: '' } },
+  validate: { 'billing.promoCode': async (value) => ((await api.checkPromo(value)) ? null : 'Invalid code') },
+  validateInputOnChange: ['billing.promoCode'],
+  validateDebounce: 400,
+});
+
+form.isValidating('billing.promoCode'); // true while the request is in flight
+```
+
+**How it works:** `validateInputOnChange` and `validateDebounce` both work per-path, so scoping them to one nested leaf (`'billing.promoCode'`) means a debounced network call only fires for that field — typing in any other nested field, however deep, triggers neither the debounce timer nor the request. `isValidating(path)` reads the store's `fieldValidating` map for exactly that path, letting you show a spinner next to just that one nested input rather than a form-wide `validating` flag.
+
+## 42. Resetting touched/dirty for a nested branch after a successful save
+
+```tsx
+form.onSubmit(async (values) => {
+  await api.save(values);
+  form.resetDirty(values); // re-baseline every leaf, nested included, as "clean"
+  form.resetTouched();
+});
+```
+
+**How it works:** `resetDirty(values)` takes an optional new baseline — passing the just-submitted `values` (rather than calling it with no arguments, which clears dirty flags but keeps the *old* `initialValues` baseline) means the next edit to any nested leaf is compared against the data that's now actually persisted on the server, not the form's original pre-edit state. `resetTouched()` has no such baseline concept; it just clears every path's touched flag outright.
+
+## 43. A nested nullable/optional sub-object pattern
+
+```tsx
+const form = useForm({
+  initialValues: { shipping: { sameAsBilling: true, address: null as null | { city: string } } },
+});
+
+function ShippingAddressFields() {
+  const sameAsBilling = form.getValues().shipping.sameAsBilling;
+  if (sameAsBilling) return null;
+
+  if (!form.getValues().shipping.address) {
+    form.setFieldValue('shipping.address', { city: '' });
+  }
+  return <input key={form.key('shipping.address.city')} {...form.getInputProps('shipping.address.city')} />;
+}
+```
+
+**How it works:** `DeepKeys`/`getPath` don't special-case `null` sub-objects — a path like `'shipping.address.city'` is only safe to read/write once `shipping.address` is an actual object, so toggling a nested optional section on typically means lazily materializing the sub-object (as shown) right before the first nested input mounts, rather than trying to validate or bind to a path that currently resolves through `null`.
+
+## 44. A `transformValues` pipeline producing a deeply nested API payload
+
+```tsx
+const form = useForm({
+  initialValues: { firstName: '', lastName: '', street: '', city: '' },
+  transformValues: (values) => ({
+    customer: { name: { first: values.firstName, last: values.lastName } },
+    shipping: { address: { street: values.street, city: values.city } },
+  }),
+});
+
+form.onSubmit((values) => {
+  values.customer.name.first; // flat inputs, nested API payload
+});
+```
+
+**How it works:** `transformValues` is the one place where the *shape* of `Values` (flat, simple inputs) and `TransformedValues` (a deeply nested API contract) can diverge completely — there's no requirement that nesting depth match between the two; the function is just an arbitrary `(values) => TransformedValues` mapping, which is exactly what makes it possible to keep every `getInputProps` call flat and simple while still producing whatever nested JSON shape a backend actually expects.
+
+## 45. Watching multiple nested leaves to drive a single derived field
+
+```tsx
+useEffect(() => {
+  const unsub1 = form.watch('cart.items', () => recomputeTotal());
+  const unsub2 = form.watch('payment.discountCode', () => recomputeTotal());
+  function recomputeTotal() {
+    const { cart, payment } = form.getValues();
+    const subtotal = cart.items.reduce((s, i) => s + i.qty * i.price, 0);
+    form.setFieldValue('totals.grandTotal', payment.discountCode ? subtotal * 0.9 : subtotal, { forceUpdate: false });
+  }
+  return () => { unsub1(); unsub2(); };
+}, []);
+```
+
+**How it works:** two independent `watch` subscriptions on unrelated nested paths both funnel into the same recompute function, which is the composition pattern for "this derived nested field depends on several other nested branches" — no single combined-watch API exists, you just register one watcher per dependency. `{ forceUpdate: false }` on the resulting `setFieldValue` is a deliberate choice: bumping the key for a derived, typically-read-only total field would be unnecessary remount churn for a value the user never directly types into.
+
+## 46. SSR-safe `getInputNode` usage on a nested field
+
+```tsx
+function focusFirstInvalid() {
+  const firstErrorPath = Object.keys(form.errors)[0] as DeepKeys<typeof form.values>;
+  form.getInputNode(firstErrorPath)?.focus();
+}
+```
+
+**How it works:** `getInputNode` returns `null` on the server (no `document` to query), so this pattern is inherently SSR-safe without extra guards — and it works identically whether `firstErrorPath` is a top-level field or a deeply nested one like `'shipping.address.city'`, because the lookup is just `document.querySelector('[data-path="..."]')` under the hood, matching whatever literal string `getInputProps` stamped onto that DOM node's `data-path` attribute.
+
+## 47. Comparing two nested values with the exported `deepEqual`/`clone` utilities
+
+```typescript
+import { deepEqual, clone } from '@headlesskit/forms';
+
+const before = form.getInitialValues();
+const snapshot = clone(form.getValues());
+
+// ...user edits several nested fields...
+
+const changedPaths = Object.keys(snapshot).filter((key) => !deepEqual(snapshot[key], form.getValues()[key]));
+```
+
+**How it works:** `clone` and `deepEqual` are the same utilities the form store uses internally for dirty-comparison and `setValues`/`reset` snapshotting — exporting them means application code that needs a one-off "what nested branches changed since this snapshot" diff (e.g. for an audit log) can reuse the exact same deep-comparison semantics as `isDirty`, rather than writing a separate ad hoc nested-object diff that might disagree with the form's own notion of "changed."
+
+## 48. A fully worked deeply-nested "complete object" employee record
+
+```tsx
+const form = useForm({
+  initialValues: {
+    employee: {
+      personal: { firstName: '', lastName: '', dob: '' },
+      employment: { title: '', department: '', manager: { name: '', email: '' } },
+      compensation: { salary: 0, currency: 'USD', bonusEligible: false },
+    },
+  },
+  validate: {
+    'employee.personal.firstName': isNotEmpty('Required'),
+    'employee.employment.manager.email': isEmail('Invalid manager email'),
+    'employee.compensation.salary': (value) =>
+      value > 0 ? null : 'Salary must be positive',
+  },
+});
+```
+
+**How it works:** this is the "everything at once" example the user feedback specifically asked for — four levels of nesting (`employee.employment.manager.email`), a mix of required/email/custom-number rules across different branches, and zero special-casing anywhere in `validate`, because every path is still just a flat string key into one `FormRulesRecord`. It's the synthesis of examples 13, 14, and 18: deep paths, cross-level dependencies are *possible* (not used here, but see example 14), and schema or manual rules both work identically at this depth.
+
+## 49. Testing the complete nested employee record end-to-end (no React)
+
+```typescript
+import { createFormStore, isNotEmpty, isEmail } from '@headlesskit/forms';
+
+test('validates a deeply nested employee record', async () => {
+  const form = createFormStore({
+    initialValues: {
+      employee: {
+        personal: { firstName: '' },
+        employment: { manager: { email: 'not-an-email' } },
+      },
+    },
+    validate: {
+      'employee.personal.firstName': isNotEmpty('Required'),
+      'employee.employment.manager.email': isEmail('Invalid email'),
+    },
+  });
+
+  const result = await form.validate();
+
+  expect(form.errors['employee.personal.firstName']).toBe('Required');
+  expect(form.errors['employee.employment.manager.email']).toBe('Invalid email');
+  expect(result.hasErrors).toBe(true);
+});
+```
+
+**How it works:** this closes the loop on example 48 — proving that the same deeply nested `validate` rules object produces the expected flat, dotted-key `errors` record without any UI involved, which is the cheapest possible regression test for "did a refactor of the path-walking code break validation at depth 4."
+
+## 50. Putting it together: a draft-persisted, schema-validated, server-hydrated nested form
+
+```tsx
+const schema = z.object({
+  employee: z.object({
+    personal: z.object({ firstName: z.string().min(1) }),
+    employment: z.object({ manager: z.object({ email: z.string().email() }) }),
+  }),
+});
+
+const form = useForm({
+  initialValues: loadDraft() ?? { employee: { personal: { firstName: '' }, employment: { manager: { email: '' } } } },
+  validate: schemaResolver(schema),
+});
+
+useEffect(() => {
+  api.getEmployeeRecord().then((server) => {
+    if (!loadDraft()) {
+      form.setInitialValues(server);
+      form.setValues(server);
+    }
+  });
+  return form.subscribe(() => localStorage.setItem('employee-draft', JSON.stringify(form.getValues())));
+}, []);
+```
+
+**How it works:** this combines four previously-separate examples into the realistic end state of a complex nested form — Zod schema validation (1, 18) mapping errors onto deep paths, draft persistence (7, 27) so a `localStorage`-saved draft survives a reload, and server-driven hydration (28) that's deliberately skipped (`if (!loadDraft())`) when a local draft already exists, so the server's "official" data doesn't clobber unsaved local edits the moment the component mounts. Every piece — the schema, the draft serialization, the hydration check — operates on the same one nested `Values` tree with no coordination layer beyond reading/writing that single object.

@@ -1,0 +1,75 @@
+# State Management Devtools React
+
+`@headlesskit/state-management-devtools-react` is the React rendering layer for [`@headlesskit/state-management-devtools`](../state-management-devtools/01-overview.mdx) — an advanced, Redux-DevTools-Inspector-style panel: connection picker, command toolbar (Record/Lock, Reset/Revert/Sweep/Commit, Export/Import/Print), a filterable action list, and an Action/State/Diff/Test tabbed panel with Tree and Raw view modes.
+
+```bash
+pnpm add @headlesskit/state-management-devtools-react @headlesskit/state-management-devtools
+# or
+npm install @headlesskit/state-management-devtools-react @headlesskit/state-management-devtools
+```
+
+`react` (>=18) is a peer dependency, resolved against whatever version your app already has.
+
+---
+
+## Quick start
+
+```typescript
+// devtools-setup.ts — import this before creating any store
+import { installDevtools } from '@headlesskit/state-management-devtools';
+
+export const { inspectorStore, dockStore } = installDevtools();
+```
+
+```tsx
+// App.tsx
+import { DevtoolsPanel } from '@headlesskit/state-management-devtools-react';
+import { inspectorStore, dockStore } from './devtools-setup';
+
+function App() {
+  return (
+    <>
+      <YourApp />
+      {process.env.NODE_ENV !== 'production' && (
+        <DevtoolsPanel inspectorStore={inspectorStore} dockStore={dockStore} />
+      )}
+    </>
+  );
+}
+```
+
+This renders a small floating "Devtools" toggle button. Clicking it opens a dockable panel. Click any row in the action list to jump the *live* store to that point in history; toggle a row's checkbox to skip it during replay, then **Sweep** to permanently drop skipped actions, or **Commit** to fold everything up to the viewed state into a new baseline.
+
+---
+
+## What's in the panel
+
+| Region | What it does |
+|--------|---------------|
+| Connection picker | Shown when more than one store has connected; switches which connection's history the rest of the panel shows. |
+| Toolbar | Record/Pause toggle, Lock toggle, Reset, Revert, Sweep, Commit, Export, Import, Print, Clear. |
+| Action list | Filterable, clickable list of every staged action (plus the `@@INIT` baseline). Clicking a row jumps to that state; the checkbox toggles whether the action is skipped. |
+| Action / State / Diff / Test tabs | The selected action object, the resulting state, a field-level diff against the previous state, and a generated test snippet for the selected transition. |
+| Tree / Raw toggle | Switches the Action/State/Diff tabs between a collapsible color-coded tree and plain JSON text. |
+
+---
+
+## Components and hooks
+
+| Export | Docs |
+|--------|------|
+| `DevtoolsPanel` | [02-devtools-panel](./02-devtools-panel.mdx) |
+| `Inspector` | [03-inspector](./03-inspector.mdx) |
+| `InspectorToolbar` | [04-inspector-toolbar](./04-inspector-toolbar.mdx) |
+| `ActionList` | [05-action-list](./05-action-list.mdx) |
+| `JsonTree`, `DiffTree`, `computeDiff`, `countChanges` | [06-json-tree-and-diff-tree](./06-json-tree-and-diff-tree.mdx) |
+| `exportLiftedState`, `importLiftedState` | [07-export-import](./07-export-import.mdx) |
+| `DockMonitor` | [08-dock-monitor](./08-dock-monitor.mdx) |
+| `useInspectorSnapshot`, `useDockSnapshot` | [09-hooks](./09-hooks.mdx) |
+
+## Common pitfalls
+
+- **Mount `DevtoolsPanel` once, outside any component that re-mounts often** — it's a global UI overlay, not per-feature.
+- **Gate it behind a dev-only check** (`process.env.NODE_ENV !== 'production'`, a feature flag, etc.) — nothing in this package does that for you automatically.
+- **It only renders what `@headlesskit/state-management-devtools` recorded** — if `installDevtools()` ran after a store was already created, that store's actions never reached the inspector.
+- **The Test tab generates a starting point, not a runnable test file** — see [09-hooks](./09-hooks.mdx) and [03-inspector](./03-inspector.mdx) for what it actually prints.

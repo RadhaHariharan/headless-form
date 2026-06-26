@@ -49,6 +49,18 @@ const PACKAGE_META = {
     group: 'State Management',
     description: 'React bindings for state-management-simplify — create, useShallow, and friends.',
   },
+  'state-management-devtools': {
+    name: 'state-management-devtools',
+    npm: '@headlesskit/state-management-devtools',
+    group: 'State Management',
+    description: 'A full time-travel dev-tools connector for headlesskit state-management stores — no browser extension required.',
+  },
+  'state-management-devtools-react': {
+    name: 'state-management-devtools-react',
+    npm: '@headlesskit/state-management-devtools-react',
+    group: 'State Management',
+    description: 'An advanced, Redux-DevTools-Inspector-style React panel for state-management-devtools.',
+  },
   'query-core': {
     name: 'query-core',
     npm: '@headlesskit/query-core',
@@ -73,9 +85,15 @@ const PACKAGE_META = {
     group: 'Query',
     description: 'A persister backed by a synchronous key-value store (e.g. localStorage).',
   },
+  'examples': {
+    name: 'examples',
+    npm: 'Examples & recipes',
+    group: 'Examples',
+    description: '525 basic-to-advanced examples (25/30/50 each) across forms, state-management, state-management-simplify, state-management-toolkit, and query-core, each explained in depth.',
+  },
 }
 
-const GROUP_ORDER = ['Forms', 'State Management', 'Query']
+const GROUP_ORDER = ['Forms', 'State Management', 'Query', 'Examples']
 
 // ── Parse into structured list, grouped by package ──────────────────────────────
 // Path shape: .../docs/<package>/[<folder>/.../]<NN-slug>.mdx
