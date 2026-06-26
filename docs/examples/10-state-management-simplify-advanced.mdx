@@ -20,7 +20,7 @@ const useStore = create<Store>()(
 );
 ```
 
-**How it works:** middleware here composes by literal function nesting, innermost-first — `subscribeWithSelector` wraps your raw initializer, `persist` wraps *that*, and `devtools` wraps the result of `persist`. Each layer only modifies the `set`/`get`/store API the layer inside it receives; `devtools`, being outermost, is the one whose recorded actions [the Inspector](../state-management-devtools-react/01-overview.mdx) ultimately sees, after `persist`'s and `subscribeWithSelector`'s own internal bookkeeping has already run for that update.
+**How it works:** middleware here composes by literal function nesting, innermost-first — `subscribeWithSelector` wraps your raw initializer, `persist` wraps *that*, and `devtools` wraps the result of `persist`. Each layer only modifies the `set`/`get`/store API the layer inside it receives; `devtools`, being outermost, is the one whose recorded actions the browser's Redux DevTools extension ultimately sees, after `persist`'s and `subscribeWithSelector`'s own internal bookkeeping has already run for that update.
 
 ## 2. The `immer` middleware for ergonomic nested updates
 
@@ -51,20 +51,25 @@ const useStore = create<Store>()(unstable_ssrSafe((set) => ({ count: 0 })));
 
 **How it works:** a store created once at module scope is normally *shared* across every request on the server — fine for a stateless server, but a correctness bug for SSR frameworks that reuse the same Node.js process across multiple concurrent requests, where one user's state could leak into another's render. `unstable_ssrSafe` changes the store's lifecycle so each render gets its own isolated state instead of one shared module-level instance; reach for it specifically when you see cross-request state bleed in an SSR environment, not as a default.
 
-## 4. A guided time-travel debugging session
+## 4. A guided time-travel debugging session using a manually-kept array of snapshots
 
 ```typescript
-// 1. Dispatch a few actions through the live store.
-useStore.getState().increment();
-useStore.getState().increment();
-useStore.getState().increment();
+const history: { count: number }[] = [];
+useStore.subscribe((state) => history.push({ count: state.count }));
 
-// 2. In the Inspector: toggle the checkbox on the *second* increment to skip it.
-// 3. Click "Sweep" to permanently remove it.
-useStore.getState().count; // 2 — only the two non-skipped increments applied
+// 1. Dispatch a few actions through the live store.
+useStore.getState().increment(); // count: 1, history: [{ count: 1 }]
+useStore.getState().increment(); // count: 2, history: [{ count: 1 }, { count: 2 }]
+useStore.getState().increment(); // count: 3, history: [{ count: 1 }, { count: 2 }, { count: 3 }]
+
+// 2. "Skip" the middle entry by filtering it out of the recorded history...
+const withoutMiddleEntry = [history[0], history[2]];
+// 3. ...then "jump back" by re-applying the last remaining snapshot directly.
+useStore.setState(withoutMiddleEntry[withoutMiddleEntry.length - 1]);
+useStore.getState().count; // 3 — re-applying a snapshot restores an ABSOLUTE value, not a recomputed one
 ```
 
-**How it works:** because this package has no reducer, skip/sweep here replay [a shallow patch per action](../state-management-devtools/06-lifted-state.mdx#diffshallowpatchprev-next-and-patchstepstate-entry) rather than re-running real logic — `diffShallowPatch` recorded `{ count: 1 }`, `{ count: 2 }`, `{ count: 3 }` as the three patches; skipping the middle one re-merges only the 1st and 3rd patches onto the committed baseline, landing on `{ count: 2 }`. This is exact for this additive case; see [the overview's pitfalls](../state-management-devtools/01-overview.mdx#common-pitfalls) for where patch replay diverges from true reducer replay.
+**How it works:** `history` records the *resulting* state object after every `set` call, exactly like a patch-based devtools history would — there's no reducer here to re-run, so "jumping back" can only ever mean re-applying one of these recorded absolute snapshots via `setState`, never recomputing what should have happened. That's the same limitation [Example 17](#17-time-travel-replays-patch-based-limitation-on-nested-relative-updates) walks through in more depth: skipping an entry out of a snapshot history and reapplying what's left is exact only when each recorded value doesn't depend on values skipped before it, which is true for this additive counter but breaks for relative updates like "double the current value."
 
 ## 5. Writing your own middleware
 
@@ -307,7 +312,7 @@ const useTodosStore = create<TodosStore>((set) => ({
 
 **How it works:** unlike Redux Toolkit's `createEntityAdapter`, this package ships no normalized-collection helper — `byId`/`allIds` is a convention you build by hand, and every action touching it has to keep both halves in sync manually (`addTodo` writes to both; `removeTodo` deletes from `byId` via destructuring-omission and filters `allIds`). The payoff over a plain array (as in [Basic #16](./08-state-management-simplify-basic.mdx#16-updating-one-item-inside-a-plain-array-field)) is O(1) lookup-by-id (`todos.byId[id]`) instead of an O(n) `.find`/`.map` scan, at the cost of this extra bookkeeping discipline on every write.
 
-## 17. Time-travel replay's patch-based limitation on nested relative updates
+## 17. A manually-kept snapshot history's patch-based limitation on nested relative updates
 
 ```typescript
 interface CounterStore {
@@ -315,13 +320,18 @@ interface CounterStore {
   incrementByCurrentCount: () => void; // relative: doubles the count
 }
 
-useStore.getState().incrementByCurrentCount(); // nested.count: 1 -> 2
-useStore.getState().incrementByCurrentCount(); // nested.count: 2 -> 4
-// Inspector: skip the FIRST action, then Sweep.
-useStore.getState().nested.count; // 4, NOT 2 — patch replay re-applies an absolute snapshot
+const history: CounterStore['nested'][] = [];
+useStore.subscribe((state) => history.push({ ...state.nested }));
+
+useStore.getState().incrementByCurrentCount(); // nested.count: 1 -> 2, history: [{ count: 2 }]
+useStore.getState().incrementByCurrentCount(); // nested.count: 2 -> 4, history: [{ count: 2 }, { count: 4 }]
+
+// "Skip" the first recorded snapshot, keep only the second, then re-apply it:
+useStore.setState({ nested: history[1] });
+useStore.getState().nested.count; // 4, NOT 2 — re-applying a snapshot restores an absolute value
 ```
 
-**How it works:** [`diffShallowPatch`](../state-management-devtools/06-lifted-state.mdx#diffshallowpatchprev-next-and-patchstepstate-entry) recorded each step as the *resulting* `{ nested: { count: 2 } }` then `{ nested: { count: 4 } }` — absolute values, not "doubled the previous value." Skipping the first action and replaying only the second patch lands on whatever absolute value that patch said (`4`), not on what re-running `incrementByCurrentCount` against the post-skip state would have produced (`2`, doubling from `1`). This is the general case [Medium #4 in the devtools overview](../state-management-devtools/01-overview.mdx#common-pitfalls) warns about: patch replay is exact only when an action's effect doesn't depend on the state it's being replayed against, which a *relative* update like "double the current value" violates and an *additive* one (`count + 1`, as in [Advanced #4](#4-a-guided-time-travel-debugging-session)) does not.
+**How it works:** `history` records each step as the *resulting* `{ count: 2 }` then `{ count: 4 }` — absolute values, not "doubled the previous value," because a `subscribe` callback only ever sees what `state.nested` already became, never the operation that produced it. Skipping the first entry and re-applying only the second snapshot lands on whatever absolute value that snapshot held (`4`), not on what re-running `incrementByCurrentCount` against the post-skip state would have produced (`2`, doubling from `1`). This is the general case [Example 4](#4-a-guided-time-travel-debugging-session-using-a-manually-kept-array-of-snapshots) hints at: snapshot replay is exact only when a recorded value doesn't depend on values skipped before it, which a *relative* update like "double the current value" violates and an *additive* one (`count + 1`, as in Example 4's counter) does not.
 
 ## 18. Testing a nested-state store slice in isolation
 

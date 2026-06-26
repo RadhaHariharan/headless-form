@@ -49,18 +49,6 @@ const PACKAGE_META = {
     group: 'State Management',
     description: 'React bindings for state-management-simplify — create, useShallow, and friends.',
   },
-  'state-management-devtools': {
-    name: 'state-management-devtools',
-    npm: '@headlesskit/state-management-devtools',
-    group: 'State Management',
-    description: 'A full time-travel dev-tools connector for headlesskit state-management stores — no browser extension required.',
-  },
-  'state-management-devtools-react': {
-    name: 'state-management-devtools-react',
-    npm: '@headlesskit/state-management-devtools-react',
-    group: 'State Management',
-    description: 'An advanced, Redux-DevTools-Inspector-style React panel for state-management-devtools.',
-  },
   'query-core': {
     name: 'query-core',
     npm: '@headlesskit/query-core',
@@ -195,18 +183,18 @@ function extractHeadings(markdown) {
 }
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
-const nav             = document.getElementById('nav')
-const content         = document.getElementById('content')
-const toc              = document.getElementById('toc')
-const tocPanel          = document.getElementById('toc-panel')
-const searchEl          = document.getElementById('search')
-const breadcrumb        = document.getElementById('breadcrumb')
-const menuBtn           = document.getElementById('menu-btn')
-const sidebar           = document.getElementById('sidebar')
-const overlay           = document.getElementById('overlay')
-const packageSwitcher   = document.getElementById('package-switcher')
+const nav = document.getElementById('nav')
+const content = document.getElementById('content')
+const toc = document.getElementById('toc')
+const tocPanel = document.getElementById('toc-panel')
+const searchEl = document.getElementById('search')
+const breadcrumb = document.getElementById('breadcrumb')
+const menuBtn = document.getElementById('menu-btn')
+const sidebar = document.getElementById('sidebar')
+const overlay = document.getElementById('overlay')
+const packageSwitcher = document.getElementById('package-switcher')
 const packageSwitcherName = document.getElementById('package-switcher-name')
-const packageMenu       = document.getElementById('package-menu')
+const packageMenu = document.getElementById('package-menu')
 
 // ── State ──────────────────────────────────────────────────────────────────────
 const expandedDocs = new Set()

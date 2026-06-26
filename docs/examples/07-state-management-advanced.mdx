@@ -4,21 +4,36 @@ Fifty examples covering architecture-level concerns: devtools integration, norma
 
 ---
 
-## 1. Connecting a plain store to the time-travel Inspector
+## 1. Snapshotting and restoring state for crash recovery
 
 ```typescript
 import { createStore } from '@headlesskit/state-management';
-import { installDevtools } from '@headlesskit/state-management-devtools';
 
-const { inspectorStore } = installDevtools(); // populates window.__HEADLESSKIT_DEVTOOLS_EXTENSION__
+function withCrashRecovery(storageKey: string): StoreEnhancer {
+  return (createStoreFn) => (reducer, preloadedState, enhancer) => {
+    let recovered: unknown;
+    try {
+      const saved = sessionStorage.getItem(storageKey);
+      recovered = saved ? JSON.parse(saved) : undefined;
+    } catch {
+      recovered = undefined; // corrupted or inaccessible storage — fall back to preloadedState
+    }
+    const store = createStoreFn(reducer, recovered ?? preloadedState, enhancer);
+    store.subscribe(() => {
+      try {
+        sessionStorage.setItem(storageKey, JSON.stringify(store.getState()));
+      } catch {
+        // storage full or unavailable — crash recovery becomes best-effort, not fatal
+      }
+    });
+    return store;
+  };
+}
 
-const store = createStore(
-  rootReducer,
-  window.__HEADLESSKIT_DEVTOOLS_EXTENSION__?.({ name: 'plain-store' }),
-);
+const store = createStore(rootReducer, withCrashRecovery('app-crash-snapshot'));
 ```
 
-**How it works:** [`@headlesskit/state-management-devtools`'s connector](../state-management-devtools/05-create-devtools-extension.mdx) is duck-typed against this package's `StoreEnhancer`/`StoreCreator` shapes specifically so it works with a *plain* `createStore` call, not just `state-management-toolkit`'s `configureStore` — calling the extension directly as a function (`extension({ name })`) returns a real enhancer you can pass as `createStore`'s second argument. From here, jumping/skipping/sweeping actions through [`Inspector`](../state-management-devtools-react/03-inspector.mdx) genuinely replays this store's real reducer (see [Example 4](#4-the-full-time-travel-walkthrough)).
+**How it works:** this is the same enhancer shape as [Medium #24](./06-state-management-medium.mdx#24-a-minimal-store-enhancer-that-persists-nested-state-to-localstorage)'s `localStorage` persistence, but deliberately uses `sessionStorage` and frames the snapshot as a *recovery* mechanism rather than ordinary persistence — every dispatch's resulting state overwrites the same key, so if the tab crashes or reloads unexpectedly mid-session, the next `createStore` call picks `recovered` over `preloadedState` and the user resumes from their last known state instead of the app's hardcoded defaults. The `try`/`catch` around both the read and the write matters specifically for crash recovery: a corrupted snapshot (partial write from the crash itself) must never throw and block the store from initializing at all, which is why a parse failure silently falls through to `preloadedState` rather than propagating.
 
 ## 2. Hand-writing the "lifted store" pattern
 
@@ -39,7 +54,7 @@ function withTimeTravel(reducer: Reducer) {
 const store = createStore(withTimeTravel(rootReducer));
 ```
 
-**How it works:** this is a simplified, single-file version of exactly what [the lifted-state engine](../state-management-devtools/06-lifted-state.mdx) does for real — wrap the actual reducer so that every dispatch is recorded into a history array instead of just computing the next value, and a special `@@JUMP` action can move a `currentIndex` pointer backward without losing the recorded future. The real engine additionally supports skip/sweep/commit and replays from a `committedState` baseline rather than `history[0]`, but the core trick (the reducer *is* the history machine) is identical.
+**How it works:** wrapping the actual reducer means every dispatch is recorded into a `history` array instead of just computing the next value, and a special `@@JUMP` action can move a `currentIndex` pointer backward without losing the recorded future — `history.splice(++index)` is what discards any "future" entries beyond the new current index the moment a *real* (non-jump) action is dispatched after a jump, so redoing past where you jumped from isn't possible once you've branched off with a fresh action. [Example 4](#4-the-full-time-travel-walkthrough) builds directly on this same `withTimeTravel` wrapper to walk through jumping backward and forward.
 
 ## 3. A hand-rolled `createSlice`
 
@@ -65,18 +80,21 @@ const counterSlice = createSlice('counter', { count: 0 }, {
 
 ## 4. The full time-travel walkthrough
 
-Building on [Example 1](#1-connecting-a-plain-store-to-the-time-travel-inspector):
+Building on [Example 2](#2-hand-writing-the-lifted-store-pattern)'s `withTimeTravel`-wrapped store:
 
 ```typescript
-store.dispatch({ type: 'increment' }); // count: 1
-store.dispatch({ type: 'increment' }); // count: 2
-store.dispatch({ type: 'increment' }); // count: 3
+store.dispatch({ type: 'increment' }); // count: 1, history: [1], index: 0
+store.dispatch({ type: 'increment' }); // count: 2, history: [1, 2], index: 1
+store.dispatch({ type: 'increment' }); // count: 3, history: [1, 2, 3], index: 2
 
-// In the Inspector UI: click the first "increment" row in the action list.
-store.getState(); // { count: 1} — the LIVE store, not a preview copy
+store.dispatch({ type: '@@JUMP', jumpTo: 0 });
+store.getState(); // { count: 1 } — the LIVE store, not a preview copy
+
+store.dispatch({ type: 'increment' }); // history.splice(1) drops [2, 3] first, then pushes the new 2
+store.getState(); // { count: 2 } — jumping back and dispatching fresh discards the old "future"
 ```
 
-**How it works:** because the devtools enhancer replaces `getState`/`dispatch` with versions backed by [`getEffectiveState(liftedState)`](../state-management-devtools/06-lifted-state.mdx#geteffectivestateliftedstate), clicking a row in the Inspector's action list calls `inspectorStore.jumpToState(name, index)`, which moves `currentStateIndex` and immediately changes what *this exact* `store.getState()` call returns elsewhere in your app — there's no separate "devtools preview" state to reconcile.
+**How it works:** dispatching `@@JUMP` doesn't run the real reducer at all — `withTimeTravel`'s wrapper short-circuits and returns `history[action.jumpTo]` directly, so `store.getState()` reflects whatever was recorded at that index immediately, on the same live store, with no separate "preview" state to reconcile. Dispatching a *real* action after a jump is what makes the jump permanent: `history.splice(++index)` truncates everything recorded after the new `index` before pushing the freshly computed next state, which is why incrementing again from the jumped-back state produces `{ count: 2 }` rather than resuming the original `count: 3` branch — the old future at indices 1–2 is gone the moment a new action overwrites them.
 
 ## 5. Server-side store creation with hydration
 
@@ -756,7 +774,7 @@ const store = createStore(
 );
 ```
 
-**How it works:** `applyMiddleware(...)` and any other enhancer are just plain values to `createStore` — there's nothing wrong with computing which enhancer (or none at all) to pass based on a build-time or runtime flag, which is exactly how both this kind of logging middleware and the devtools enhancer from [Example 1](#1-connecting-a-plain-store-to-the-time-travel-inspector) are conventionally excluded from production bundles, either via this kind of runtime check or (better, for bundle size) a build-time dead-code-elimination pass keyed on `process.env.NODE_ENV`.
+**How it works:** `applyMiddleware(...)` and any other enhancer are just plain values to `createStore` — there's nothing wrong with computing which enhancer (or none at all) to pass based on a build-time or runtime flag, which is exactly how dev-only middleware (logging, validation, or a [crash-recovery enhancer](#1-snapshotting-and-restoring-state-for-crash-recovery) you only want active in staging) is conventionally excluded from production bundles, either via this kind of runtime check or (better, for bundle size) a build-time dead-code-elimination pass keyed on `process.env.NODE_ENV`.
 
 ## 42. Testing a selector that spans the normalized entity graph
 
@@ -804,7 +822,7 @@ const reconstructedState = replayActions(rootReducer, userActionLog);
 console.log(reconstructedState); // the exact nested state the user was looking at when the bug occurred
 ```
 
-**How it works:** because reducers are pure functions of `(state, action)`, the *entire* state tree at any point in a session is fully determined by the ordered list of actions dispatched since the start — `replayActions` exploits exactly that property, starting from the same `@@INIT` default state every store starts from and folding each recorded action through the reducer in order. This is the same principle the devtools Inspector's time-travel relies on internally (see [Example 2](#2-hand-writing-the-lifted-store-pattern)), applied here outside of any live store, purely as a debugging tool for reconstructing what a user saw from a recorded action log.
+**How it works:** because reducers are pure functions of `(state, action)`, the *entire* state tree at any point in a session is fully determined by the ordered list of actions dispatched since the start — `replayActions` exploits exactly that property, starting from the same `@@INIT` default state every store starts from and folding each recorded action through the reducer in order. This is the same principle [Example 2](#2-hand-writing-the-lifted-store-pattern)'s `withTimeTravel` wrapper relies on internally to reconstruct any historical state, applied here outside of any live store, purely as a debugging tool for reconstructing what a user saw from a recorded action log.
 
 ## 45. A nested-state-aware "deep equal" check, used sparingly and deliberately
 

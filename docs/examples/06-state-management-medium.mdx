@@ -252,7 +252,7 @@ const withLogging: StoreEnhancer = (createStoreFn) => (reducer, preloadedState, 
 const store = createStore(rootReducer, withLogging);
 ```
 
-**How it works:** an enhancer wraps the *store creator* itself, not an individual dispatch — it receives the "real" `createStore` function as `createStoreFn`, and can intercept/modify the store object that comes back (add extra methods, wrap `dispatch`/`getState`, etc.) before returning it. `applyMiddleware(...)` is itself just a particularly common enhancer; [`@headlesskit/state-management-devtools`'s connector](../state-management-devtools/05-create-devtools-extension.mdx) is another, more elaborate one — see [Advanced #1](./07-state-management-advanced.mdx#1-connecting-a-plain-store-to-the-time-travel-inspector).
+**How it works:** an enhancer wraps the *store creator* itself, not an individual dispatch — it receives the "real" `createStore` function as `createStoreFn`, and can intercept/modify the store object that comes back (add extra methods, wrap `dispatch`/`getState`, etc.) before returning it. `applyMiddleware(...)` is itself just a particularly common enhancer; any enhancer that needs to swap out `dispatch`/`getState` entirely (rather than just wrapping `dispatch`, as middleware does) follows this same shape — see [Advanced #1](./07-state-management-advanced.mdx#1-snapshotting-and-restoring-state-for-crash-recovery) for a more elaborate one.
 
 ## 16. Middleware that reads a nested field out of an action payload
 
@@ -335,34 +335,47 @@ export const selectAllAuthors = (state: RootState) => state.authors.allIds.map((
 
 **How it works:** nothing in this package enforces or even recognizes a "slice" as a unit — `selectAuthorById` and `selectAllAuthors` are just plain functions placed in the same file as `authorsReducer` purely by convention, so that anything reading from the `authors` part of the tree goes through one of these two functions instead of writing `state.authors.byId[id]` inline at every call site. This convention is what `@headlesskit/state-management-toolkit`'s `createSlice` + `getSelectors()` formalizes and auto-generates for normalized entity state specifically.
 
-## 22. Connecting a store with nested state to the time-travel Inspector
+## 22. A store enhancer that records every action and resulting state to an in-memory array
 
 ```typescript
 import { createStore, combineReducers } from '@headlesskit/state-management';
-import { installDevtools, createDevtoolsExtension } from '@headlesskit/state-management-devtools';
 
-const { inspectorStore } = installDevtools();
-const { extension } = createDevtoolsExtension(inspectorStore);
+interface RecordedEntry { action: unknown; state: unknown }
 
+function withActionRecorder(history: RecordedEntry[]): StoreEnhancer {
+  return (createStoreFn) => (reducer, preloadedState, enhancer) => {
+    const recordingReducer = (state: unknown, action: any) => {
+      const next = reducer(state, action);
+      history.push({ action, state: next });
+      return next;
+    };
+    return createStoreFn(recordingReducer, preloadedState, enhancer);
+  };
+}
+
+const history: RecordedEntry[] = [];
 const rootReducer = combineReducers({ posts: postsReducer, authors: authorsReducer });
-const store = createStore(rootReducer, extension({ name: 'blog-store' }));
+const store = createStore(rootReducer, withActionRecorder(history));
 ```
 
-**How it works:** `createDevtoolsExtension(inspectorStore)` returns an `extension` function that, called with `{ name }`, produces a real `StoreEnhancer` — the same kind of value `applyMiddleware(...)` produces — so it slots into `createStore`'s second argument exactly like any other enhancer, regardless of how nested the reducer tree behind it is. The Inspector has no special handling for `combineReducers`-shaped state versus flat state; it just records whatever `store.getState()` returns after each dispatch, nested or not.
+**How it works:** unlike [Example 15](#15-a-minimal-store-enhancer)'s `withLogging` (which wraps the store object after creation), this enhancer wraps the *reducer itself* before handing it to `createStoreFn` — every dispatch, nested or not, runs through `recordingReducer`, which calls the real `reducer` first and then pushes the resulting `{ action, state }` pair onto `history` before returning. Because `history` is just a plain array passed in by the caller, nothing about recording requires `combineReducers`-aware logic or any external tooling — `history[i].state` after any dispatch is the exact same nested tree `store.getState()` would have returned at that point.
 
-## 23. Observing a nested diff in the Inspector
+## 23. Diffing two recorded nested-state snapshots by hand
 
 ```typescript
+function diffTopLevelKeys(prev: Record<string, unknown>, next: Record<string, unknown>): string[] {
+  return Object.keys(next).filter((key) => next[key] !== prev[key]);
+}
+
 store.dispatch({ type: 'posts/added', post: { id: '1', title: 'Hello', authorId: 'a1' } });
 store.dispatch({ type: 'authors/removed', authorId: 'a1' }); // cascades: post '1' is also dropped, per Example 8
 
-// In the Inspector UI: select the "authors/removed" action.
-// The state diff panel shows TWO changed paths in one action:
-//   authors.byId.a1        (removed)
-//   posts.byId.1           (removed, via the cascade)
+const beforeRemoval = history[history.length - 2].state as Record<string, unknown>;
+const afterRemoval = history[history.length - 1].state as Record<string, unknown>;
+diffTopLevelKeys(beforeRemoval, afterRemoval); // ['posts', 'authors'] — both branches changed in one action
 ```
 
-**How it works:** because `combineReducers` runs every slice reducer on every action, a single dispatch can change more than one top-level branch of the tree at once — the Inspector's diff view is just comparing the previous and next `getState()` snapshots key by key, so it surfaces *both* changed branches (`authors` and, thanks to the cascade in [Example 8](#8-cascading-a-delete-across-cross-referencing-slices), `posts`) under that one action, rather than attributing the action to a single slice. This is a useful way to actually *see* cross-slice cascades happening, as opposed to inferring them from reading reducer code.
+**How it works:** because [Example 22](#22-a-store-enhancer-that-records-every-action-and-resulting-state-to-an-in-memory-array)'s recorder already keeps a full `state` snapshot per dispatched action, finding which top-level branches a given action actually touched is just comparing two adjacent entries' keys by reference — `combineReducers` runs every slice reducer on every action, so a single dispatch can change more than one top-level branch at once, and `diffTopLevelKeys` surfaces *both* changed branches (`authors` and, thanks to the cascade in [Example 8](#8-cascading-a-delete-across-cross-referencing-slices), `posts`) without needing any tooling beyond the array this package's own enhancer mechanism let you build.
 
 ## 24. A minimal store enhancer that persists nested state to `localStorage`
 

@@ -66,21 +66,27 @@ persist(initializer, {
 
 **How it works:** `version` is stored alongside the persisted state; on load, if the stored version doesn't match the current one, `migrate` runs first with the *old* shape and the *old* version number, letting you transform a previous release's persisted data (here, converting a boolean `darkMode` flag into a `theme` string) before it becomes the live state — without this, users upgrading would either crash on an unexpected shape or silently lose their settings.
 
-## 5. Wiring up the time-travel Inspector
+## 5. Manually keeping an audit trail of the last N states for inspection
 
 ```typescript
 import { create } from '@headlesskit/state-management-simplify-react';
-import { devtools } from '@headlesskit/state-management-simplify';
-import { installDevtools } from '@headlesskit/state-management-devtools';
 
-installDevtools(); // populates window.__HEADLESSKIT_DEVTOOLS_EXTENSION__ — call this first
+const MAX_HISTORY = 20;
+const auditTrail: { count: number }[] = [];
 
-const useCounterStore = create<CounterStore>()(
-  devtools((set) => ({ count: 0, increment: () => set((s) => ({ count: s.count + 1 })) }), { name: 'counter' }),
-);
+const useCounterStore = create<CounterStore>((set, get) => ({
+  count: 0,
+  increment: () =>
+    set((s) => {
+      const next = { count: s.count + 1 };
+      auditTrail.push(next);
+      if (auditTrail.length > MAX_HISTORY) auditTrail.shift(); // cap memory — drop the oldest entry
+      return next;
+    }),
+}));
 ```
 
-**How it works:** `devtools` looks for `window.__HEADLESSKIT_DEVTOOLS_EXTENSION__` at store-creation time — `installDevtools()` must run first so that global exists. From there, every `set` call is recorded into [the Inspector's lifted-state history](../state-management-devtools/01-overview.mdx#two-replay-strategies-one-engine) using patch-based replay (this package has no reducer to replay through), and time-travel commands from the [`Inspector`](../state-management-devtools-react/03-inspector.mdx) UI get pushed back into this exact store via `devtools`'s own message handling.
+**How it works:** there's no middleware involved at all here — `increment`'s updater function pushes its own computed `next` value onto a plain module-level array *before* returning it to `set`, so `auditTrail` always mirrors exactly what was committed, in commit order. Capping the array at `MAX_HISTORY` with `.shift()` is a deliberate trade-off: this keeps memory bounded for a long-running session at the cost of only ever being able to inspect the most recent N states, not the full session from store creation.
 
 ## 6. `combine` for simple, state-only-first stores
 
