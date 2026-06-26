@@ -767,42 +767,70 @@ describe('todosAdapter', () => {
 
 **How it works:** calling `todosAdapter.addOne`/`removeOne` directly against a bare entity-state object (rather than through a slice's generated action creator) tests the adapter's mutation logic on its own — these are plain functions, so asserting on the returned `{ ids, entities }` shape directly verifies the adapter's bookkeeping invariant (every id in `ids` has a corresponding key in `entities` and vice versa) without involving `createSlice`, `dispatch`, or a store at all.
 
-## 29. Combining `@headlesskit/state-management-devtools`'s `installDevtools` with `configureStore`
+## 29. Building a minimal undo/redo feature on top of an entity-adapter-backed slice
 
 ```tsx
-// devtools-setup.ts — must be imported before any store is created
-import { installDevtools } from '@headlesskit/state-management-devtools';
+import { createSlice, createEntityAdapter, type PayloadAction } from '@headlesskit/state-management-toolkit';
 
-export const { inspectorStore, dockStore } = installDevtools();
+interface Todo { id: string; text: string; done: boolean }
+
+const todosAdapter = createEntityAdapter<Todo>();
+
+interface TodosState {
+  entities: ReturnType<typeof todosAdapter.getInitialState>;
+  past: ReturnType<typeof todosAdapter.getInitialState>[];
+  future: ReturnType<typeof todosAdapter.getInitialState>[];
+}
+
+const todosSlice = createSlice({
+  name: 'todos',
+  initialState: { entities: todosAdapter.getInitialState(), past: [], future: [] } as TodosState,
+  reducers: {
+    todoAdded(state, action: PayloadAction<Todo>) {
+      state.past.push(state.entities); // snapshot BEFORE mutating, via Immer draft push (cheap, structural-share)
+      todosAdapter.addOne(state.entities, action.payload);
+      state.future = [];
+    },
+    undo(state) {
+      const previous = state.past.pop();
+      if (!previous) return;
+      state.future.unshift(state.entities);
+      state.entities = previous;
+    },
+    redo(state) {
+      const next = state.future.shift();
+      if (!next) return;
+      state.past.push(state.entities);
+      state.entities = next;
+    },
+  },
+});
 ```
+
+**How it works:** `state.past.push(state.entities)` inside `todoAdded` captures the *current* Immer draft reference before `addOne` mutates it further — because Immer finalizes each reducer call into a fresh immutable object, the pushed reference in `past` is unaffected by `addOne`'s subsequent mutation in the same call, the same snapshot-before-changing principle as a hand-rolled `{ past, present, future }` wrapper, but expressed as ordinary entity-adapter state living inside one slice instead of a generic higher-order reducer. `undo`/`redo` only ever move whole `{ ids, entities }` snapshots between `past`/`future` and the live `entities` field; neither needs `todosAdapter`'s CRUD helpers at all, since restoring a previous normalized snapshot wholesale is just a plain assignment.
+
+## 30. Snapshot-testing a slice's reducer against a sequence of recorded actions
 
 ```tsx
-// store.ts
-import './devtools-setup';
-import { configureStore } from '@headlesskit/state-management-toolkit';
-import rootReducer from './rootReducer';
+import { describe, it, expect } from 'vitest';
+import todosReducer, { todoAdded, undo, redo } from './todosSlice';
 
-export const store = configureStore({ reducer: rootReducer });
+describe('todosSlice undo/redo', () => {
+  it('matches a snapshot after a recorded action sequence', () => {
+    const actions = [
+      todoAdded({ id: '1', text: 'Buy milk', done: false }),
+      todoAdded({ id: '2', text: 'Walk dog', done: false }),
+      undo(),
+    ];
+
+    const finalState = actions.reduce((state, action) => todosReducer(state, action), undefined as any);
+
+    expect(finalState).toMatchSnapshot();
+  });
+});
 ```
 
-**How it works:** `installDevtools()` populates `window.__HEADLESSKIT_DEVTOOLS_EXTENSION__` (and its `_COMPOSE__` counterpart) — globals that `configureStore` checks for *at the moment it's called*, not lazily. Importing `./devtools-setup` before `./store` guarantees those globals already exist when `configureStore` runs, so every dispatched action is recorded into `inspectorStore`'s in-memory history; importing them in the other order would leave the store permanently disconnected from time-travel, with no runtime error to flag the mistake.
-
-## 30. Reading devtools time-travel history directly from `inspectorStore`
-
-```tsx
-import { inspectorStore } from './devtools-setup';
-
-const snapshot = inspectorStore.getSnapshot();
-console.log(snapshot.computedStates.length, 'actions recorded');
-
-inspectorStore.jumpToAction(snapshot.stagedActionIds[2]);
-// store.getState() now reflects state as of the 3rd recorded action
-
-inspectorStore.commit();
-// collapses history so far into the baseline state, history list resets
-```
-
-**How it works:** `jumpToAction` doesn't mutate history — it recomputes the *effective* state by replaying the real reducer (`rootReducer`) over the recorded action list up to that point and pushes that computed state into the live store, which is why `store.getState()` reflects it immediately. `commit()` is a separate, destructive operation: it folds everything recorded so far into a new baseline and clears the replayable action list, freeing memory at the cost of no longer being able to time-travel further back than the commit point.
+**How it works:** folding a fixed, version-controlled array of actions through the real reducer (the same `actions.reduce` pattern as replaying a recorded action log) produces a deterministic `finalState` every run, since `createSlice`'s generated reducer has no hidden non-determinism (no `Date.now()`, no randomness) — `toMatchSnapshot()` then pins that exact shape to a committed snapshot file, so a future change to `todoAdded`'s or `undo`'s logic that alters the resulting `entities`/`past`/`future` shape fails the test with a diff, rather than only being caught by a hand-written assertion that happened to check the field that changed.
 
 ## 31. `keepUnusedDataFor` tuning how long an unused cache entry survives
 
