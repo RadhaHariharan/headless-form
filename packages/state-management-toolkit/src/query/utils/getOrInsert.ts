@@ -1,6 +1,6 @@
 // Duplicate some of the utils in `/src/utils` to ensure
-// we don't end up dragging in larger chunks of the RTK core
-// into the RTKQ bundle
+// we don't end up dragging in larger chunks of the core package
+// into the query bundle
 
 export function getOrInsert<K extends object, V>(
   map: WeakMap<K, V>,

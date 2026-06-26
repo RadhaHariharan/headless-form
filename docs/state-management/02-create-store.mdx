@@ -90,10 +90,10 @@ An enhancer wraps the store creator itself, so it can intercept *every* method o
 import { createStore, applyMiddleware, compose } from '@headlesskit/state-management';
 
 declare global {
-  interface Window { __REDUX_DEVTOOLS_EXTENSION_COMPOSE__?: typeof compose }
+  interface Window { __HEADLESSKIT_DEVTOOLS_EXTENSION_COMPOSE__?: typeof compose }
 }
 
-const composeEnhancers = window.__REDUX_DEVTOOLS_EXTENSION_COMPOSE__ ?? compose;
+const composeEnhancers = window.__HEADLESSKIT_DEVTOOLS_EXTENSION_COMPOSE__ ?? compose;
 
 const store = createStore(
   rootReducer,
@@ -128,7 +128,7 @@ store.dispatch(action: Action): Action
 The only way to trigger a state change. Runs the root reducer with the current state and the action, stores the result, then calls every subscriber. Returns the same action object you passed in (useful for chaining/awaiting in middleware).
 
 **Validation, in order:**
-1. The action **must be a plain object** (`{}`, not a class instance, array, `Map`, etc.) — throws `"Actions must be plain objects. Instead, received: '<type>'. You may need to add middleware ... such as 'redux-thunk' to handle dispatching functions."` This is why dispatching a plain function (e.g. a thunk) without `applyMiddleware(thunk)` throws — the raw store only accepts plain objects.
+1. The action **must be a plain object** (`{}`, not a class instance, array, `Map`, etc.) — throws `"Actions must be plain objects. Instead, received: '<type>'. You may need to add middleware ... such as a thunk middleware to handle dispatching functions."` This is why dispatching a plain function (e.g. a thunk) without `applyMiddleware(thunk)` throws — the raw store only accepts plain objects.
 2. `action.type` **must not be `undefined`** — throws `"Actions may not have an undefined 'type' property."` (a very common typo bug: a misspelled imported constant evaluates to `undefined`).
 3. `action.type` **must be a `string`** — throws `"Action 'type' property must be a string."`
 4. You **cannot dispatch from inside a reducer** — throws `"Reducers may not dispatch actions."` (reducers must be pure; side effects belong in middleware).
@@ -172,7 +172,7 @@ store.dispatch({ type: 'INCREMENT' }); // listener does not fire
 store.replaceReducer(nextReducer: Reducer<S, A>): void
 ```
 
-Swaps the root reducer at runtime without recreating the store (and therefore without losing existing state or subscribers). Internally dispatches a private `@@redux/REPLACE` action so reducers can detect the swap if they need to.
+Swaps the root reducer at runtime without recreating the store (and therefore without losing existing state or subscribers). Internally dispatches a private `@@headlesskit/REPLACE` action so reducers can detect the swap if they need to.
 
 **Real-world use:** code-splitting (load a feature's reducer lazily and `replaceReducer` with a `combineReducers` call that now includes it) and hot module reloading in development.
 
@@ -186,7 +186,7 @@ if (import.meta.hot) {
 
 ### `Symbol.observable` (the `observable` method)
 
-The store also implements the [TC39 Observable proposal](https://github.com/tc39/proposal-observable), so any Observable-aware library can subscribe to it without a Redux-specific adapter:
+The store also implements the [TC39 Observable proposal](https://github.com/tc39/proposal-observable), so any Observable-aware library can subscribe to it without a package-specific adapter:
 
 ```typescript
 import { from } from 'rxjs';
@@ -201,7 +201,7 @@ state$.subscribe((state) => console.log(state));
 import { legacy_createStore } from '@headlesskit/state-management';
 ```
 
-Identical in every behavioral respect to `createStore` — same signature, same validation, same returned `Store` shape. The only difference is cosmetic: Redux DevTools shows a deprecation notice when it detects `createStore` being called directly (nudging you toward `configureStore`), and `legacy_createStore` is the same function under a name DevTools doesn't flag. Use it only if you specifically want to silence that notice while still using the raw store creator; for new code, prefer `configureStore` from `@headlesskit/state-management-toolkit`.
+Identical in every behavioral respect to `createStore` — same signature, same validation, same returned `Store` shape. The only difference is cosmetic: DevTools shows a deprecation notice when it detects `createStore` being called directly (nudging you toward `configureStore`), and `legacy_createStore` is the same function under a name DevTools doesn't flag. Use it only if you specifically want to silence that notice while still using the raw store creator; for new code, prefer `configureStore` from `@headlesskit/state-management-toolkit`.
 
 ## Common pitfalls
 

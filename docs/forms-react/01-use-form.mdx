@@ -2,7 +2,7 @@
 
 **File:** `src/hooks/use-form.ts`
 
-The primary hook — bridges the framework-agnostic store from [`@headlesskit/forms`](../../forms/store/01-create-form-store) to React's rendering model via `useSyncExternalStore`. The exact same hook works unchanged for React Native through `@headlesskit/forms-react-native`, which re-exports it directly.
+The primary hook — bridges the framework-agnostic store from [`@headlesskit/forms`](../forms/store/01-create-form-store) to React's rendering model via `useSyncExternalStore`. The exact same hook works unchanged for React Native through `@headlesskit/forms-react-native`, which re-exports it directly.
 
 ## Signature
 
@@ -12,7 +12,7 @@ function useForm<Values = Record<string, unknown>, TransformedValues = Values, T
 ): UseFormReturnType<Values, TransformedValues, TError>
 ```
 
-Accepts the exact same `UseFormOptions` as [createFormStore](../../forms/store/01-create-form-store) — see that doc and [store.types](../../forms/types/01-store-types) for the full options table. Two React-specific defaults differ from core:
+Accepts the exact same `UseFormOptions` as [createFormStore](../forms/store/01-create-form-store) — see that doc and [store.types](../forms/types/01-store-types) for the full options table. Two React-specific defaults differ from core:
 
 | | Core (`createFormStore`) default | `useForm` default |
 |---|---|---|
@@ -42,7 +42,7 @@ const snapshot = useSyncExternalStore(
 );
 ```
 
-This is the entire React-reactivity bridge: `useSyncExternalStore` re-renders the component whenever `store.subscribe`'s callback fires (i.e. whenever [createFormStore](../../forms/store/01-create-form-store)'s `notifySubscribers()` runs) and reads the current `snapshot` (errors/touched/dirty/validating/submitting/etc — see [FormStoreSnapshot](../../forms/types/01-store-types)) on every render. The `getServerSnapshot` argument makes this hook safe to call during SSR/RSC rendering, where `getSnapshot`/`getServerSnapshot` must return the same stable reference (the underlying store guarantees this — see [createFormStore](../../forms/store/01-create-form-store)'s subscription contract).
+This is the entire React-reactivity bridge: `useSyncExternalStore` re-renders the component whenever `store.subscribe`'s callback fires (i.e. whenever [createFormStore](../forms/store/01-create-form-store)'s `notifySubscribers()` runs) and reads the current `snapshot` (errors/touched/dirty/validating/submitting/etc — see [FormStoreSnapshot](../forms/types/01-store-types)) on every render. The `getServerSnapshot` argument makes this hook safe to call during SSR/RSC rendering, where `getSnapshot`/`getServerSnapshot` must return the same stable reference (the underlying store guarantees this — see [createFormStore](../forms/store/01-create-form-store)'s subscription contract).
 
 ## The returned object is a snapshot/store hybrid, not the store itself
 
@@ -63,7 +63,7 @@ return {
 
 Every render builds a **fresh plain object**, but:
 - **Reactive fields** (`errors`, `validating`, `submitting`, `initialized`) are read straight from the current `snapshot` — these are exactly the fields that change identity/value when `useSyncExternalStore` triggers a re-render, so reading them from `snapshot` (rather than calling a store getter) ensures the returned object's values are consistent with *this specific render*.
-- **`values`** is a getter that calls `store.getValues()` live — **not** snapshot-derived, since values are deliberately excluded from the observable snapshot (see [createFormStore](../../forms/store/01-create-form-store)). In uncontrolled mode this means `form.values` read during render reflects the latest *committed* value, but reading it doesn't subscribe you to future value changes the way reading `form.errors` does.
+- **`values`** is a getter that calls `store.getValues()` live — **not** snapshot-derived, since values are deliberately excluded from the observable snapshot (see [createFormStore](../forms/store/01-create-form-store)). In uncontrolled mode this means `form.values` read during render reflects the latest *committed* value, but reading it doesn't subscribe you to future value changes the way reading `form.errors` does.
 - **Every mutating/query method** (`setFieldValue`, `validate`, `getInputProps`, etc.) is just `store.<method>.bind(store)` — a stable reference to the underlying store's own implementation, doing no extra work in the React layer.
 - **`key(path)`** is the one method *not* delegated directly — it's reimplemented inline, reading `formKey`/`fieldKeys` from the **current snapshot** rather than calling `store.key()` (which reads the store's live internal state directly). This matters because `key()`'s whole purpose is to drive a React `key` prop, which only causes a remount when its *returned string* changes between renders — reading from the snapshot guarantees the string is computed consistently with the render that's currently happening, in lock-step with `useSyncExternalStore`'s contract.
 
@@ -79,7 +79,7 @@ type UseFormReturnType<Values, TransformedValues = Values, TError = ReactNode> =
   };
 ```
 
-Identical to [FormStoreApi](../../forms/types/01-store-types) except `onSubmit` is re-typed for React specifically: the returned handler is a `FormEventHandler<HTMLFormElement>` (React's exact event-handler type for `<form onSubmit>`), and the callbacks receive React's synthetic `FormEvent` rather than the generic DOM `Event` core's type declares — at runtime this is the same object React actually passes, just typed precisely for React consumers.
+Identical to [FormStoreApi](../forms/types/01-store-types) except `onSubmit` is re-typed for React specifically: the returned handler is a `FormEventHandler<HTMLFormElement>` (React's exact event-handler type for `<form onSubmit>`), and the callbacks receive React's synthetic `FormEvent` rather than the generic DOM `Event` core's type declares — at runtime this is the same object React actually passes, just typed precisely for React consumers.
 
 ## Basic usage
 
@@ -145,5 +145,5 @@ type Output = TransformedValues<MyForm>; // { name: string; email: string; fullN
 ## Common pitfalls
 
 - **`options` is only consumed on the first render** — re-rendering a component with `useForm({ initialValues: newValues })` where `newValues` differs from the previous render does **not** update the form; the store was already created. Use `form.setValues(newValues)` or `form.setInitialValues(newValues)` explicitly when you need to react to changed props after mount.
-- **Always pair an uncontrolled-mode input with `key={form.key(path)}`** — see [field-keys](../../forms/store/02-field-keys) for why; forgetting it means programmatic `setFieldValue` calls silently fail to update what's displayed.
+- **Always pair an uncontrolled-mode input with `key={form.key(path)}`** — see [field-keys](../forms/store/02-field-keys) for why; forgetting it means programmatic `setFieldValue` calls silently fail to update what's displayed.
 - **`form.values` is not what re-renders the component in uncontrolled mode** — only `errors`/`touched`/`dirty`/`validating`/`submitting`/`initialized`/the field keys do, since those are the snapshot fields `useSyncExternalStore` actually subscribes to; reading `form.values` inside a render doesn't cause future value changes to re-trigger that render the way reading `form.errors` does.

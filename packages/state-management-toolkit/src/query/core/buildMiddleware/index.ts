@@ -10,7 +10,7 @@ import type {
 } from '../../endpointDefinitions'
 import type { QueryStatus, QuerySubState, RootState } from '../apiState'
 import type { QueryThunkArg } from '../buildThunks'
-import { createAction, isAction } from '../rtkImports'
+import { createAction, isAction } from '../toolkitImports'
 import { buildBatchedActionsHandler } from './batchActions'
 import { buildCacheCollectionHandler } from './cacheCollection'
 import { buildCacheLifecycleHandler } from './cacheLifecycle'

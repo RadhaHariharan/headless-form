@@ -6,7 +6,7 @@ import type {
 } from '../../baseQueryTypes'
 import { isAnyQueryDefinition } from '../../endpointDefinitions'
 import type { Recipe } from '../buildThunks'
-import { isFulfilled, isPending, isRejected } from '../rtkImports'
+import { isFulfilled, isPending, isRejected } from '../toolkitImports'
 import type {
   MutationBaseLifecycleApi,
   QueryBaseLifecycleApi,
@@ -80,7 +80,7 @@ export type QueryLifecycleQueryExtraOptions<
    *
    * @example
    * ```ts
-   * import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query';
+   * import { createApi, fetchBaseQuery } from '@headlesskit/state-management-toolkit';
    * import { messageCreated } from './notificationsSlice';
    *
    * export interface Post {
@@ -149,7 +149,7 @@ export type QueryLifecycleMutationExtraOptions<
    * @example
    *
    * ```ts
-   * import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query'
+   * import { createApi, fetchBaseQuery } from '@headlesskit/state-management-toolkit'
    * export interface Post {
    *   id: number
    *   name: string
@@ -227,8 +227,8 @@ export type MutationLifecycleApi<
  * <caption>#### __Create and reuse a strongly-typed `onQueryStarted` function__</caption>
  *
  * ```ts
- * import type { TypedQueryOnQueryStarted } from '@reduxjs/toolkit/query'
- * import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query'
+ * import type { TypedQueryOnQueryStarted } from '@headlesskit/state-management-toolkit'
+ * import { createApi, fetchBaseQuery } from '@headlesskit/state-management-toolkit'
  *
  * type Post = {
  *   id: number
@@ -325,8 +325,8 @@ export type TypedQueryOnQueryStarted<
  * <caption>#### __Create and reuse a strongly-typed `onQueryStarted` function__</caption>
  *
  * ```ts
- * import type { TypedMutationOnQueryStarted } from '@reduxjs/toolkit/query'
- * import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query'
+ * import type { TypedMutationOnQueryStarted } from '@headlesskit/state-management-toolkit'
+ * import { createApi, fetchBaseQuery } from '@headlesskit/state-management-toolkit'
  *
  * type Post = {
  *   id: number

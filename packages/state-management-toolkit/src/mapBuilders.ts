@@ -75,7 +75,7 @@ export interface ActionReducerMapBuilder<State> {
    * @param reducers - A mapping from each of the `AsyncThunk` action types to the case reducer that should handle those actions.
    * @example
    * ```ts no-transpile
-   * import { createAsyncThunk, createReducer } from '@reduxjs/toolkit';
+   * import { createAsyncThunk, createReducer } from '@headlesskit/state-management-toolkit';
    *
    * const fetchUserById = createAsyncThunk('users/fetchUser', async (id) => {
    *   const response = await fetch(`https://reqres.in/api/users/${id}`);
@@ -121,8 +121,8 @@ export interface ActionReducerMapBuilder<State> {
    *
    * @example
    * ```ts
-   * import type { AsyncThunk, UnknownAction } from '@reduxjs/toolkit';
-   * import { createAction, createReducer } from '@reduxjs/toolkit';
+   * import type { AsyncThunk, UnknownAction } from '@headlesskit/state-management-toolkit';
+   * import { createAction, createReducer } from '@headlesskit/state-management-toolkit';
    *
    * type GenericAsyncThunk = AsyncThunk<unknown, unknown, any>;
    *
@@ -173,7 +173,7 @@ export interface ActionReducerMapBuilder<State> {
    *
    * @example
    * ```ts
-   * import { createReducer } from '@reduxjs/toolkit';
+   * import { createReducer } from '@headlesskit/state-management-toolkit';
    *
    * const initialState = { otherActions: 0 };
    *

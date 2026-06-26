@@ -1,6 +1,6 @@
 # @headlesskit/query-core
 
-The framework-agnostic core that powers TanStack Query — vendored in plain JS, with zero UI-framework dependency.
+The framework-agnostic async state and cache management engine, with zero UI-framework dependency.
 
 ## Install
 
@@ -18,7 +18,7 @@ yarn add @headlesskit/query-core
 
 ## Why this exists
 
-`@headlesskit/query-core` is a port of TanStack Query Core — the engine underneath `@tanstack/query-core` — vendored as plain JS/TS with no peer dependency on React, Vue, Solid, or any other framework. It is **API-compatible with TanStack Query Core**, so if you already know `QueryClient`, `useQuery`, or `useInfiniteQuery` from the TanStack ecosystem, everything here will feel familiar.
+`@headlesskit/query-core` is a framework-agnostic async query and cache engine, vendored as plain JS/TS with no peer dependency on React, Vue, Solid, or any other framework. It exposes `QueryClient`, `QueryObserver`, and `MutationObserver` as the building blocks for framework-specific bindings.
 
 Use it directly when you want async state management — caching, deduplication, background refetching, stale-while-revalidate, retries, mutations, and SSR hydration — without pulling in a framework adapter, or when you're building your own adapter on top of `QueryObserver` / `MutationObserver`.
 

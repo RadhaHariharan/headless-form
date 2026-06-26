@@ -1,6 +1,6 @@
 import type { Action, Dispatch, MiddlewareAPI, UnknownAction } from '@headlesskit/state-management'
-import { isAction } from '../reduxImports'
-import type { ThunkDispatch } from 'redux-thunk'
+import { isAction } from '../stateManagementImports'
+import type { ThunkDispatch } from '../thunkMiddlewareTypes'
 import { createAction } from '../createAction'
 import { nanoid } from '../nanoid'
 
@@ -504,7 +504,6 @@ export const createListenerMiddleware = <
     let originalState: StateType | typeof INTERNAL_NIL_TOKEN = api.getState()
 
     // `getOriginalState` can only be called synchronously.
-    // @see https://github.com/reduxjs/redux-toolkit/discussions/1648#discussioncomment-1932820
     const getOriginalState = (): StateType => {
       if (originalState === INTERNAL_NIL_TOKEN) {
         throw new Error(

@@ -172,7 +172,7 @@ A utility type that pulls the state type `T` back out of anything shaped like a 
 
 ### Mutate\<S, Ms\>
 
-The type-level mechanism that lets middleware declare "this adds capability X to the store." Each middleware that augments the store (e.g. `redux` adding `dispatch`, `persist` adding a `persist` object, `devtools` adding a `devtools` object) declares an entry in the module-augmented `StoreMutators<S, A>` interface, and `Mutate` walks the list of `[identifier, augmentation]` tuples to compute the final, fully-augmented store type. You generally don't write `Mutate` by hand — it's threaded through automatically by `createStore`'s return type and by each middleware's exported type.
+The type-level mechanism that lets middleware declare "this adds capability X to the store." Each middleware that augments the store (e.g. `reducerMiddleware` adding `dispatch`, `persist` adding a `persist` object, `devtools` adding a `devtools` object) declares an entry in the module-augmented `StoreMutators<S, A>` interface, and `Mutate` walks the list of `[identifier, augmentation]` tuples to compute the final, fully-augmented store type. You generally don't write `Mutate` by hand — it's threaded through automatically by `createStore`'s return type and by each middleware's exported type.
 
 ## Common pitfalls
 

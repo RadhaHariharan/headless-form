@@ -2,7 +2,7 @@
 
 **File:** `src/autoBatchEnhancer.ts`
 
-A store enhancer (included by default via [getDefaultEnhancers](./11-get-default-enhancers)) that batches subscriber notifications for a run of "low-priority" actions into a single notification — meant for actions dispatched in rapid succession (e.g. RTK Query cache updates) where notifying the UI after every single one would cause wasteful re-renders.
+A store enhancer (included by default via [getDefaultEnhancers](./11-get-default-enhancers)) that batches subscriber notifications for a run of "low-priority" actions into a single notification — meant for actions dispatched in rapid succession (e.g. query-cache updates) where notifying the UI after every single one would cause wasteful re-renders.
 
 ## Signature
 
@@ -30,7 +30,7 @@ const cacheEntryUpdated = createAction(
 );
 
 cacheEntryUpdated({ key: 'users/1', data: { name: 'Ada' } });
-// { type: 'api/cacheEntryUpdated', payload: {...}, meta: { RTK_autoBatch: true } }
+// { type: 'api/cacheEntryUpdated', payload: {...}, meta: { headlesskit_autoBatch: true } }
 ```
 
 ## What it actually does
@@ -38,7 +38,7 @@ cacheEntryUpdated({ key: 'users/1', data: { name: 'Ada' } });
 The enhancer wraps `store.subscribe` and `store.dispatch`:
 
 - **`subscribe(listener)`** — wraps every listener so it only actually fires while a `notifying` flag is `true`.
-- **`dispatch(action)`** — checks the dispatched action's auto-batch flag. If present, flips `notifying` to `false` for the duration of *this* dispatch (suppressing the listener calls that would otherwise fire immediately) and schedules a single deferred `notifyListeners()` call (only once per batch window, via `notificationQueued`). If the action does **not** carry the flag, behavior is unchanged — subscribers are notified synchronously and immediately, exactly like a normal Redux store.
+- **`dispatch(action)`** — checks the dispatched action's auto-batch flag. If present, flips `notifying` to `false` for the duration of *this* dispatch (suppressing the listener calls that would otherwise fire immediately) and schedules a single deferred `notifyListeners()` call (only once per batch window, via `notificationQueued`). If the action does **not** carry the flag, behavior is unchanged — subscribers are notified synchronously and immediately, exactly like a normal store.
 
 So: a quick burst of `SHOULD_AUTOBATCH`-flagged actions all get processed by reducers normally and immediately (state is always up to date the instant you call `getState()`), but **subscriber notifications** (the thing that triggers React re-renders via `useSelector`/`useSyncExternalStore`) are coalesced into one call at the end of the batch window.
 

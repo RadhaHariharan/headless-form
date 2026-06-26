@@ -2,7 +2,7 @@
 
 **File:** `src/getDefaultMiddleware.ts`
 
-The function [configureStore](./04-configure-store) passes into your `middleware` callback — returns the standard set of middleware Redux Toolkit considers good defaults, so you can `.concat()` your own onto it instead of rebuilding the whole list by hand.
+The function [configureStore](./04-configure-store) passes into your `middleware` callback — returns the standard set of middleware this toolkit considers good defaults, so you can `.concat()` your own onto it instead of rebuilding the whole list by hand.
 
 ## Signature
 
@@ -17,15 +17,19 @@ function getDefaultMiddleware(options?: GetDefaultMiddlewareOptions): Tuple<Midd
 | `serializableCheck` | `boolean \| SerializableStateInvariantMiddlewareOptions` | `true` (dev only) | [serializableStateInvariantMiddleware](./14-serializable-state-invariant-middleware) — warns about non-serializable values in actions/state. |
 | `actionCreatorCheck` | `boolean \| ActionCreatorInvariantMiddlewareOptions` | `true` (dev only) | [actionCreatorInvariantMiddleware](./12-action-creator-invariant-middleware) — warns if you dispatch an action creator function itself instead of calling it. |
 
-**Returns:** a `Tuple` (a typed array subclass — see [Tuple](./16-utils#tuple)) of middleware, ordered: `actionCreatorCheck`, `immutableCheck`, `thunk`, `serializableCheck` — the two invariant-check middlewares are `unshift`ed to the front so they observe the action *before* the thunk middleware potentially transforms it.
+**Returns:** a `Tuple` (a typed array subclass — see [Tuple](./utils/06-utils)) of middleware, ordered: `actionCreatorCheck`, `immutableCheck`, `thunk`, `serializableCheck` — the two invariant-check middlewares are `unshift`ed to the front so they observe the action *before* the thunk middleware potentially transforms it.
 
 **Production behavior:** all three dev-only checks are compiled out entirely outside `NODE_ENV !== 'production'` (the immutable-check import is wrapped in `/* PROD_START_REMOVE_UMD */` comments understood by the build's dead-code elimination) — so a production bundle only ever includes the thunk middleware, regardless of what options you pass.
 
 ## Basic usage — extending the defaults
 
 ```typescript
-import { configureStore } from '@headlesskit/state-management-toolkit';
-import logger from 'redux-logger';
+import { configureStore, type Middleware } from '@headlesskit/state-management-toolkit';
+
+const logger: Middleware = (store) => (next) => (action) => {
+  console.log('dispatching', action);
+  return next(action);
+};
 
 const store = configureStore({
   reducer: rootReducer,

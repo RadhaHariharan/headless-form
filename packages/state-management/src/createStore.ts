@@ -60,7 +60,7 @@ export function createStore<
     throw new Error(
       process.env['NODE_ENV'] === 'production'
         ? formatProdErrorMessage(0)
-        : 'It looks like you are passing several store enhancers to createStore(). This is not supported. Instead, compose them together to a single function. See https://redux.js.org/tutorials/fundamentals/part-4-store#creating-a-store-with-enhancers for an example.'
+        : 'It looks like you are passing several store enhancers to createStore(). This is not supported. Instead, compose them together to a single function.'
     )
   }
 
@@ -123,7 +123,7 @@ export function createStore<
       throw new Error(
         process.env['NODE_ENV'] === 'production'
           ? formatProdErrorMessage(5)
-          : 'You may not call store.subscribe() while the reducer is executing. If you would like to be notified after the store has been updated, subscribe from a component and invoke store.getState() in the callback to access the latest state. See https://redux.js.org/api/store#subscribelistener for more details.'
+          : 'You may not call store.subscribe() while the reducer is executing. If you would like to be notified after the store has been updated, subscribe from a component and invoke store.getState() in the callback to access the latest state.'
       )
     }
 
@@ -139,7 +139,7 @@ export function createStore<
         throw new Error(
           process.env['NODE_ENV'] === 'production'
             ? formatProdErrorMessage(6)
-            : 'You may not unsubscribe from a store listener while the reducer is executing. See https://redux.js.org/api/store#subscribelistener for more details.'
+            : 'You may not unsubscribe from a store listener while the reducer is executing.'
         )
       }
 
@@ -155,7 +155,7 @@ export function createStore<
       throw new Error(
         process.env['NODE_ENV'] === 'production'
           ? formatProdErrorMessage(7)
-          : `Actions must be plain objects. Instead, received: '${kindOf(action)}'. You may need to add middleware to your store setup to handle dispatching other values, such as 'redux-thunk' to handle dispatching functions. See https://redux.js.org/tutorials/fundamentals/part-4-store#middleware and https://redux.js.org/tutorials/fundamentals/part-6-async-logic#using-the-redux-thunk-middleware for examples.`
+          : `Actions must be plain objects. Instead, received: '${kindOf(action)}'. You may need to add middleware to your store setup to handle dispatching other values, such as a thunk middleware to handle dispatching functions.`
       )
     }
 

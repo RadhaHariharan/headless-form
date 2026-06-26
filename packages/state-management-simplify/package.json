@@ -17,7 +17,7 @@
   "files": ["dist"],
   "sideEffects": false,
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && tsc -p tsconfig.json --declaration --emitDeclarationOnly --outDir dist",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist"
@@ -31,7 +31,6 @@
     }
   },
   "devDependencies": {
-    "@redux-devtools/extension": "^3.3.0",
     "@types/node": "^20.14.0",
     "immer": "^10.1.1",
     "tsup": "^8.0.0",

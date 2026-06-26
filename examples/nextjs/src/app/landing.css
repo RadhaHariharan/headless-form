@@ -1,0 +1,48 @@
+.landingPage {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 48px 24px;
+}
+
+.landingPage h1 {
+  font-size: 28px;
+  margin-bottom: 8px;
+}
+
+.landingPage .intro {
+  color: #666;
+  margin-bottom: 24px;
+}
+
+.landingPage .demoList {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0;
+}
+
+.landingPage .demoCard {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid #e2e2e2;
+  border-radius: 8px;
+  padding: 16px 20px;
+  text-decoration: none;
+  color: inherit;
+}
+
+.landingPage .demoCard:hover {
+  background: #fafafa;
+}
+
+.landingPage .demoTitle {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.landingPage .demoDescription {
+  font-size: 14px;
+  color: #666;
+}

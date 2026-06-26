@@ -73,7 +73,7 @@ function assertReducerShape(reducers: ReducersMapObject) {
       throw new Error(
         process.env['NODE_ENV'] === 'production'
           ? formatProdErrorMessage(13)
-          : `The slice reducer for key "${key}" returned undefined when probed with a random type. Don't try to handle '${ActionTypes.INIT}' or other actions in "redux/*" namespace. They are considered private. Instead, you must return the current state for any unknown actions, unless it is undefined, in which case you must return the initial state, regardless of the action type. The initial state may not be undefined, but can be null.`
+          : `The slice reducer for key "${key}" returned undefined when probed with a random type. Don't try to handle '${ActionTypes.INIT}' or other actions in the "@@headlesskit/*" namespace. They are considered private. Instead, you must return the current state for any unknown actions, unless it is undefined, in which case you must return the initial state, regardless of the action type. The initial state may not be undefined, but can be null.`
       )
     }
   })

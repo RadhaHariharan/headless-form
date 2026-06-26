@@ -1,0 +1,27 @@
+# core/ internals (how createApi is actually built)
+
+**Folder:** `src/query/core/` · Files: `module.ts` (727 lines), `buildThunks.ts` (1124 lines), `buildSlice.ts` (735 lines), `buildInitiate.ts` (596 lines), `buildSelectors.ts` (413 lines), `setupListeners.ts`, `toolkitImports.ts`, `index.ts`
+
+None of these are imported directly in application code — [createApi](../01-create-api) is the only public entry point — but understanding the pipeline clarifies *why* the query layer behaves the way it does. Roughly 3,500 lines implement everything described in [createApi](../01-create-api), [endpoint definitions](../05-endpoint-definitions), [api.util](../11-api-util), and [QueryStatus/state shape](../10-query-status-and-state-shape).
+
+## The build pipeline, file by file
+
+| File | Responsibility |
+|------|-----------------|
+| `module.ts` | The "core module" `createApi` is built from (via `buildCreateApi(coreModule())` — see [createApi](../01-create-api)). Wires every other piece below together, attaches `.util`, `.endpoints`, and per-endpoint `initiate`/`select`/`matchPending`/etc to the final `Api` object. |
+| `buildThunks.ts` | Generates the actual async thunks dispatched under the hood for queries, mutations, and infinite queries — handles calling `baseQuery`, applying `transformResponse`/schema validation, generating `pending`/`fulfilled`/`rejected` actions (same three-action lifecycle as [createAsyncThunk](../../06-create-async-thunk), purpose-built rather than reusing it directly since the query layer needs additional metadata like `queryCacheKey`). |
+| `buildSlice.ts` | The actual `createReducer`-style reducer for the whole api slice — processes every query/mutation lifecycle action into the `queries`/`mutations`/`provided`/`subscriptions`/`config` state shape documented in [QueryStatus and the state shape](../10-query-status-and-state-shape). |
+| `buildInitiate.ts` | Builds each endpoint's `.initiate(arg, options)` — the dispatchable thunk a hook (or you, manually) calls to actually kick off a query/mutation. Handles cache-key deduplication (don't refetch if an identical request is already in flight or cached), subscription bookkeeping, and the `getRunningQueries`/`getRunningMutations` thunks. |
+| `buildSelectors.ts` | Builds each endpoint's `.select(arg)` — a memoized selector reading that specific cache entry back out of state, deriving the `RequestStatusFlags` and the `isFetching` flag (distinct from `isLoading` — see [QueryStatus](../10-query-status-and-state-shape)) that hooks/components actually consume. |
+| `setupListeners.ts` | Covered separately — see [setupListeners](../04-setup-listeners). |
+| `toolkitImports.ts` | A dependency-isolation barrel, same pattern as [the toolkit-root import barrels](../../utils/02-state-management-imports) — re-exports the toolkit pieces `core/` depends on so this folder doesn't reach across to the package root directly. |
+| `index.ts` | Assembles `coreModule()` from all of the above, plus the [`buildMiddleware/`](./buildMiddleware/01-internals) handlers. |
+
+## `buildMiddleware/`
+
+The middleware that actually drives runtime behavior (polling, cache GC, tag invalidation, refetch-on-focus, etc.) lives in its own subfolder — see [buildMiddleware/ internals](./buildMiddleware/01-internals).
+
+## Common pitfalls
+
+- **Don't try to import or call any `core/` file directly** — `module.ts`/`buildThunks.ts`/etc are wired together with internal-only types and mutable closures specific to one `createApi` call; there is no supported way to use pieces of this pipeline standalone outside of `createApi` itself.
+- **If you're debugging unexpected query-layer behavior, check [buildMiddleware/](./buildMiddleware/01-internals) first** — the handlers there (not the files in this folder) drive almost all of the query layer's "automatic" runtime behavior.

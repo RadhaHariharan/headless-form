@@ -4,8 +4,8 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
 A monorepo of headless, framework-agnostic TypeScript libraries: a zero-dependency form
-state engine, an async query/cache engine, and a Redux-compatible state management layer —
-each with thin, idiomatic framework bindings on top.
+state engine, an async query/cache engine, and an action/reducer-based state management
+layer — each with thin, idiomatic framework bindings on top.
 
 This file covers **install, setup, and running the project**. For everything else — full API
 reference, options, advanced examples, internals — see each package's own README and the
@@ -18,17 +18,14 @@ reference, options, advanced examples, internals — see each package's own READ
 | [`@headlesskit/forms`](./packages/forms) | Framework-agnostic form state engine — zero runtime dependencies |
 | [`@headlesskit/forms-react`](./packages/forms-react) | React 18 bindings via `useSyncExternalStore` |
 | [`@headlesskit/forms-react-native`](./packages/forms-react-native) | React Native prop adapters built on top of `forms-react` |
-| [`@headlesskit/query-core`](./packages/query-core) | Framework-agnostic async state and cache engine (API-compatible with TanStack Query Core) |
+| [`@headlesskit/query-core`](./packages/query-core) | Framework-agnostic async state and cache engine |
 | [`@headlesskit/query-persist-client-core`](./packages/query-persist-client-core) | Persist a query cache to storage and restore it on reload |
 | [`@headlesskit/query-async-storage-persister`](./packages/query-async-storage-persister) | A persister backed by an async key-value store (e.g. `AsyncStorage`) |
 | [`@headlesskit/query-sync-storage-persister`](./packages/query-sync-storage-persister) | A persister backed by a synchronous key-value store (e.g. `localStorage`) |
-| [`@headlesskit/state-management`](./packages/state-management) | Predictable state container, API-compatible with Redux v5 |
-| [`@headlesskit/state-management-toolkit`](./packages/state-management-toolkit) | Slices, async thunks, entities, listener middleware, and an RTK-Query-style data layer |
-| [`@headlesskit/state-management-simplify`](./packages/state-management-simplify) | A small, fast, scalable bare-bones store, API-compatible with Zustand |
+| [`@headlesskit/state-management`](./packages/state-management) | Predictable, action/reducer-based state container |
+| [`@headlesskit/state-management-toolkit`](./packages/state-management-toolkit) | Slices, async thunks, entities, listener middleware, and a data-fetching layer |
+| [`@headlesskit/state-management-simplify`](./packages/state-management-simplify) | A small, fast, scalable bare-bones store for simple global state |
 | [`@headlesskit/state-management-simplify-react`](./packages/state-management-simplify-react) | React bindings for `state-management-simplify` |
-
-Several packages are ports of well-known open-source libraries, published under the
-`@headlesskit` scope — see [NOTICE.md](./NOTICE.md) for the full attribution.
 
 Click into any package above for its full README — install instructions, quick start,
 complete API surface, and links to its in-depth docs.
@@ -109,5 +106,4 @@ responsibly instead of opening a public issue.
 
 ## License
 
-[MIT](./LICENSE) © headlesskit contributors. See [NOTICE.md](./NOTICE.md) for attribution of
-the upstream open-source projects some packages are ported from.
+[MIT](./LICENSE) © headlesskit contributors.

@@ -14,7 +14,7 @@ function getTextInputProps<Values, TransformedValues, TError, K extends DeepKeys
 ): GetTextInputPropsResult<TError>
 ```
 
-`GetTextInputPropsOptions<TError>` is `Pick<GetInputPropsOptions<TError>, 'withError' | 'withFocus'>` — the same two options [forms](../../forms/types/02-input-props-types)' `getInputProps` accepts, narrowed to just the two that make sense here (`type` is irrelevant — this function is always the text-input case; `value` for radio groups doesn't apply to a single text field).
+`GetTextInputPropsOptions<TError>` is `Pick<GetInputPropsOptions<TError>, 'withError' | 'withFocus'>` — the same two options [forms](../forms/types/02-input-props-types)' `getInputProps` accepts, narrowed to just the two that make sense here (`type` is irrelevant — this function is always the text-input case; `value` for radio groups doesn't apply to a single text field).
 
 ## What it actually does
 
@@ -32,7 +32,7 @@ function getTextInputProps(form, path, options) {
 }
 ```
 
-Calls the real `getInputProps` underneath (so every behavior documented in [createFormStore](../../forms/store/01-create-form-store)'s `getInputProps` section — controlled vs. uncontrolled `value`/`defaultValue`, `touchTrigger`, `validateInputOnBlur`'s debounce — applies unchanged), then renames `onChange` to `onChangeText` and changes its signature from "accepts an event or raw value" to "accepts the raw string directly," matching what `<TextInput>` actually calls its change handler with.
+Calls the real `getInputProps` underneath (so every behavior documented in [createFormStore](../forms/store/01-create-form-store)'s `getInputProps` section — controlled vs. uncontrolled `value`/`defaultValue`, `touchTrigger`, `validateInputOnBlur`'s debounce — applies unchanged), then renames `onChange` to `onChangeText` and changes its signature from "accepts an event or raw value" to "accepts the raw string directly," matching what `<TextInput>` actually calls its change handler with.
 
 ## `GetTextInputPropsResult<TError>`
 

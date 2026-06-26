@@ -1,5 +1,5 @@
 import type { Middleware } from '@headlesskit/state-management'
-import { isActionCreator as isRTKAction } from './createAction'
+import { isActionCreator as defaultIsActionCreator } from './createAction'
 
 export interface ActionCreatorInvariantMiddlewareOptions {
   /**
@@ -24,7 +24,7 @@ export function createActionCreatorInvariantMiddleware(
   if (process.env.NODE_ENV === 'production') {
     return () => (next) => (action) => next(action)
   }
-  const { isActionCreator = isRTKAction } = options
+  const { isActionCreator = defaultIsActionCreator } = options
   return () => (next) => (action) => {
     if (isActionCreator(action)) {
       console.warn(getMessage(action.type))

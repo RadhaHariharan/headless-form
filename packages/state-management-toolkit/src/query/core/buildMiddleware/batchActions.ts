@@ -142,7 +142,7 @@ export const buildBatchedActionsHandler: InternalHandlerBuilder<
     // We return the internal state reference so that hooks
     // can do their own checks to see if they're still active.
     // It's stupid and hacky, but it does cut down on some dispatch calls.
-    if (api.internalActions.internal_getRTKQSubscriptions.match(action)) {
+    if (api.internalActions.internal_getQuerySubscriptions.match(action)) {
       return [false, subscriptionSelectors]
     }
 
@@ -165,7 +165,7 @@ export const buildBatchedActionsHandler: InternalHandlerBuilder<
 
     if (didMutate) {
       if (!updateSyncTimer) {
-        // We only use the subscription state for the Redux DevTools at this point,
+        // We only use the subscription state for the DevTools at this point,
         // as the real data is kept here in the middleware.
         // Given that, we can throttle synchronizing this state significantly to
         // save on overall perf.

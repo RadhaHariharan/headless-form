@@ -1,7 +1,7 @@
 {
   "name": "@headlesskit/state-management-simplify-react",
   "version": "1.0.0",
-  "description": "React bindings for @headlesskit/state-management-simplify — ported from Zustand's React bindings",
+  "description": "React bindings for @headlesskit/state-management-simplify",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.cjs",

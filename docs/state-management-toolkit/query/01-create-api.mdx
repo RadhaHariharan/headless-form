@@ -1,8 +1,8 @@
-# createApi (RTK Query)
+# createApi (query layer)
 
 **File:** `src/query/createApi.ts`, with supporting types in `endpointDefinitions.ts`, `apiTypes.ts`, `baseQueryTypes.ts`
 
-The entry point to RTK Query — the data-fetching/caching layer bundled inside `state-management-toolkit`. `createApi` generates a complete, self-contained "API slice": a reducer, a large set of auto-generated actions, selectors, and (with the React module) hooks — from a declarative description of your endpoints, given just a `baseQuery` function describing how to actually make a request.
+The entry point to this package's data-fetching/caching layer, bundled inside `state-management-toolkit`. `createApi` generates a complete, self-contained "API slice": a reducer, a large set of auto-generated actions, selectors, and (with the React module) hooks — from a declarative description of your endpoints, given just a `baseQuery` function describing how to actually make a request.
 
 ## Signature
 
@@ -17,7 +17,7 @@ function createApi<BaseQuery extends BaseQueryFn, Definitions, ReducerPath exten
 | Option | Type | Default | Description |
 |--------|------|---------|--------------|
 | `baseQuery` | `BaseQueryFn` | *(required)* | How to actually perform a request — most commonly [fetchBaseQuery](./02-fetch-base-query), but any function matching the `BaseQueryFn` shape works (a thin wrapper around `axios`, `graphql-request`, etc). |
-| `endpoints` | `(builder) => Definitions` | *(required)* | A callback receiving a typed `builder` with `.query()`, `.mutation()`, `.infiniteQuery()` — see [Endpoint definitions](./03-endpoint-definitions). |
+| `endpoints` | `(builder) => Definitions` | *(required)* | A callback receiving a typed `builder` with `.query()`, `.mutation()`, `.infiniteQuery()` — see [Endpoint definitions](./05-endpoint-definitions). |
 | `reducerPath` | `string` | `'api'` | Where this API's state lives in the store. Must be unique per `createApi` call if you create more than one API slice. |
 | `tagTypes` | `readonly string[]` | `[]` | The vocabulary of cache-tag categories your endpoints can `provide`/`invalidate` (e.g. `['Post', 'User']`) — purely a list of names; the actual provide/invalidate logic lives on each endpoint. |
 | `serializeQueryArgs` | custom cache-key function | a default JSON-stable-stringify-based serializer | Override how query arguments are turned into the cache key string — needed if your args contain values that don't serialize meaningfully by default (e.g. functions, or you want to intentionally treat two different arg shapes as the same cache entry). |
@@ -27,7 +27,7 @@ function createApi<BaseQuery extends BaseQueryFn, Definitions, ReducerPath exten
 | `refetchOnReconnect` | `boolean` | `false` | Refetch all active queries when network connectivity is restored (requires [setupListeners](./04-setup-listeners)). |
 | `invalidationBehavior` | `'delayed' \| 'immediately'` | `'delayed'` | `'delayed'` waits for all in-flight queries/mutations to settle before processing tag invalidation (batches concurrent mutations' invalidations together); `'immediately'` invalidates the instant a mutation finishes, even if other requests are still running. |
 | `extractRehydrationInfo` | `(action, { reducerPath }) => CombinedState \| undefined` | none | Lets server-rendered/persisted cache state be restored into this API slice from an arbitrary action (e.g. a Next.js hydration action) — return the relevant sub-state, or `undefined` to ignore that action. |
-| `onSchemaFailure` | `(error, info) => void` | none | Called when a [standard-schema](./09-standard-schema) validation defined on an endpoint fails. |
+| `onSchemaFailure` | `(error, info) => void` | none | Called when a [standard-schema](./08-standard-schema) validation defined on an endpoint fails. |
 | `catchSchemaFailure` | `(error, info) => BaseQueryError` | none | Converts a schema validation failure into a normal base-query error shape, so it flows through the same error-handling path (tag invalidation skip, etc) as a real request error, instead of being treated as fatal. |
 | `skipSchemaValidation` | `boolean \| SchemaType[]` | `false` | Globally disables schema validation (or specific schema types: `'arg'`/`'response'`/etc) unless an individual endpoint overrides it. |
 
@@ -69,7 +69,7 @@ const store = configureStore({
 });
 ```
 
-`api.middleware` is what actually drives cache lifecycle behavior (polling, refetch-on-focus, cache garbage collection, etc) — without adding it, dispatched query/mutation actions are recorded in state but none of RTK Query's automatic behaviors run.
+`api.middleware` is what actually drives cache lifecycle behavior (polling, refetch-on-focus, cache garbage collection, etc) — without adding it, dispatched query/mutation actions are recorded in state but none of the query layer's automatic behaviors run.
 
 ## What `createApi` returns (the `Api` object)
 
@@ -78,7 +78,7 @@ const store = configureStore({
 | `reducerPath` | Echoes back the configured (or defaulted) reducer path. |
 | `reducer` | The generated reducer — install it at `reducerPath` in your root reducer. |
 | `middleware` | The generated middleware — required for cache lifecycle behavior. |
-| `endpoints` | An object keyed by endpoint name, each with `.initiate(arg)` (dispatchable thunk), `.select(arg)` (a memoized selector), and — for mutations — `.matchPending`/`.matchFulfilled`/`.matchRejected` matchers usable with [listener middleware](./17-create-listener-middleware) or `extraReducers`. |
+| `endpoints` | An object keyed by endpoint name, each with `.initiate(arg)` (dispatchable thunk), `.select(arg)` (a memoized selector), and — for mutations — `.matchPending`/`.matchFulfilled`/`.matchRejected` matchers usable with [listener middleware](../listenerMiddleware/01-internals) or `extraReducers`. |
 | `util` | Utility actions: `resetApiState()`, `invalidateTags(tags)`, `upsertQueryData(...)`, `prefetch(endpoint, arg, options)`, and more. |
 | (React module only) | Auto-generated hooks per endpoint: `use<EndpointName>Query`, `use<EndpointName>Mutation`, `useLazy<EndpointName>Query`, etc. |
 
@@ -88,10 +88,10 @@ const store = configureStore({
 function buildCreateApi(...modules: Module[]): CreateApi
 ```
 
-`createApi` exported from `@headlesskit/state-management-toolkit/query` is itself just `buildCreateApi(coreModule())`. The React-flavored `createApi` (from a `/query/react` entry point, if present) is `buildCreateApi(coreModule(), reactHooksModule())`. You'd reach for `buildCreateApi` directly only if integrating RTK Query with a different UI framework's hook system, or customizing the React bindings (e.g. a non-default `react-redux` context) — see [module.ts internals](./08-core-internals) for what a "module" actually is.
+`createApi` exported from `@headlesskit/state-management-toolkit/query` is itself just `buildCreateApi(coreModule())`. The React-flavored `createApi` (from a `/query/react` entry point, if present) is `buildCreateApi(coreModule(), reactHooksModule())`. You'd reach for `buildCreateApi` directly only if integrating this data-fetching layer with a different UI framework's hook system, or customizing the React bindings (e.g. a non-default dispatch/selector context) — see [module.ts internals](./core/01-internals) for what a "module" actually is.
 
 ## Common pitfalls
 
-- **Forgetting to add `api.middleware` to the store** is the single most common RTK Query setup mistake — without it, queries dispatch and update cache state, but polling, refetch-on-focus/reconnect, and cache cleanup after unsubscribe simply never happen, with no error to point you at the cause.
+- **Forgetting to add `api.middleware` to the store** is the single most common query-layer setup mistake — without it, queries dispatch and update cache state, but polling, refetch-on-focus/reconnect, and cache cleanup after unsubscribe simply never happen, with no error to point you at the cause.
 - **Two `createApi` calls with the same default `reducerPath: 'api'`** silently collide if both are mounted in the same store — always set an explicit, unique `reducerPath` when you have more than one API slice.
 - **`invalidationBehavior: 'delayed'` (the default) can defer invalidation indefinitely** if your app always has *some* query or mutation in flight — if you notice invalidated tags not triggering a refetch promptly under constant background traffic, this is the documented cause, not a bug; switch to `'immediately'` if that batching behavior doesn't fit your app's traffic pattern.

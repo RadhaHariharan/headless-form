@@ -1,6 +1,6 @@
 # State Management Toolkit
 
-`@headlesskit/state-management-toolkit` is an opinionated state-management toolset, API-compatible with Redux Toolkit v2. It re-exports everything from `@headlesskit/state-management` and adds `configureStore`, `createSlice`, `createAsyncThunk`, `createEntityAdapter`, the listener middleware, a data-fetching/caching layer, and more.
+`@headlesskit/state-management-toolkit` is an opinionated state-management toolset. It re-exports everything from `@headlesskit/state-management` and adds `configureStore`, `createSlice`, `createAsyncThunk`, `createEntityAdapter`, the listener middleware, a data-fetching/caching layer, and more.
 
 ```bash
 pnpm add @headlesskit/state-management-toolkit
@@ -14,10 +14,10 @@ npm install @headlesskit/state-management-toolkit
 
 ## configureStore
 
-The recommended way to create a Redux store. Automatically wires up:
-- `redux-thunk` middleware
+The recommended way to create a store. Automatically wires up:
+- thunk middleware (built in, no extra dependency)
 - Dev-mode invariant checks (immutable state, serializable state, action creator dispatch)
-- Redux DevTools Extension
+- headlesskit's DevTools connector (`window.__HEADLESSKIT_DEVTOOLS_EXTENSION__`)
 
 ```typescript
 import { configureStore } from '@headlesskit/state-management-toolkit';
@@ -33,7 +33,7 @@ const store = configureStore({
 |--------|------|---------|-------------|
 | `reducer` | `Reducer \| { [key: string]: Reducer }` | — | Root reducer or slice map |
 | `middleware` | `Middleware[] \| (getDefault) => Middleware[]` | `getDefaultMiddleware()` | Middleware array or factory |
-| `devTools` | `boolean \| DevToolsEnhancerOptions` | `true` | Enable/configure Redux DevTools |
+| `devTools` | `boolean \| DevToolsEnhancerOptions` | `true` | Enable/configure DevTools |
 | `preloadedState` | `Partial<State>` | — | Initial state for hydration |
 | `enhancers` | `StoreEnhancer[] \| (getDefault) => StoreEnhancer[]` | `[applyMiddleware(...middleware)]` | Additional store enhancers |
 
@@ -62,7 +62,7 @@ export type AppDispatch = typeof store.dispatch;
 
 ## createSlice
 
-Generates a reducer and action creators from a single configuration object. The recommended pattern for writing Redux logic.
+Generates a reducer and action creators from a single configuration object. The recommended pattern for writing action/reducer logic.
 
 ```typescript
 import { createSlice } from '@headlesskit/state-management-toolkit';
@@ -502,7 +502,7 @@ selectors.selectById(rootState, 1);   // Post | undefined
 
 ## createDraftSafeSelector
 
-Like `createSelector` from Reselect, but safe to call inside Immer's `createNextState` (i.e. inside `createReducer` / `createSlice` reducers). It detects Immer drafts and uses `current()` to read the current value.
+Like the package's own `createSelector`, but safe to call inside Immer's `createNextState` (i.e. inside `createReducer` / `createSlice` reducers). It detects Immer drafts and uses `current()` to read the current value.
 
 ```typescript
 import { createDraftSafeSelector } from '@headlesskit/state-management-toolkit';
@@ -827,7 +827,7 @@ import type { Draft, WritableDraft } from '@headlesskit/state-management-toolkit
 |--------|-------------|
 | `current(draft)` | Returns a plain snapshot of the current draft state, useful for logging mid-reducer |
 | `isDraft(value)` | `true` if the value is an Immer draft |
-| `createNextState(base, recipe)` | Immer's `produce`, exported under its RTK-internal name |
+| `createNextState(base, recipe)` | Immer's `produce`, re-exported under this package's internal name |
 | `original(draft)` | Returns the pre-mutation value a draft was created from |
 | `freeze(value)` | Deeply freezes a plain object/array |
 | `Draft<T>` / `WritableDraft<T>` | Type of a value as seen inside a draft recipe |
@@ -841,7 +841,9 @@ builder.addCase(someAction, (state) => {
 
 ---
 
-## Reselect re-exports
+## Selector re-exports
+
+> The full implementation behind these re-exports is vendored directly into this package — see [the selector module docs](./reselect/01-overview) for how `createSelector`, the memoization strategies, `createStructuredSelector`, and the development-only stability checks actually work.
 
 ```typescript
 import { createSelector, createSelectorCreator, lruMemoize, weakMapMemoize } from '@headlesskit/state-management-toolkit';
@@ -869,7 +871,7 @@ const selectVisibleTodos = createSelector(
 
 ## Thunk types
 
-`ThunkAction`, `ThunkDispatch`, and `ThunkMiddleware` are re-exported from `redux-thunk` for typing hand-written thunks (as opposed to `createAsyncThunk`-generated ones).
+`ThunkAction`, `ThunkDispatch`, and `ThunkMiddleware` come from this package's own built-in thunk middleware (`src/thunkMiddleware.ts`/`thunkMiddlewareTypes.ts`) for typing hand-written thunks (as opposed to `createAsyncThunk`-generated ones).
 
 ```typescript
 import type { ThunkAction } from '@headlesskit/state-management-toolkit';
@@ -966,18 +968,25 @@ const store = configureStore({
 
 ### Typed hooks pattern
 
+This package ships no React bindings of its own — `configureStore` returns a plain store, so wire it up with `useSyncExternalStore`:
+
 ```typescript
 // store.ts
 export type RootState = ReturnType<typeof store.getState>;
 export type AppDispatch = typeof store.dispatch;
 
 // hooks.ts
-import { useDispatch, useSelector } from 'react-redux';
+import { useSyncExternalStore } from 'react';
+import { store } from './store';
 import type { RootState, AppDispatch } from './store';
 
-export const useAppDispatch = () => useDispatch<AppDispatch>();
-export const useAppSelector = <T>(selector: (state: RootState) => T) =>
-  useSelector(selector);
+export const useAppDispatch = (): AppDispatch => store.dispatch;
+export const useAppSelector = <T>(selector: (state: RootState) => T): T =>
+  useSyncExternalStore(
+    store.subscribe,
+    () => selector(store.getState()),
+    () => selector(store.getState()),
+  );
 ```
 
 ### Typed createAsyncThunk
@@ -1017,4 +1026,4 @@ export const startAppListening =
 
 ## License
 
-MIT — identical to Redux Toolkit v2 upstream.
+MIT — see [LICENSE](../../LICENSE).

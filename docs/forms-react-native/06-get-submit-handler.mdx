@@ -29,7 +29,7 @@ return () => {
 };
 ```
 
-[createFormStore](../../forms/store/01-create-form-store)'s `onSubmit`-generated handler **unconditionally calls `event.preventDefault()`** whenever `onSubmitPreventDefault` is `'always'` (the default) — or conditionally, for the other policy values. If you called `form.onSubmit(...)` directly and passed its result straight to `<Button onPress={handler}>`, React Native would invoke `handler(undefined)` (since `onPress` callbacks receive a `GestureResponderEvent`, not the `Event` the form handler expects, and there's no `.preventDefault()` on it the way the form handler assumes) — calling `.preventDefault()` on the actual press event, or on `undefined`, throws.
+[createFormStore](../forms/store/01-create-form-store)'s `onSubmit`-generated handler **unconditionally calls `event.preventDefault()`** whenever `onSubmitPreventDefault` is `'always'` (the default) — or conditionally, for the other policy values. If you called `form.onSubmit(...)` directly and passed its result straight to `<Button onPress={handler}>`, React Native would invoke `handler(undefined)` (since `onPress` callbacks receive a `GestureResponderEvent`, not the `Event` the form handler expects, and there's no `.preventDefault()` on it the way the form handler assumes) — calling `.preventDefault()` on the actual press event, or on `undefined`, throws.
 
 `getSubmitHandler` solves this by constructing a **fake event object** with only a no-op `preventDefault()` method, and passing that fake object to the real handler internally — `onPress` is given a wrapper that takes no arguments at all and supplies the fake event itself, so callers never need to think about this.
 
@@ -63,7 +63,7 @@ import { Button } from 'react-native';
 />
 ```
 
-Since the underlying `onValid` may return a `Promise`, `form.submitting` is automatically tracked exactly as it would be on the web — see [createFormStore](../../forms/store/01-create-form-store)'s `onSubmit` section.
+Since the underlying `onValid` may return a `Promise`, `form.submitting` is automatically tracked exactly as it would be on the web — see [createFormStore](../forms/store/01-create-form-store)'s `onSubmit` section.
 
 ## Common pitfalls
 

@@ -61,7 +61,7 @@ export type InfiniteQueryConfigOptions<DataType, PageParam, QueryArg> = {
   /**
    * Defaults to `true`. When this is `true` and an infinite query endpoint is refetched
    * (due to tag invalidation, polling, arg change configuration, or manual refetching),
-   * RTK Query will try to sequentially refetch all pages currently in the cache.
+   * the query layer will try to sequentially refetch all pages currently in the cache.
    * When `false` only the first page will be refetched.
    */
   refetchCachedPages?: boolean
@@ -73,7 +73,7 @@ export type InfiniteData<DataType, PageParam> = {
 }
 
 // NOTE: DO NOT import and use this for runtime comparisons internally,
-// except in the RTKQ React package. Use the string versions just below this.
+// except in this query layer's React module. Use the string versions just below this.
 // ESBuild auto-inlines TS enums, which bloats our bundle with many repeated
 // constants like "initialized":
 // https://github.com/evanw/esbuild/releases/tag/v0.14.7
@@ -144,7 +144,7 @@ export type SubscriptionOptions = {
    */
   pollingInterval?: number
   /**
-   *  Defaults to 'false'. This setting allows you to control whether RTK Query will continue polling if the window is not focused.
+   *  Defaults to 'false'. This setting allows you to control whether the query layer will continue polling if the window is not focused.
    *
    *  If pollingInterval is not set or set to 0, this **will not be evaluated** until pollingInterval is greater than 0.
    *
@@ -152,7 +152,7 @@ export type SubscriptionOptions = {
    */
   skipPollingIfUnfocused?: boolean
   /**
-   * Defaults to `false`. This setting allows you to control whether RTK Query will try to refetch all subscribed queries after regaining a network connection.
+   * Defaults to `false`. This setting allows you to control whether the query layer will try to refetch all subscribed queries after regaining a network connection.
    *
    * If you specify this option alongside `skip: true`, this **will not be evaluated** until `skip` is false.
    *
@@ -160,7 +160,7 @@ export type SubscriptionOptions = {
    */
   refetchOnReconnect?: boolean
   /**
-   * Defaults to `false`. This setting allows you to control whether RTK Query will try to refetch all subscribed queries after the application window regains focus.
+   * Defaults to `false`. This setting allows you to control whether the query layer will try to refetch all subscribed queries after the application window regains focus.
    *
    * If you specify this option alongside `skip: true`, this **will not be evaluated** until `skip` is false.
    *

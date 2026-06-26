@@ -70,11 +70,11 @@ import type {
   UpsertQueryDataThunk,
 } from './buildThunks'
 import { buildThunks } from './buildThunks'
-import { createSelector as _createSelector } from './rtkImports'
+import { createSelector as _createSelector } from './toolkitImports'
 import { onFocus, onFocusLost, onOffline, onOnline } from './setupListeners'
 import type { InternalMiddlewareState } from './buildMiddleware/types'
 import { getOrInsertComputed } from '../utils'
-import type { CreateSelectorFunction } from 'reselect'
+import type { CreateSelectorFunction } from '../../reselect/index'
 
 /**
  * `ifOlderThan` - (default: `false` | `number`) - _number is value in seconds_
@@ -126,7 +126,7 @@ export interface ApiModules<
      */
     internalActions: InternalActions
     /**
-     *  A standard redux reducer that enables core functionality. Make sure it's included in your store.
+     *  A standard reducer that enables core functionality. Make sure it's included in your store.
      *
      * @example
      * ```ts
@@ -143,7 +143,7 @@ export interface ApiModules<
       UnknownAction
     >
     /**
-     * This is a standard redux middleware and is responsible for things like polling, garbage collection and a handful of other things. Make sure it's included in your store.
+     * This is a standard middleware and is responsible for things like polling, garbage collection and a handful of other things. Make sure it's included in your store.
      *
      * @example
      * ```ts
@@ -172,7 +172,7 @@ export interface ApiModules<
        * Can be used to await a specific query triggered in any way,
        * including via hook calls or manually dispatching `initiate` actions.
        *
-       * See https://redux-toolkit.js.org/rtk-query/usage/server-side-rendering for details.
+       *
        */
       getRunningQueryThunk<EndpointName extends AllQueryKeys<Definitions>>(
         endpointName: EndpointName,
@@ -195,7 +195,7 @@ export interface ApiModules<
        * Can be used to await a specific mutation triggered in any way,
        * including via hook trigger functions or manually dispatching `initiate` actions.
        *
-       * See https://redux-toolkit.js.org/rtk-query/usage/server-side-rendering for details.
+       *
        */
       getRunningMutationThunk<EndpointName extends MutationKeys<Definitions>>(
         endpointName: EndpointName,
@@ -213,7 +213,7 @@ export interface ApiModules<
        * Useful for SSR scenarios to await all running queries triggered in any way,
        * including via hook calls or manually dispatching `initiate` actions.
        *
-       * See https://redux-toolkit.js.org/rtk-query/usage/server-side-rendering for details.
+       *
        */
       getRunningQueriesThunk(): ThunkWithReturnValue<
         Array<
@@ -227,14 +227,14 @@ export interface ApiModules<
        * Useful for SSR scenarios to await all running mutations triggered in any way,
        * including via hook calls or manually dispatching `initiate` actions.
        *
-       * See https://redux-toolkit.js.org/rtk-query/usage/server-side-rendering for details.
+       *
        */
       getRunningMutationsThunk(): ThunkWithReturnValue<
         Array<MutationActionCreatorResult<any>>
       >
 
       /**
-       * A Redux thunk that can be used to manually trigger pre-fetching of data.
+       * A thunk that can be used to manually trigger pre-fetching of data.
        *
        * The thunk accepts three arguments: the name of the endpoint we are updating (such as `'getPost'`), the appropriate query arg values to construct the desired cache key, and a set of options used to determine if the data actually should be re-fetched based on cache staleness.
        *
@@ -252,7 +252,7 @@ export interface ApiModules<
         options?: PrefetchOptions,
       ): ThunkAction<void, any, any, UnknownAction>
       /**
-       * A Redux thunk action creator that, when dispatched, creates and applies a set of JSON diff/patch objects to the current state. This immediately updates the Redux state with those changes.
+       * A thunk action creator that, when dispatched, creates and applies a set of JSON diff/patch objects to the current state. This immediately updates the state with those changes.
        *
        * The thunk action creator accepts three arguments: the name of the endpoint we are updating (such as `'getPost'`), the appropriate query arg values to construct the desired cache key, and an `updateRecipe` callback function. The callback receives an Immer-wrapped `draft` of the current state, and may modify the draft to match the expected results after the mutation completes successfully.
        *
@@ -278,7 +278,7 @@ export interface ApiModules<
       >
 
       /**
-       * A Redux thunk action creator that, when dispatched, acts as an artificial API request to upsert a value into the cache.
+       * A thunk action creator that, when dispatched, acts as an artificial API request to upsert a value into the cache.
        *
        * The thunk action creator accepts three arguments: the name of the endpoint we are updating (such as `'getPost'`), the appropriate query arg values to construct the desired cache key, and the data to upsert.
        *
@@ -301,7 +301,7 @@ export interface ApiModules<
         RootState<Definitions, string, ReducerPath>
       >
       /**
-       * A Redux thunk that applies a JSON diff/patch array to the cached data for a given query result. This immediately updates the Redux state with those changes.
+       * A thunk that applies a JSON diff/patch array to the cached data for a given query result. This immediately updates the state with those changes.
        *
        * The thunk accepts three arguments: the name of the endpoint we are updating (such as `'getPost'`), the appropriate query arg values to construct the desired cache key, and a JSON diff/patch array as produced by Immer's `produceWithPatches`.
        *
@@ -332,7 +332,7 @@ export interface ApiModules<
       >
 
       /**
-       * A Redux action creator that can be dispatched to manually reset the api state completely. This will immediately remove all existing cache entries, and all queries will be considered 'uninitialized'.
+       * An action creator that can be dispatched to manually reset the api state completely. This will immediately remove all existing cache entries, and all queries will be considered 'uninitialized'.
        *
        * @example
        *
@@ -345,7 +345,7 @@ export interface ApiModules<
       upsertQueryEntries: UpsertEntries<Definitions>
 
       /**
-       * A Redux action creator that can be used to manually invalidate cache tags for [automated re-fetching](../../usage/automated-refetching.mdx).
+       * An action creator that can be used to manually invalidate cache tags for [automated re-fetching](../../usage/automated-refetching.mdx).
        *
        * The action creator accepts one argument: the cache tags to be invalidated. It returns an action with those tags as a payload, and the corresponding `invalidateTags` action type for the api.
        *
@@ -474,14 +474,12 @@ export interface ApiEndpointMutation<
 
 export type ListenerActions = {
   /**
-   * Will cause the RTK Query middleware to trigger any refetchOnReconnect-related behavior
-   * @link https://redux-toolkit.js.org/rtk-query/api/setupListeners
+   * Will cause the query layer middleware to trigger any refetchOnReconnect-related behavior
    */
   onOnline: typeof onOnline
   onOffline: typeof onOffline
   /**
-   * Will cause the RTK Query middleware to trigger any refetchOnFocus-related behavior
-   * @link https://redux-toolkit.js.org/rtk-query/api/setupListeners
+   * Will cause the query layer middleware to trigger any refetchOnFocus-related behavior
    */
   onFocus: typeof onFocus
   onFocusLost: typeof onFocusLost
@@ -491,13 +489,13 @@ export type InternalActions = SliceActions & ListenerActions
 
 export interface CoreModuleOptions {
   /**
-   * A selector creator (usually from `reselect`, or matching the same signature)
+   * A selector creator (usually this package's own `createSelector`, or matching the same signature)
    */
   createSelector?: CreateSelectorFunction<any, any, any>
 }
 
 /**
- * Creates a module containing the basic redux logic for use with `buildCreateApi`.
+ * Creates a module containing the basic logic for use with `buildCreateApi`.
  *
  * @example
  * ```ts

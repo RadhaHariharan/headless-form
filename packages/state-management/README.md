@@ -1,6 +1,6 @@
 # @headlesskit/state-management
 
-A predictable state container for JavaScript apps — API-compatible with **Redux v5**.
+A predictable, action/reducer-based state container for JavaScript apps.
 
 ## Install
 
@@ -16,10 +16,10 @@ yarn add @headlesskit/state-management
 
 This package is the low-level store primitive that `@headlesskit/state-management-toolkit` builds on. It's included as its own published package so you can:
 
-- **Drop in for Redux v5** — same `createStore`/`combineReducers`/`applyMiddleware`/`compose`/`bindActionCreators` API surface, so existing Redux knowledge and most Redux-ecosystem middleware transfer directly.
-- **Use it standalone** when you want the raw store with zero opinions, or when learning how Redux's core actually works underneath the toolkit's sugar.
+- **A familiar action/reducer API surface** — `createStore`/`combineReducers`/`applyMiddleware`/`compose`/`bindActionCreators`, so existing action/reducer knowledge and most compatible middleware transfer directly.
+- **Use it standalone** when you want the raw store with zero opinions, or when learning how the core actually works underneath the toolkit's sugar.
 - **Get zero runtime dependencies** — it's a pure TypeScript package with full type definitions.
-- **Rely on the same store contract** — single source of truth, read-only state, pure reducers — enforced with the same validation and error messages as upstream Redux.
+- **Rely on a strict store contract** — single source of truth, read-only state, pure reducers — enforced with clear validation and error messages.
 
 In most real applications you'll want `@headlesskit/state-management-toolkit`'s `configureStore` instead of calling `createStore` directly — it wires up thunk middleware, dev-mode invariant checks, and DevTools automatically, plus adds `createSlice` so you don't hand-write switch statements or action-type strings. Reach for this package directly for the raw primitives, custom store setups, or non-toolkit use cases.
 
@@ -63,7 +63,7 @@ store.dispatch({ type: 'counter/increment' });
 | Export | Description |
 |--------|--------------|
 | `createStore(reducer, [preloadedState], [enhancer])` | Creates the store. Returns `getState`, `dispatch`, `subscribe`, `replaceReducer`, and a `Symbol.observable` implementation. |
-| `legacy_createStore` | Identical to `createStore`; avoids the Redux DevTools deprecation notice nudging you toward `configureStore`. |
+| `legacy_createStore` | Identical to `createStore`; avoids the deprecation notice nudging you toward `configureStore`. |
 | `combineReducers(reducersMap)` | Merges multiple slice reducers into one root reducer. |
 | `applyMiddleware(...middleware)` | Store enhancer that wires up middleware (e.g. thunks, loggers) around `dispatch`. |
 | `compose(...functions)` | Right-to-left function composition, used to chain multiple store enhancers together. |

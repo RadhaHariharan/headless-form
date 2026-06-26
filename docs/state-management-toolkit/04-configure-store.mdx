@@ -2,7 +2,7 @@
 
 **File:** `src/configureStore.ts`
 
-A friendlier wrapper around plain `createStore` that wires up sensible production defaults — a default middleware set (including a thunk middleware), Redux DevTools integration, and dev-mode validation of your own setup — while still letting you fully customize or replace any of it.
+A friendlier wrapper around plain `createStore` that wires up sensible production defaults — a default middleware set (including a thunk middleware), DevTools integration, and dev-mode validation of your own setup — while still letting you fully customize or replace any of it.
 
 ## Signature
 
@@ -17,11 +17,11 @@ function configureStore<S, A extends Action, M extends Tuple<Middlewares<S>>, E 
 | Option | Type | Default | Description |
 |--------|------|---------|--------------|
 | `reducer` | `Reducer<S,A,P> \| ReducersMapObject<S,A,P>` | *(required)* | A single root reducer function, **or** a map of slice reducers — if you pass a map, it's automatically run through `combineReducers` for you (no need to call it yourself). |
-| `middleware` | `(getDefaultMiddleware) => M` | `getDefaultMiddleware()` (unmodified) | A callback receiving a `getDefaultMiddleware` function, must return an array/Tuple of middleware. See [getDefaultMiddleware](./09-get-default-middleware). |
-| `devTools` | `boolean \| DevToolsEnhancerOptions` | `true` | Enables the Redux DevTools browser extension enhancer. Pass an options object to customize trace capture, action sanitizers, etc.; pass `false` to disable entirely. |
+| `middleware` | `(getDefaultMiddleware) => M` | `getDefaultMiddleware()` (unmodified) | A callback receiving a `getDefaultMiddleware` function, must return an array/Tuple of middleware. See [getDefaultMiddleware](./10-get-default-middleware). |
+| `devTools` | `boolean \| DevToolsEnhancerOptions` | `true` | Enables headlesskit's DevTools connector enhancer. Pass an options object to customize trace capture, action sanitizers, etc.; pass `false` to disable entirely. |
 | `duplicateMiddlewareCheck` | `boolean` | `true` | Dev-mode-only: throws if the exact same middleware function reference appears more than once in the final middleware list — almost always an accidental double-`.concat()` bug. |
 | `preloadedState` | `P` | `undefined` | Same as plain `createStore`'s `preloadedState` — initial state for hydration/SSR. |
-| `enhancers` | `(getDefaultEnhancers) => E` | `getDefaultEnhancers()` (unmodified) | A callback receiving a `getDefaultEnhancers` function, must return an array/Tuple of enhancers. See [getDefaultEnhancers](./10-get-default-enhancers). |
+| `enhancers` | `(getDefaultEnhancers) => E` | `getDefaultEnhancers()` (unmodified) | A callback receiving a `getDefaultEnhancers` function, must return an array/Tuple of enhancers. See [getDefaultEnhancers](./11-get-default-enhancers). |
 
 **Returns:** an `EnhancedStore` — the same `Store` shape from `@headlesskit/state-management`, but with its `dispatch` type widened to include whatever extra capabilities your middleware adds (most notably: dispatching thunk functions, not just plain actions, thanks to the default thunk middleware).
 
@@ -50,11 +50,17 @@ store.dispatch((dispatch, getState) => {
 
 ## Advanced: customizing middleware without losing the defaults
 
-The `middleware` callback receives `getDefaultMiddleware`, so you extend (rather than replace) Redux Toolkit's sane defaults — this is the recommended pattern over hand-building the middleware array from scratch:
+The `middleware` callback receives `getDefaultMiddleware`, so you extend (rather than replace) the toolkit's sane defaults — this is the recommended pattern over hand-building the middleware array from scratch:
 
 ```typescript
-import { configureStore } from '@headlesskit/state-management-toolkit';
-import logger from 'redux-logger';
+import { configureStore, type Middleware } from '@headlesskit/state-management-toolkit';
+
+const logger: Middleware = (store) => (next) => (action) => {
+  console.log('dispatching', action);
+  const result = next(action);
+  console.log('next state', store.getState());
+  return result;
+};
 
 const store = configureStore({
   reducer: rootReducer,

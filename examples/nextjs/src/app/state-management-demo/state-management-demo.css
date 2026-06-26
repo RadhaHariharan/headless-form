@@ -1,0 +1,57 @@
+.stateManagementDemoPage {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 48px 24px;
+}
+
+.stateManagementDemoPage h1 {
+  font-size: 28px;
+  margin-bottom: 8px;
+}
+
+.stateManagementDemoPage .intro {
+  color: #666;
+  margin-bottom: 32px;
+}
+
+.stateManagementDemoPage .panel {
+  border: 1px solid #e2e2e2;
+  border-radius: 8px;
+  padding: 20px;
+}
+
+.stateManagementDemoPage .counter {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.stateManagementDemoPage .counter span {
+  font-size: 20px;
+  min-width: 32px;
+  text-align: center;
+}
+
+.stateManagementDemoPage .counter button {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  border: 1px solid #ccc;
+  background: #fafafa;
+  cursor: pointer;
+  font-size: 16px;
+}
+
+.stateManagementDemoPage .counter button:hover {
+  background: #eee;
+}
+
+.stateManagementDemoPage .panel pre {
+  background: #111;
+  color: #eee;
+  padding: 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  overflow-x: auto;
+}

@@ -54,8 +54,8 @@ The sorted adapter's "did the update change this entity's position" check specif
 
 The implementation behind `adapter.getSelectors(selectState?, options?)`. Two notable details not covered in the main [createEntityAdapter](../16-create-entity-adapter) doc:
 
-- **Selectors are memoized via [createDraftSafeSelector](../03-create-draft-safe-selector) by default** — `selectAll`/`selectTotal`/`selectById` are real `reselect`-memoized selectors, not plain functions recomputing on every call, and they're specifically the *draft-safe* variant so they remain correct even if called from inside a case reducer against an active Immer draft.
-- **`options.createSelector` lets you swap in a different selector factory** — e.g. a plain (non-draft-safe) `reselect` `createSelector` if you specifically want slightly better performance and know you'll never call these selectors against a live draft, or a custom one with different memoization characteristics (different cache size, etc).
+- **Selectors are memoized via [createDraftSafeSelector](../03-create-draft-safe-selector) by default** — `selectAll`/`selectTotal`/`selectById` are real memoized selectors, not plain functions recomputing on every call, and they're specifically the *draft-safe* variant so they remain correct even if called from inside a case reducer against an active Immer draft.
+- **`options.createSelector` lets you swap in a different selector factory** — e.g. a plain (non-draft-safe) `createSelector` if you specifically want slightly better performance and know you'll never call these selectors against a live draft, or a custom one with different memoization characteristics (different cache size, etc).
 
 ## `utils.ts`
 

@@ -10,8 +10,8 @@ import { subscribeWithSelector } from '@headlesskit/state-management-simplify';
 
 ```typescript
 subscribeWithSelector<T>(
-  initializer: StateCreator<T, [...Mps, ['zustand/subscribeWithSelector', never]], Mcs>,
-): StateCreator<T, Mps, [['zustand/subscribeWithSelector', never], ...Mcs]>
+  initializer: StateCreator<T, [...Mps, ['headlesskit/subscribeWithSelector', never]], Mcs>,
+): StateCreator<T, Mps, [['headlesskit/subscribeWithSelector', never], ...Mcs]>
 ```
 
 | Parameter | Type | Required | Description |

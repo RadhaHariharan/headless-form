@@ -18,7 +18,7 @@ function createReducer<S>(
 | `initialState` | `S \| (() => S)` | The state used the first time the reducer runs (when called with `state === undefined`). Pass a function for lazy initialization — e.g. reading from `localStorage` only once, the first time the store needs it, not on every module import. |
 | `builderCallback` | `(builder) => void` | A callback receiving a [builder object](#the-builder-api) — calls `builder.addCase`/`addMatcher`/`addDefaultCase` to register handlers. |
 
-**Returns:** a normal Redux `Reducer<S>`, plus a `.getInitialState()` method returning the resolved initial state (useful for tests, or for seeding `preloadedState` consistently with what the reducer itself would produce).
+**Returns:** a normal `Reducer<S>`, plus a `.getInitialState()` method returning the resolved initial state (useful for tests, or for seeding `preloadedState` consistently with what the reducer itself would produce).
 
 ## The builder API
 

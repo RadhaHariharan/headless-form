@@ -16,7 +16,7 @@ import type {
 } from '../buildSelectors'
 import { getMutationCacheKey } from '../buildSlice'
 import type { PatchCollection, Recipe } from '../buildThunks'
-import { isAsyncThunkAction, isFulfilled } from '../rtkImports'
+import { isAsyncThunkAction, isFulfilled } from '../toolkitImports'
 import type {
   ApiMiddlewareInternalHandler,
   InternalHandlerBuilder,

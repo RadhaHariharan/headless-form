@@ -1,0 +1,45 @@
+# lruMemoize
+
+**File:** `src/reselect/lruMemoize.ts`
+
+The original, size-bounded memoization strategy — known in older versions of this module as `defaultMemoize`. Caches results in a small array of recent calls, compared positionally rather than by `WeakMap` nesting.
+
+```typescript
+import { lruMemoize } from '@headlesskit/state-management-toolkit';
+```
+
+## What it actually does
+
+With the default `maxSize: 1`, `lruMemoize` keeps exactly one cached entry — calling the memoized function compares the new arguments against the *single* previous call's arguments (positionally, with `equalityCheck`) and only recomputes if any of them differ. This is the classic "memoize the last call" behavior most selector libraries start with.
+
+Raising `maxSize` switches the cache to a true LRU (least-recently-used) cache that can hold multiple distinct argument combinations at once — each new combination either hits an existing cache slot or evicts the least-recently-used one. This trades memory for tolerance of a selector being called with a rotating set of arguments (e.g. the same selector reused across several components, each calling it with different IDs).
+
+## `LruMemoizeOptions`
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `equalityCheck` | `(a, b) => boolean` | reference equality (`===`) | Compares each individual argument position between calls to decide whether to reuse the cached result. |
+| `resultEqualityCheck` | `(a, b) => boolean` | none | Same purpose as [`weakMapMemoize`'s option of the same name](03-weak-map-memoize) — compares the newly computed result against a cached one and returns the old reference if they're equal, even though the call's arguments differed. |
+| `maxSize` | `number` | `1` | Number of distinct argument combinations to keep cached. `1` behaves like classic single-entry memoization; anything higher becomes an LRU cache. |
+
+```typescript
+import { createSelectorCreator, lruMemoize } from '@headlesskit/state-management-toolkit';
+
+const createSizedSelector = createSelectorCreator(lruMemoize, {
+  maxSize: 10,
+});
+
+// A selector factory reused across many list items, each with a different `itemId`:
+const selectItemById = (itemId: string) =>
+  createSizedSelector(
+    (state: RootState) => state.items,
+    (items) => items[itemId],
+  );
+```
+
+`referenceEqualityCheck` (the default `equalityCheck`) and `createCacheKeyComparator` (used to build a positional-array comparator from a single-value equality function) are also exported, mostly useful if you're building a custom memoizer that wants the same comparison semantics.
+
+## Common pitfalls
+
+- **`maxSize: 1` (the default) means only the *immediately preceding* call is remembered.** Calling the selector with arguments `A`, then `B`, then `A` again recomputes for the second `A` — it isn't in the cache anymore, because `B` evicted it. Raise `maxSize` if you need to remember more than one recent call.
+- **Picking a `maxSize` that's too small for how many distinct argument sets you actually use defeats the cache silently** — there's no error, just a higher recomputation rate than expected. `weakMapMemoize`'s unbounded-but-GC'd model sidesteps this tuning problem entirely, which is why it's the default for `createSelector`.

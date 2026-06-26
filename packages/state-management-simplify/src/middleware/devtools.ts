@@ -1,13 +1,55 @@
-import type {} from '@redux-devtools/extension'
-
 import type {
   StateCreator,
   StoreApi,
   StoreMutatorIdentifier,
 } from '../vanilla.js'
 
+interface DevtoolsExtensionConnectResponse {
+  init: (state: unknown) => void
+  send: (action: unknown, state: unknown) => void
+}
+
+// Deliberately no index signature — an index signature collapses `keyof` to
+// just `string`, which breaks `Omit<DevtoolsOptions, ...>` below (it would
+// lose the named properties' specific types, e.g. `name` becoming `unknown`).
+interface DevtoolsExtensionConfig {
+  name?: string
+  type?: string
+  maxAge?: number
+  latency?: number
+  trace?: boolean | ((action: unknown) => string)
+  traceLimit?: number
+  actionsBlacklist?: string | string[]
+  actionsDenylist?: string | string[]
+  actionsWhitelist?: string | string[]
+  actionsAllowlist?: string | string[]
+  actionCreators?: unknown
+  serialize?: unknown
+  actionSanitizer?: (action: unknown, id: number) => unknown
+  stateSanitizer?: (state: unknown, index: number) => unknown
+  predicate?: (state: unknown, action: unknown) => boolean
+  shouldRecordChanges?: boolean
+  pauseActionType?: string
+  autoPause?: boolean
+  shouldStartLocked?: boolean
+  shouldHotReload?: boolean
+  shouldCatchErrors?: boolean
+  features?: Record<string, boolean | string>
+}
+
+interface DevtoolsExtension {
+  (config?: DevtoolsExtensionConfig): unknown
+  connect: (preConfig: DevtoolsExtensionConfig) => DevtoolsExtensionConnectResponse
+}
+
+declare global {
+  interface Window {
+    __HEADLESSKIT_DEVTOOLS_EXTENSION__?: DevtoolsExtension
+  }
+}
+
 type Config = Parameters<
-  (Window extends { __REDUX_DEVTOOLS_EXTENSION__?: infer T }
+  (Window extends { __HEADLESSKIT_DEVTOOLS_EXTENSION__?: infer T }
     ? T
     : { connect: (param: any) => unknown })['connect']
 >[0]
@@ -15,11 +57,11 @@ type Config = Parameters<
 declare module '../vanilla.js' {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   interface StoreMutators<S, A> {
-    'zustand/devtools': WithDevtools<S>
+    'headlesskit/devtools': WithDevtools<S>
   }
 }
 
-// FIXME https://github.com/reduxjs/redux-devtools/issues/1097
+// FIXME: extension message-protocol edge case with empty actions
 type Message = {
   type: string
   payload?: any
@@ -94,9 +136,9 @@ type Devtools = <
   Mcs extends [StoreMutatorIdentifier, unknown][] = [],
   U = T,
 >(
-  initializer: StateCreator<T, [...Mps, ['zustand/devtools', never]], Mcs, U>,
+  initializer: StateCreator<T, [...Mps, ['headlesskit/devtools', never]], Mcs, U>,
   devtoolsOptions?: DevtoolsOptions,
-) => StateCreator<T, Mps, [['zustand/devtools', never], ...Mcs], U>
+) => StateCreator<T, Mps, [['headlesskit/devtools', never], ...Mcs], U>
 
 type DevtoolsImpl = <T>(
   storeInitializer: StateCreator<T, [], []>,
@@ -106,7 +148,7 @@ type DevtoolsImpl = <T>(
 export type NamedSet<T> = WithDevtools<StoreApi<T>>['setState']
 
 type Connection = ReturnType<
-  NonNullable<Window['__REDUX_DEVTOOLS_EXTENSION__']>['connect']
+  NonNullable<Window['__HEADLESSKIT_DEVTOOLS_EXTENSION__']>['connect']
 >
 type ConnectionName = string | undefined
 type StoreName = string
@@ -131,7 +173,7 @@ const getTrackedConnectionState = (
 const extractConnectionInformation = (
   store: string | undefined,
   extensionConnector: NonNullable<
-    (typeof window)['__REDUX_DEVTOOLS_EXTENSION__']
+    (typeof window)['__HEADLESSKIT_DEVTOOLS_EXTENSION__']
   >,
   options: Omit<DevtoolsOptions, 'enabled' | 'anonymousActionType' | 'store'>,
 ) => {
@@ -196,12 +238,12 @@ const devtoolsImpl: DevtoolsImpl =
     type PartialState = Partial<S> | ((s: S) => Partial<S>)
 
     let extensionConnector:
-      | (typeof window)['__REDUX_DEVTOOLS_EXTENSION__']
+      | (typeof window)['__HEADLESSKIT_DEVTOOLS_EXTENSION__']
       | false
     try {
       extensionConnector =
         (enabled ?? import.meta.env?.MODE !== 'production') &&
-        window.__REDUX_DEVTOOLS_EXTENSION__
+        window.__HEADLESSKIT_DEVTOOLS_EXTENSION__
     } catch {
       // ignored
     }
@@ -290,7 +332,7 @@ const devtoolsImpl: DevtoolsImpl =
           !didWarnAboutReservedActionType
         ) {
           console.warn(
-            '[zustand devtools middleware] "__setState" action type is reserved ' +
+            '[headlesskit devtools middleware] "__setState" action type is reserved ' +
               'to set state from the devtools. Avoid using it.',
           )
           didWarnAboutReservedActionType = true
@@ -301,7 +343,7 @@ const devtoolsImpl: DevtoolsImpl =
 
     ;(
       connection as unknown as {
-        // FIXME https://github.com/reduxjs/redux-devtools/issues/1097
+        // FIXME: extension message-protocol edge case with empty actions
         subscribe: (
           listener: (message: Message) => void,
         ) => (() => void) | undefined
@@ -311,7 +353,7 @@ const devtoolsImpl: DevtoolsImpl =
         case 'ACTION':
           if (typeof message.payload !== 'string') {
             console.error(
-              '[zustand devtools middleware] Unsupported action format',
+              '[headlesskit devtools middleware] Unsupported action format',
             )
             return
           }
@@ -326,7 +368,7 @@ const devtoolsImpl: DevtoolsImpl =
                 if (Object.keys(action.state as S).length !== 1) {
                   console.error(
                     `
-                    [zustand devtools middleware] Unsupported __setState action format.
+                    [headlesskit devtools middleware] Unsupported __setState action format.
                     When using 'store' option in devtools(), the 'state' should have only one key, which is a value of 'store' that was passed in devtools(),
                     and value of this only key should be a state object. Example: { "type": "__setState", "state": { "abc123Store": { "foo": "bar" } } }
                     `,
@@ -430,7 +472,7 @@ const parseJsonThen = <T>(stringified: string, fn: (parsed: T) => void) => {
     parsed = JSON.parse(stringified)
   } catch (e) {
     console.error(
-      '[zustand devtools middleware] Could not parse the received json',
+      '[headlesskit devtools middleware] Could not parse the received json',
       e,
     )
   }

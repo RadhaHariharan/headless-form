@@ -2,7 +2,7 @@
 
 **File:** `src/input-props/get-field-text-input-props.ts`
 
-The [useField](../../forms-react/02-use-field) counterpart to [getTextInputProps](./02-get-text-input-props) — same adapter, but for a standalone field rather than a full form + path.
+The [useField](../forms-react/02-use-field) counterpart to [getTextInputProps](./02-get-text-input-props) — same adapter, but for a standalone field rather than a full form + path.
 
 ## Signature
 
@@ -28,7 +28,7 @@ function getFieldTextInputProps(field) {
 }
 ```
 
-Identical transformation to [getTextInputProps](./02-get-text-input-props), just sourced from `field.getInputProps()` (which already has its path baked in, since [useField](../../forms-react/02-use-field) is scoped to exactly one field) instead of `form.getInputProps(path, options)`.
+Identical transformation to [getTextInputProps](./02-get-text-input-props), just sourced from `field.getInputProps()` (which already has its path baked in, since [useField](../forms-react/02-use-field) is scoped to exactly one field) instead of `form.getInputProps(path, options)`.
 
 ## Basic usage
 
@@ -74,4 +74,4 @@ function ValidatedTextInput({ initialValue, validate, label }: {
 ## Common pitfalls
 
 - **Same `error`-isn't-a-real-prop caveat as [getTextInputProps](./02-get-text-input-props)** — always destructure it out before spreading the rest onto `<TextInput>`.
-- **`useField`'s `mode` defaults to `'controlled'`** (see [useField](../../forms-react/02-use-field)) — pass `mode: 'uncontrolled'` explicitly if you want zero re-renders while typing, the same way you would on the web.
+- **`useField`'s `mode` defaults to `'controlled'`** (see [useField](../forms-react/02-use-field)) — pass `mode: 'uncontrolled'` explicitly if you want zero re-renders while typing, the same way you would on the web.

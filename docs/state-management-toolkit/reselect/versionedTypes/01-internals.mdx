@@ -1,0 +1,15 @@
+# versionedTypes (internals)
+
+**Folder:** `src/reselect/versionedTypes/` · Files: `ts47-mergeParameters.ts`, `index.ts`
+
+A tiny, version-gated type helper folder — internal-only, never imported by application code.
+
+## What it actually does
+
+`ts47-mergeParameters.ts` exports `MergeParameters`, a type that combines the parameter lists of multiple input selectors into the single parameter list `combiner` expects to receive. The file is named for the TypeScript version (`4.7`) whose feature set the implementation depends on — the folder exists as a seam for swapping in an alternate implementation if this package's minimum supported TypeScript version ever changes, without touching the call sites in `types.ts`.
+
+`index.ts` just re-exports `MergeParameters` from `ts47-mergeParameters.ts`, so the rest of the module imports from `./versionedTypes` rather than the version-specific filename directly.
+
+## Common pitfalls
+
+- **Not part of the public API** — `MergeParameters` is consumed internally by `types.ts` to type `combiner`'s parameters; application code should never need to import from this folder directly.

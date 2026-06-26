@@ -1,0 +1,55 @@
+# unstable_autotrackMemoize (internals)
+
+**Folder:** `src/reselect/autotrackMemoize/` · Files: `autotrackMemoize.ts`, `autotracking.ts`, `tracking.ts`, `proxy.ts`, `utils.ts`
+
+An experimental memoization strategy that tracks fine-grained, per-property reads instead of comparing whole argument references — an "autotracking" technique that observes proxied property reads rather than diffing whole objects.
+
+```typescript
+import { unstable_autotrackMemoize } from '@headlesskit/state-management-toolkit';
+```
+
+## What it actually does
+
+`weakMapMemoize` and `lruMemoize` both decide whether to recompute by comparing entire argument values (by reference, or via a custom equality function) between calls. `unstable_autotrackMemoize` instead wraps each argument object in a tracking proxy and records exactly which properties the memoized function actually reads while it runs. On the next call, it only recomputes if one of those *specifically read* properties changed — not just whether the argument object as a whole is a new reference.
+
+In practice this means a selector built with `unstable_autotrackMemoize` can skip recomputation even when called with a brand-new object reference, as long as the specific fields it reads from that object are unchanged — the inverse of the usual "objects must be reference-stable to benefit from memoization" rule that applies to the other two strategies.
+
+```typescript
+import { createSelectorCreator, unstable_autotrackMemoize } from '@headlesskit/state-management-toolkit';
+
+const createTrackedSelector = createSelectorCreator(unstable_autotrackMemoize);
+
+const selectUserName = createTrackedSelector(
+  (state: RootState) => state.user,
+  (user) => user.name,
+);
+
+// Even if `state.user` is a freshly-spread object each time (e.g. from an
+// unrelated field update), selectUserName only recomputes when `.name`
+// specifically changes — not on every `state.user` reference change.
+```
+
+## How the folder is organized
+
+| File | Role |
+|------|------|
+| `autotrackMemoize.ts` | The public entry point — `unstable_autotrackMemoize`, the memoize function passed to `createSelectorCreator`. |
+| `autotracking.ts` | The reactivity primitives: a `$REVISION` counter, `Cell<T>` (a single tracked value), and `TrackingCache` (`getValue`/`setValue`/`createCell`/`createCache`) used to record and revalidate dependencies. |
+| `tracking.ts` | `Tag`/`createTag`, `consumeTag`/`dirtyTag`, and the `Node`/`consumeCollection`/`dirtyCollection` helpers that track reads on object properties and whole collections separately. |
+| `proxy.ts` | Builds the tracking `Proxy` wrapper itself (`createNode`/`updateNode`) — every plain object/array argument is wrapped in one of these before being handed to the memoized function. |
+| `utils.ts` | A single `assert` helper used internally for invariant checks. |
+
+## Why it's marked `unstable_`
+
+This strategy relies on proxying plain objects and arrays to observe property access, which has sharper edges than the other two strategies:
+
+- It only tracks plain objects/arrays — primitives, class instances, and other exotic objects pass through without tracking.
+- Tracking depends on actually reading through the proxy during the memoized call; reads that happen outside of it (e.g. destructuring before the function is invoked) won't be tracked.
+- It's a newer technique with less production track record than `weakMapMemoize`/`lruMemoize`, both of which this package's own `createDraftSafeSelector` and other internals are built on.
+
+Reach for it deliberately, for selectors where reference-instability of input objects (not the values inside them) is causing measurable unnecessary recomputation that the other two strategies can't avoid — not as a default replacement for `weakMapMemoize`.
+
+## Common pitfalls
+
+- **Reading a tracked value outside the memoized function's own call doesn't register as a dependency.** If your `combiner` calls out to a helper that closes over the original (unproxied) object instead of the proxy passed in, autotracking won't see those reads.
+- **It's still marked unstable for a reason** — treat it as opt-in for specific, measured cases, not a blanket upgrade.

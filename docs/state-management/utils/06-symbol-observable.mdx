@@ -30,7 +30,7 @@ store[Symbol.observable]
 store['@@observable'] // only on environments without a real Symbol.observable
 ```
 
-Calling it returns a minimal Observable-spec object with a `.subscribe(observer)` method, which is what makes `from(store)` work in RxJS and similar libraries without Redux needing to depend on RxJS at all:
+Calling it returns a minimal Observable-spec object with a `.subscribe(observer)` method, which is what makes `from(store)` work in RxJS and similar libraries without this package needing to depend on RxJS at all:
 
 ```typescript
 import { from } from 'rxjs';

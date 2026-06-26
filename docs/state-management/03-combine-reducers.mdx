@@ -58,7 +58,7 @@ Each sub-reducer only ever sees and returns *its own slice* — `counterReducer`
 
 ## How it decides whether state actually changed
 
-After running every sub-reducer, `combineReducers` checks whether **any** sub-reducer returned a new reference compared to its previous slice. If none did (every sub-reducer returned its previous slice unchanged, by `===`), the combined reducer returns the *exact same* top-level state object rather than a new one with identical contents. This is what makes `===` checks on `store.getState()` (and libraries like React-Redux's `useSelector`) a reliable way to detect "did anything actually change."
+After running every sub-reducer, `combineReducers` checks whether **any** sub-reducer returned a new reference compared to its previous slice. If none did (every sub-reducer returned its previous slice unchanged, by `===`), the combined reducer returns the *exact same* top-level state object rather than a new one with identical contents. This is what makes `===` checks on `store.getState()` (and hook-based bindings that read from the store) a reliable way to detect "did anything actually change."
 
 ```typescript
 const state1 = store.getState();
@@ -71,7 +71,7 @@ state1 === state2; // true — nothing changed, same reference
 
 `combineReducers` runs a one-time shape check the first time it's called (not on every dispatch), plus per-dispatch shape warnings in development:
 
-- **At setup time**, each reducer is probed with `{ type: '@@redux/INIT...' }` and a random unknown action type. If a reducer returns `undefined` for either, `combineReducers` throws immediately — this catches the single most common Redux mistake (forgetting `default: return state`) as early as possible, before any real action is ever dispatched.
+- **At setup time**, each reducer is probed with `{ type: '@@headlesskit/INIT...' }` and a random unknown action type. If a reducer returns `undefined` for either, `combineReducers` throws immediately — this catches the single most common reducer mistake (forgetting `default: return state`) as early as possible, before any real action is ever dispatched.
 - **On every dispatch** (development builds only), if the **previous** state object has keys that don't match any reducer you passed in, a `console.error` warning is logged (e.g. after a `combineReducers` call drops a key, or if you preloaded state with extra fields). This is a warning, not a thrown error — execution continues, the unexpected keys are just ignored and won't appear in the combined state.
 - **If a reducer itself returns `undefined` for a real (non-probe) action**, that *does* throw, identifying the offending key and action type by name, e.g. for an action `{ type: 'todos/oops' }` mishandled by the `todos` key: `"When called with an action of type 'todos/oops', the slice reducer for key 'todos' returned undefined."`
 

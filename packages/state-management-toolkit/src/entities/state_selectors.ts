@@ -1,4 +1,4 @@
-import type { CreateSelectorFunction, Selector } from 'reselect'
+import type { CreateSelectorFunction, Selector } from '../reselect/index'
 import { createDraftSafeSelector } from '../createDraftSafeSelector'
 import type { EntityId, EntitySelectors, EntityState } from './models'
 

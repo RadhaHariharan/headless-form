@@ -1,6 +1,6 @@
 import type { StoreEnhancer } from '@headlesskit/state-management'
 
-export const SHOULD_AUTOBATCH = 'RTK_autoBatch'
+export const SHOULD_AUTOBATCH = 'headlesskit_autoBatch'
 
 export const prepareAutoBatched =
   <T>() =>
@@ -40,7 +40,7 @@ export type AutoBatchOptions =
   | { type: 'callback'; queueNotification: (notify: () => void) => void }
 
 /**
- * A Redux store enhancer that watches for "low-priority" actions, and delays
+ * A store enhancer that watches for "low-priority" actions, and delays
  * notifying subscribers until either the queued callback executes or the
  * next "standard-priority" action is dispatched.
  *

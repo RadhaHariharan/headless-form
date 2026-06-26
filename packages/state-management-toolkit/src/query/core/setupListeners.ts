@@ -2,9 +2,9 @@ import type {
   ThunkDispatch,
   ActionCreatorWithoutPayload, // Workaround for API-Extractor
 } from '../../index'
-import { createAction } from './rtkImports'
+import { createAction } from './toolkitImports'
 
-export const INTERNAL_PREFIX = '__rtkq/'
+export const INTERNAL_PREFIX = '__hkquery/'
 
 const ONLINE = 'online'
 const OFFLINE = 'offline'

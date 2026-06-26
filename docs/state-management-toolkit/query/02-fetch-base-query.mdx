@@ -12,7 +12,7 @@ function fetchBaseQuery(args?: FetchBaseQueryArgs): BaseQueryFn<string | FetchAr
 
 | Option | Type | Default | Description |
 |--------|------|---------|--------------|
-| `baseUrl` | `string` | `''` | Prepended to every endpoint's `url` (via [joinUrls](./05-utils#join-urls), which correctly handles trailing/leading slashes). |
+| `baseUrl` | `string` | `''` | Prepended to every endpoint's `url` (via [joinUrls](./utils/01-internals), which correctly handles trailing/leading slashes). |
 | `prepareHeaders` | `(headers, api) => Headers \| void` | identity | Mutate/return the `Headers` object before the request fires — the standard place to inject an `Authorization` header read from store state. `api` here is a subset of `BaseQueryApi` (`getState`, `extra`, `endpoint`, `type`, `forced`) plus the original `arg`/`extraOptions` — notably **no `dispatch`**, since headers must be computed synchronously-ish before the request, not as a side-effecting action. |
 | `fetchFn` | `typeof fetch` | global `fetch` | Substitute a different fetch implementation — needed in SSR environments without a native global `fetch`, or to inject a fetch-compatible mock in tests. |
 | `paramsSerializer` | `(params) => string` | a default that builds a `URLSearchParams`-style query string | Customize how the `params` object on a query arg becomes a query string (e.g. for APIs expecting array params as `a=1&a=2` vs `a[]=1&a[]=2`). |

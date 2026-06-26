@@ -61,7 +61,7 @@ export const postsApi = createApi({
 
 | Option | Type | Description |
 |--------|------|-------------|
-| `reducerPath` | `string` | Key in the Redux state tree (default: `'api'`) |
+| `reducerPath` | `string` | Key in the state tree (default: `'api'`) |
 | `baseQuery` | `BaseQueryFn` | How to make requests — usually `fetchBaseQuery` |
 | `tagTypes` | `string[]` | Declare all tag types used by endpoints |
 | `endpoints` | `(builder) => Record<string, Endpoint>` | Define all queries and mutations |
@@ -718,4 +718,4 @@ const clientStore = configureStore({
 
 ## License
 
-MIT — identical to Redux Toolkit v2 upstream.
+MIT — see [LICENSE](../../LICENSE).

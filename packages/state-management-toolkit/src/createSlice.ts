@@ -1,5 +1,5 @@
 import type { Action, Reducer, UnknownAction } from '@headlesskit/state-management'
-import type { Selector } from 'reselect'
+import type { Selector } from './reselect/index'
 import type { InjectConfig } from './combineSlices'
 import type {
   ActionCreatorWithoutPayload,
@@ -33,7 +33,7 @@ import type { Id, TypeGuard } from './tsHelpers'
 import { getOrInsertComputed } from './utils'
 
 const asyncThunkSymbol = /* @__PURE__ */ Symbol.for(
-  'rtk-slice-createasyncthunk',
+  'headlesskit-slice-createasyncthunk',
 )
 // type is annotated because it's too long to infer
 export const asyncThunkCreator: {
@@ -225,8 +225,8 @@ export interface CreateSliceOptions<
    *
    * @example
    * ```ts
-   * import type { Action } from '@reduxjs/toolkit';
-   * import { createAction, createSlice } from '@reduxjs/toolkit';
+   * import type { Action } from '@headlesskit/state-management-toolkit';
+   * import { createAction, createSlice } from '@headlesskit/state-management-toolkit';
    *
    * const incrementBy = createAction<number>('incrementBy');
    * const decrement = createAction('decrement');
@@ -676,7 +676,7 @@ export function buildCreateSlice({ creators }: BuildCreateSliceConfig = {}) {
       if (process.env.NODE_ENV !== 'production') {
         if (typeof options.extraReducers === 'object') {
           throw new Error(
-            "The object notation for `createSlice.extraReducers` has been removed. Please use the 'builder callback' notation instead: https://redux-toolkit.js.org/api/createSlice",
+            "The object notation for `createSlice.extraReducers` has been removed. Please use the 'builder callback' notation instead.",
           )
         }
       }

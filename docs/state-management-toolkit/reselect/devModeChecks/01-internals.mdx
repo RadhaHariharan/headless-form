@@ -1,0 +1,59 @@
+# Development-only stability checks
+
+**Folder:** `src/reselect/devModeChecks/` · Files: `identityFunctionCheck.ts`, `inputStabilityCheck.ts`, `setGlobalDevModeChecks.ts`
+
+A pair of development-only sanity checks, run automatically the first (or every) time a selector executes, that catch two of the most common selector-authoring mistakes — and a global switch to control how often they run.
+
+```typescript
+import { setGlobalDevModeChecks } from '@headlesskit/state-management-toolkit';
+```
+
+## What it actually does
+
+`createSelector` runs two checks against a freshly created selector's input selectors and combiner, intended purely to surface mistakes during development — neither check affects the selector's actual return value, and both are skipped entirely in production builds.
+
+### Identity-function check (`identityFunctionCheck.ts` — `runIdentityFunctionCheck`)
+
+Detects a `combiner` whose result is identical to one of its arguments — i.e. a selector that does no actual combining work and so gains nothing from memoization. This usually means the `combiner` was meant to derive something from the input selectors but accidentally just returns one of them unchanged:
+
+```typescript
+// Triggers the identity-function warning: the combiner just returns `todos` as-is.
+const selectTodos = createSelector(
+  (state: RootState) => state.todos,
+  (todos) => todos,
+);
+```
+
+### Input-stability check (`inputStabilityCheck.ts` — `runInputStabilityCheck`)
+
+Calls each input selector twice in a row against the same state and compares the two results. If they differ, an input selector is producing a *new* reference on every call even though the state it reads didn't change — which defeats `createSelector`'s memoization, since the output selector will think its inputs changed every time:
+
+```typescript
+// Triggers the input-stability warning: `.filter()` returns a new array
+// reference every call, even when `state.todos` itself hasn't changed.
+const selectActiveTodos = createSelector(
+  (state: RootState) => state.todos.filter((t) => t.active),
+  (active) => active.length,
+);
+```
+
+### The global switch (`setGlobalDevModeChecks.ts`)
+
+Both checks accept a `DevModeCheckFrequency`: `'always'`, `'once'` (the default — run only the first time a given selector is called), or `'never'`.
+
+```typescript
+import { setGlobalDevModeChecks } from '@headlesskit/state-management-toolkit';
+
+setGlobalDevModeChecks({
+  identityFunctionCheck: 'always',
+  inputStabilityCheck: 'never',
+});
+```
+
+This sets the default for every selector created afterward. Override it per selector via the `devModeChecks` option on `createSelector` itself (see [createSelector's per-selector options](../02-create-selector)) — useful when a specific selector is known to legitimately fail one check and you don't want to silence it globally.
+
+## Common pitfalls
+
+- **These checks never run in production** — don't rely on them as runtime validation; they're purely a development-time signal, equivalent in spirit to React's `StrictMode` double-invocation.
+- **A failing input-stability check usually means an input selector itself needs memoizing** (e.g. wrap the `.filter()` call in its own `createSelector`), not that the outer selector is broken.
+- **Setting `'never'` globally silences real mistakes, not just false positives** — prefer the per-selector `devModeChecks` override for known exceptions instead of disabling checks everywhere.

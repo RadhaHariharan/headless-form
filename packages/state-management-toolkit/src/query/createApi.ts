@@ -1,10 +1,10 @@
 import type { UnknownAction } from '../index'
-import { weakMapMemoize } from 'reselect'
+import { weakMapMemoize } from '../reselect/index'
 import type { Api, ApiContext, Module, ModuleName } from './apiTypes'
 import { getEndpointDefinition } from './apiTypes'
 import type { BaseQueryFn } from './baseQueryTypes'
 import type { CombinedState } from './core/index'
-import { nanoid } from './core/rtkImports'
+import { nanoid } from './core/toolkitImports'
 import type { SerializeQueryArgs } from './defaultSerializeQueryArgs'
 import { defaultSerializeQueryArgs } from './defaultSerializeQueryArgs'
 import type {
@@ -28,12 +28,12 @@ export interface CreateApiOptions<
   TagTypes extends string = never,
 > {
   /**
-   * The base query used by each endpoint if no `queryFn` option is specified. RTK Query exports a utility called [fetchBaseQuery](./fetchBaseQuery) as a lightweight wrapper around `fetch` for common use-cases. See [Customizing Queries](../../rtk-query/usage/customizing-queries) if `fetchBaseQuery` does not handle your requirements.
+   * The base query used by each endpoint if no `queryFn` option is specified. the query layer exports a utility called [fetchBaseQuery](./fetchBaseQuery) as a lightweight wrapper around `fetch` for common use-cases. See Customizing Queries if `fetchBaseQuery` does not handle your requirements.
    *
    * @example
    *
    * ```ts
-   * import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query'
+   * import { createApi, fetchBaseQuery } from '@headlesskit/state-management-toolkit'
    *
    * const api = createApi({
    *   // highlight-start
@@ -47,12 +47,12 @@ export interface CreateApiOptions<
    */
   baseQuery: BaseQuery
   /**
-   * An array of string tag type names. Specifying tag types is optional, but you should define them so that they can be used for caching and invalidation. When defining a tag type, you will be able to [provide](../../rtk-query/usage/automated-refetching#providing-tags) them with `providesTags` and [invalidate](../../rtk-query/usage/automated-refetching#invalidating-tags) them with `invalidatesTags` when configuring [endpoints](#endpoints).
+   * An array of string tag type names. Specifying tag types is optional, but you should define them so that they can be used for caching and invalidation. When defining a tag type, you will be able to provide them with `providesTags` and invalidate them with `invalidatesTags` when configuring [endpoints](#endpoints).
    *
    * @example
    *
    * ```ts
-   * import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query'
+   * import { createApi, fetchBaseQuery } from '@headlesskit/state-management-toolkit'
    *
    * const api = createApi({
    *   baseQuery: fetchBaseQuery({ baseUrl: '/' }),
@@ -73,7 +73,7 @@ export interface CreateApiOptions<
    *
    * ```ts
    * // codeblock-meta title="apis.js"
-   * import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query';
+   * import { createApi, fetchBaseQuery } from '@headlesskit/state-management-toolkit';
    *
    * const apiOne = createApi({
    *   // highlight-start
@@ -102,18 +102,18 @@ export interface CreateApiOptions<
    */
   serializeQueryArgs?: SerializeQueryArgs<unknown>
   /**
-   * Endpoints are a set of operations that you want to perform against your server. You define them as an object using the builder syntax. There are three endpoint types: [`query`](../../rtk-query/usage/queries), [`infiniteQuery`](../../rtk-query/usage/infinite-queries) and [`mutation`](../../rtk-query/usage/mutations).
+   * Endpoints are a set of operations that you want to perform against your server. You define them as an object using the builder syntax. There are three endpoint types: `query`, `infiniteQuery` and `mutation`.
    */
   endpoints(
     build: EndpointBuilder<BaseQuery, TagTypes, ReducerPath>,
   ): Definitions
   /**
-   * Defaults to `60` _(this value is in seconds)_. This is how long RTK Query will keep your data cached for **after** the last component unsubscribes. For example, if you query an endpoint, then unmount the component, then mount another component that makes the same request within the given time frame, the most recent value will be served from the cache.
+   * Defaults to `60` _(this value is in seconds)_. This is how long the query layer will keep your data cached for **after** the last component unsubscribes. For example, if you query an endpoint, then unmount the component, then mount another component that makes the same request within the given time frame, the most recent value will be served from the cache.
    *
    * @example
    * ```ts
    * // codeblock-meta title="keepUnusedDataFor example"
-   * import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react'
+   * import { createApi, fetchBaseQuery } from '@headlesskit/state-management-toolkit'
    * interface Post {
    *   id: number
    *   name: string
@@ -135,7 +135,7 @@ export interface CreateApiOptions<
    */
   keepUnusedDataFor?: number
   /**
-   * Defaults to `false`. This setting allows you to control whether if a cached result is already available RTK Query will only serve a cached result, or if it should `refetch` when set to `true` or if an adequate amount of time has passed since the last successful query result.
+   * Defaults to `false`. This setting allows you to control whether if a cached result is already available the query layer will only serve a cached result, or if it should `refetch` when set to `true` or if an adequate amount of time has passed since the last successful query result.
    * - `false` - Will not cause a query to be performed _unless_ it does not exist yet.
    * - `true` - Will always refetch when a new subscriber to a query is added. Behaves the same as calling the `refetch` callback or passing `forceRefetch: true` in the action creator.
    * - `number` - **Value is in seconds**. If a number is provided and there is an existing query in the cache, it will compare the current time vs the last fulfilled timestamp, and only refetch if enough time has elapsed.
@@ -144,7 +144,7 @@ export interface CreateApiOptions<
    */
   refetchOnMountOrArgChange?: boolean | number
   /**
-   * Defaults to `false`. This setting allows you to control whether RTK Query will try to refetch all subscribed queries after the application window regains focus.
+   * Defaults to `false`. This setting allows you to control whether the query layer will try to refetch all subscribed queries after the application window regains focus.
    *
    * If you specify this option alongside `skip: true`, this **will not be evaluated** until `skip` is false.
    *
@@ -152,7 +152,7 @@ export interface CreateApiOptions<
    */
   refetchOnFocus?: boolean
   /**
-   * Defaults to `false`. This setting allows you to control whether RTK Query will try to refetch all subscribed queries after regaining a network connection.
+   * Defaults to `false`. This setting allows you to control whether the query layer will try to refetch all subscribed queries after regaining a network connection.
    *
    * If you specify this option alongside `skip: true`, this **will not be evaluated** until `skip` is false.
    *
@@ -176,10 +176,11 @@ export interface CreateApiOptions<
    * @example
    *
    * ```ts
-   * // codeblock-meta title="next-redux-wrapper rehydration example"
+   * // codeblock-meta title="server-rendered rehydration example"
    * import type { Action, PayloadAction } from '../index'
-   * import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react'
-   * import { HYDRATE } from 'next-redux-wrapper'
+   * import { createApi, fetchBaseQuery } from '@headlesskit/state-management-toolkit'
+   *
+   * const HYDRATE = 'app/HYDRATE'
    *
    * type RootState = any; // normally inferred from state
    *
@@ -230,7 +231,7 @@ export interface CreateApiOptions<
    * @example
    * ```ts
    * // codeblock-meta no-transpile
-   * import { createApi } from '@reduxjs/toolkit/query/react'
+   * import { createApi } from '@headlesskit/state-management-toolkit'
    * import * as v from "valibot"
    *
    * const api = createApi({
@@ -256,7 +257,7 @@ export interface CreateApiOptions<
    * @example
    * ```ts
    * // codeblock-meta no-transpile
-   * import { createApi } from '@reduxjs/toolkit/query/react'
+   * import { createApi } from '@headlesskit/state-management-toolkit'
    * import * as v from "valibot"
    *
    * const api = createApi({
@@ -287,7 +288,7 @@ export interface CreateApiOptions<
    * @example
    * ```ts
    * // codeblock-meta no-transpile
-   * import { createApi } from '@reduxjs/toolkit/query/react'
+   * import { createApi } from '@headlesskit/state-management-toolkit'
    * import * as v from "valibot"
    *
    * const api = createApi({
@@ -307,9 +308,8 @@ export interface CreateApiOptions<
 
 export type CreateApi<Modules extends ModuleName> = {
   /**
-   * Creates a service to use in your application. Contains only the basic redux logic (the core module).
+   * Creates a service to use in your application. Contains only the basic logic (the core module).
    *
-   * @link https://redux-toolkit.js.org/rtk-query/api/createApi
    */
   <
     BaseQuery extends BaseQueryFn,
@@ -324,11 +324,10 @@ export type CreateApi<Modules extends ModuleName> = {
 /**
  * Builds a `createApi` method based on the provided `modules`.
  *
- * @link https://redux-toolkit.js.org/rtk-query/usage/customizing-create-api
  *
  * @example
  * ```ts
- * const MyContext = React.createContext<ReactReduxContextValue | null>(null);
+ * const MyContext = React.createContext<{ store: Store } | null>(null);
  * const customCreateApi = buildCreateApi(
  *   coreModule(),
  *   reactHooksModule({

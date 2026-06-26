@@ -12,16 +12,16 @@ import { __DO_NOT_USE__ActionTypes } from '@headlesskit/state-management';
 
 ```typescript
 {
-  INIT: string;                      // e.g. '@@redux/INIT a1b2c3'
-  REPLACE: string;                   // e.g. '@@redux/REPLACE x7y8z9'
+  INIT: string;                      // e.g. '@@headlesskit/INIT a1b2c3'
+  REPLACE: string;                   // e.g. '@@headlesskit/REPLACE x7y8z9'
   PROBE_UNKNOWN_ACTION: () => string; // generates a fresh random type each call
 }
 ```
 
 | Field | Value | When it's dispatched |
 |-------|-------|----------------------|
-| `INIT` | `"@@redux/INIT<random>"` | Once, automatically, the moment [createStore](../02-create-store) runs — this is what makes every reducer's `state = initialValue` default parameter kick in and populate the store's first state. |
-| `REPLACE` | `"@@redux/REPLACE<random>"` | Automatically, whenever you call `store.replaceReducer(...)`. |
+| `INIT` | `"@@headlesskit/INIT<random>"` | Once, automatically, the moment [createStore](../02-create-store) runs — this is what makes every reducer's `state = initialValue` default parameter kick in and populate the store's first state. |
+| `REPLACE` | `"@@headlesskit/REPLACE<random>"` | Automatically, whenever you call `store.replaceReducer(...)`. |
 | `PROBE_UNKNOWN_ACTION()` | A **new** random string every call | Used internally by [combineReducers](../03-combine-reducers)'s setup-time shape check, to verify every reducer has a `default: return state` and doesn't crash on actions it's never seen. |
 
 The random suffix (`randomString()` internally) exists so user code can never accidentally collide with these by hardcoding the same literal string.
@@ -30,10 +30,10 @@ The random suffix (`randomString()` internally) exists so user code can never ac
 
 ```typescript
 // ❌ Don't do this — your reducer will incorrectly treat the literal
-// string '@@redux/INIT' as matching the real init action, but the real
+// string '@@headlesskit/INIT' as matching the real init action, but the real
 // action has a random suffix and will never equal this literal.
 function reducer(state, action) {
-  if (action.type === '@@redux/INIT') { /* never actually runs */ }
+  if (action.type === '@@headlesskit/INIT') { /* never actually runs */ }
 }
 ```
 

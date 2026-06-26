@@ -1,0 +1,67 @@
+# createSelector / createSelectorCreator
+
+**File:** `src/reselect/createSelectorCreator.ts`
+
+The core of the vendored module — a memoized-selector factory and the function used to build customized versions of it with a different memoization strategy.
+
+```typescript
+import { createSelector, createSelectorCreator } from '@headlesskit/state-management-toolkit';
+```
+
+## `createSelector(...inputSelectors, combiner, options?)`
+
+Takes one or more "input selectors" (functions that read a slice of state) and a `combiner` function, and returns a single memoized "output selector." The output selector only re-runs `combiner` when at least one input selector's result has changed since the last call — otherwise it returns the previously cached result.
+
+```typescript
+const selectTodos = (state: RootState) => state.todos;
+const selectFilter = (state: RootState) => state.filter;
+
+const selectVisibleTodos = createSelector(
+  [selectTodos, selectFilter],
+  (todos, filter) => todos.filter((todo) => todo.status === filter),
+);
+
+selectVisibleTodos(state); // computes and caches
+selectVisibleTodos(state); // same `todos`/`filter` references → returns the cached array, doesn't re-filter
+```
+
+By default, the memoization strategy used for both the output value and the arguments passed to `combiner` is [`weakMapMemoize`](03-weak-map-memoize) — this is what lets `createSelector` cache correctly across selector instances called with structurally-different-but-reference-stable argument combinations, without a fixed cache size to tune.
+
+`createSelector` also exposes `.withTypes<RootState>()`, which returns a version of itself pre-typed against a specific root-state type, so you don't have to annotate the state type on every input selector you write.
+
+## `createSelectorCreator(memoizeFunction, ...memoizeOptions)`
+
+`createSelector` is itself just `createSelectorCreator(weakMapMemoize)`. Call `createSelectorCreator` directly when you want a differently-memoized version of `createSelector` — most commonly with [`lruMemoize`](04-lru-memoize) for a size-bounded cache, or with a custom equality function:
+
+```typescript
+import { createSelectorCreator, lruMemoize } from '@headlesskit/state-management-toolkit';
+import { isEqual } from 'lodash';
+
+const createDeepEqualSelector = createSelectorCreator(lruMemoize, {
+  equalityCheck: isEqual,
+});
+
+const selectFilteredTodos = createDeepEqualSelector(
+  (state: RootState) => state.todos,
+  (state: RootState) => state.filter,
+  (todos, filter) => todos.filter((todo) => todo.status === filter),
+);
+```
+
+This package's own [`createDraftSafeSelector`](../03-create-draft-safe-selector) is exactly `createSelectorCreator(weakMapMemoize)` wrapped with Immer-draft detection — see that page for why a plain `createSelector` isn't safe to call inside a `createReducer`/`createSlice` reducer.
+
+## Per-selector options
+
+The third argument to `createSelector` (after the input selectors and `combiner`) accepts a `CreateSelectorOptions` object — the most commonly used fields:
+
+| Option | Description |
+|--------|-------------|
+| `memoize` / `memoizeOptions` | Override the memoization strategy (and its options) for this one selector, without changing every selector built with the same `createSelectorCreator`. |
+| `argsMemoize` / `argsMemoizeOptions` | Same idea, but for memoizing the arguments passed into the output selector itself (distinct from memoizing `combiner`'s result). |
+| `devModeChecks` | Per-selector override of the development-only [identity-function and input-stability checks](./devModeChecks/01-internals) — accepts `'always' | 'once' | 'never'` per check. |
+
+## Common pitfalls
+
+- **A selector with a single input selector that just returns its argument unchanged provides no memoization benefit** — this is exactly what the [identity-function check](./devModeChecks/01-internals) warns about in development.
+- **Recreating `combiner` (or the array of input selectors) on every render defeats memoization at the React level**, even though the selector itself still memoizes correctly internally — define selectors at module scope (or via a factory called once per component instance), not inline in render.
+- **Switching memoization strategies changes cache behavior, not selector semantics** — `lruMemoize` with `maxSize: 1` behaves like the default single-entry cache; raising `maxSize` trades memory for tolerance of selectors called with rotating sets of arguments (e.g. one selector instance reused across multiple list items with different IDs).

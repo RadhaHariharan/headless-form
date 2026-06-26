@@ -1,0 +1,48 @@
+# Shared types and internal utilities
+
+**Files:** `src/reselect/types.ts`, `src/reselect/utils.ts`
+
+The type definitions and small runtime helpers shared across every other file in the vendored module. Most application code never imports from these directly — they're documented here for completeness and for anyone extending the vendored module itself. See also [versionedTypes/](./versionedTypes/01-internals), a small version-gated helper folder `types.ts` depends on.
+
+## Developer-facing types
+
+These are the types you're actually likely to reach for when annotating selectors by hand:
+
+| Type | Purpose |
+|------|---------|
+| `Selector<State, Result, Params>` | The shape of a single input selector: `(state, ...params) => Result`. |
+| `SelectorArray` | An array of `Selector`s, as passed to `createSelector`. |
+| `OutputSelector` | The shape of what `createSelector` returns — callable like a `Selector`, plus `.clearCache()`, `.resultFunc`, `.memoizedResultFunc`, `.lastResult()`, `.dependencies`, `.recomputations()`, `.resetRecomputations()`. |
+| `Combiner` | The shape of the final function passed to `createSelector` — receives each input selector's result as its arguments. |
+| `EqualityFn` | `(a, b) => boolean` — the shape expected by `equalityCheck`/`resultEqualityCheck` options across [`weakMapMemoize`](03-weak-map-memoize) and [`lruMemoize`](04-lru-memoize). |
+| `CreateSelectorOptions` | The options object accepted as `createSelector`'s final argument — see [createSelector's per-selector options](02-create-selector). |
+| `DevModeCheckFrequency` | `'always' \| 'once' \| 'never'` — see [development-only stability checks](./devModeChecks/01-internals). |
+| `DevModeChecks` | `{ identityFunctionCheck?: DevModeCheckFrequency; inputStabilityCheck?: DevModeCheckFrequency }`. |
+| `UnknownMemoizer` | The generic shape a memoize function (like `weakMapMemoize`, `lruMemoize`, or a custom one) must satisfy to be usable with `createSelectorCreator`. |
+
+```typescript
+import type { Selector, OutputSelector } from '@headlesskit/state-management-toolkit';
+
+const selectUser: Selector<RootState, User> = (state) => state.user;
+```
+
+## Internal-only types
+
+`types.ts` also defines a large set of internal TypeScript utility types used purely to make `createSelector`'s own generic signatures infer correctly across overloads (`SelectorResultArray`, `OutputSelectorFields`, `GetStateFromSelectors`, `GetParamsFromSelectors`, `MemoizeOptionsFromParameters`, `OverrideMemoizeOptions`, `ExtractMemoizerFields`, `DefaultMemoizeFields`, `DevModeChecksExecutionInfo`, and others). These aren't meant to be imported by application code — they exist purely to make the public-facing types above resolve correctly.
+
+## `utils.ts` runtime helpers
+
+Small assertion and array-handling helpers used throughout the other files — also internal-only, not re-exported from the package root:
+
+| Helper | Purpose |
+|--------|---------|
+| `assertIsFunction` / `assertIsObject` / `assertIsArrayOfFunctions` | Throw a descriptive error if a value passed to `createSelector`/`createSelectorCreator` isn't the shape expected (e.g. catching a missing `combiner` argument early, with a clear message instead of a confusing failure later). |
+| `ensureIsArray` | Normalizes the "one or many input selectors" calling convention — `createSelector` accepts either a single selector or an array of them, and this collapses both into an array internally. |
+| `getDependencies` | Extracts the input-selector array and `combiner` out of `createSelector`'s combined argument list. |
+| `collectInputSelectorResults` | Calls every input selector against the current state/params and returns their results as an array, ready to pass into `combiner`. |
+| `getDevModeChecksExecutionInfo` | Resolves the effective `DevModeCheckFrequency` for a given selector call, accounting for both the global setting and any per-selector override — used by both checks in [development-only stability checks](./devModeChecks/01-internals). |
+| `NOT_FOUND` / `NOT_FOUND_TYPE` | A sentinel value used internally by the memoize implementations to distinguish "no cached entry" from a cached `undefined` result. |
+
+## Common pitfalls
+
+- **None of this folder's exports are part of the package's public API** — application code should only ever import the documented surface (`createSelector`, `createSelectorCreator`, the memoize strategies, `createStructuredSelector`, and the developer-facing types above). Importing internal utility types or runtime helpers directly couples your code to vendored implementation details that may change on a future update of this folder.

@@ -355,12 +355,12 @@ export function buildInitiate({
     if (process.env.NODE_ENV !== 'production') {
       if ((middlewareWarning as any).triggered) return
       const returnedValue = dispatch(
-        api.internalActions.internal_getRTKQSubscriptions(),
+        api.internalActions.internal_getQuerySubscriptions(),
       )
 
       ;(middlewareWarning as any).triggered = true
 
-      // The RTKQ middleware should return the internal state object,
+      // This query layer's middleware should return the internal state object,
       // but it should _not_ be the action object.
       if (
         typeof returnedValue !== 'object' ||
@@ -368,8 +368,8 @@ export function buildInitiate({
       ) {
         // Otherwise, must not have been added
         throw new Error(
-          `Warning: Middleware for RTK-Query API at reducerPath "${api.reducerPath}" has not been added to the store.
-You must add the middleware for RTK-Query to function correctly!`,
+          `Warning: Middleware for the query layer API at reducerPath "${api.reducerPath}" has not been added to the store.
+You must add the middleware for the query layer to function correctly!`,
         )
       }
     }

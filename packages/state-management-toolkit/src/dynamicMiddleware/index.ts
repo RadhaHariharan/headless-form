@@ -1,5 +1,5 @@
 import type { Dispatch, Middleware, UnknownAction } from '@headlesskit/state-management'
-import { compose } from '../reduxImports'
+import { compose } from '../stateManagementImports'
 import { createAction } from '../createAction'
 import { isAllOf } from '../matchers'
 import { nanoid } from '../nanoid'

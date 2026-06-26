@@ -13,16 +13,16 @@ function formatProdErrorMessage(code: number): string
 **Returns:**
 
 ```
-Minified Redux Toolkit error #7; visit https://redux-toolkit.js.org/Errors?code=7 for the full message or use the non-minified dev environment for full errors.
+Minified error #7; use the non-minified dev environment for the full message.
 ```
 
 ## Why it's separate from state-management's version
 
-Both packages independently throw descriptive errors in development and minify them to a numeric code in production, but each package's code numbers are assigned independently and point at a different documentation URL (`redux-toolkit.js.org/Errors` vs. `redux.js.org/Errors`) — so a single shared `formatProdErrorMessage` couldn't correctly link to the right docs page for both packages at once. Each package therefore vendors its own tiny copy of the same pattern.
+Both packages independently throw descriptive errors in development and minify them to a numeric code in production, but each package's code numbers are assigned independently — so a single shared `formatProdErrorMessage` couldn't correctly identify which package's error catalog a given code belongs to. Each package therefore vendors its own tiny copy of the same pattern.
 
 ## Basic usage (you'll almost never call this directly)
 
-Exists purely as the production-build half of throw-site ternaries inside this package's own source (e.g. inside [createReducer](../02-create-reducer) and [createSlice](../05-create-slice) for "removed object-notation" errors). If you see a `"Minified Redux Toolkit error #N"` message in a production error report, visit the printed URL (or check this package's source/changelog for that code) to find the original descriptive message.
+Exists purely as the production-build half of throw-site ternaries inside this package's own source (e.g. inside [createReducer](../02-create-reducer) and [createSlice](../05-create-slice) for "removed object-notation" errors). If you see a `"Minified error #N"` message in a production error report, check this package's source/changelog for that code to find the original descriptive message.
 
 ## Common pitfalls
 

@@ -2,7 +2,7 @@
 
 **File:** `src/query/core/apiState.ts`
 
-Describes the normalized state shape RTK Query stores under `state[api.reducerPath]`, and the `QueryStatus` enum that drives every `isLoading`/`isSuccess`/`isError` flag you see on hook results and selectors.
+Describes the normalized state shape the query layer stores under `state[api.reducerPath]`, and the `QueryStatus` enum that drives every `isLoading`/`isSuccess`/`isError` flag you see on hook results and selectors.
 
 ## `QueryStatus`
 
@@ -85,7 +85,7 @@ if (isFetching) return <>{data} <InlineSpinner /></>; // show stale data + a sub
 return <>{data}</>;
 ```
 
-(`isFetching` itself is derived in [buildSelectors](./11-core-internals), not `apiState.ts` directly, but relies on this same underlying `status`/`data` combination.)
+(`isFetching` itself is derived in [buildSelectors](./core/01-internals), not `apiState.ts` directly, but relies on this same underlying `status`/`data` combination.)
 
 ## Common pitfalls
 

@@ -240,7 +240,7 @@ export function createImmutableStateInvariantMiddleware(
             throw new Error(
               `A state mutation was detected between dispatches, in the path '${
                 result.path || ''
-              }'.  This may cause incorrect behavior. (https://redux.js.org/style-guide/style-guide#do-not-mutate-state)`,
+              }'. This may cause incorrect behavior.`,
             )
           }
         })
@@ -260,7 +260,7 @@ export function createImmutableStateInvariantMiddleware(
                 result.path || ''
               }. Take a look at the reducer(s) handling the action ${stringify(
                 action,
-              )}. (https://redux.js.org/style-guide/style-guide#do-not-mutate-state)`,
+              )}.`,
             )
           }
         })

@@ -44,9 +44,9 @@ class Point { constructor(public x: number, public y: number) {} }
 isPlainObject(new Point(1, 2));      // false — Point.prototype, not the top-level Object.prototype
 ```
 
-## Why this matters for Redux actions and state
+## Why this matters for actions and state
 
-This is the check behind [isAction](02-is-action) and `store.dispatch`'s own validation. **Actions and state must be plain objects** — this is what lets Redux DevTools serialize/deserialize them for time-travel debugging, and what lets `combineReducers` safely spread/merge them. Class instances, `Map`s, and arrays-as-actions are deliberately rejected so that nobody accidentally relies on instance methods or prototype behavior that wouldn't survive a `JSON.stringify` round-trip.
+This is the check behind [isAction](02-is-action) and `store.dispatch`'s own validation. **Actions and state must be plain objects** — this is what lets DevTools serialize/deserialize them for time-travel debugging, and what lets `combineReducers` safely spread/merge them. Class instances, `Map`s, and arrays-as-actions are deliberately rejected so that nobody accidentally relies on instance methods or prototype behavior that wouldn't survive a `JSON.stringify` round-trip.
 
 ```typescript
 // ❌ Rejected by store.dispatch — a Map is not a plain object

@@ -16,8 +16,8 @@ import { immer } from '@headlesskit/state-management-simplify';
 
 ```typescript
 immer<T, U = T>(
-  initializer: StateCreator<T, [...Mps, ['zustand/immer', never]], Mcs, U>,
-): StateCreator<T, Mps, [['zustand/immer', never], ...Mcs], U>
+  initializer: StateCreator<T, [...Mps, ['headlesskit/immer', never]], Mcs, U>,
+): StateCreator<T, Mps, [['headlesskit/immer', never], ...Mcs], U>
 ```
 
 | Parameter | Type | Required | Description |

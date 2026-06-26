@@ -16,7 +16,7 @@ pnpm add @headlesskit/query-persist-client-core
 yarn add @headlesskit/query-persist-client-core
 ```
 
-This package depends on [`@headlesskit/query-core`](../query-core) and is **API-compatible with TanStack Query's persist-client-core package** — if you've used `persistQueryClient` from the TanStack ecosystem, the API here is the same.
+This package depends on [`@headlesskit/query-core`](../query-core) and provides `persistQueryClient` — persisting a `QueryClient`'s cache to storage and restoring it on reload.
 
 ## Why this exists
 

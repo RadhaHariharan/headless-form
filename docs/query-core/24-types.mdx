@@ -580,7 +580,7 @@ The serializable subset of mutation state used by [`dehydrate`/`hydrate`](#hydra
 
 *(declared in `src/retryer.ts`, referenced throughout `types.ts`)*
 
-These are imported into `types.ts` (`import type { RetryDelayValue, RetryValue } from './retryer'`) and used on both `QueryOptions.retry`/`retryDelay` and `MutationOptions.retry`/`retryDelay`. See [`./08-retryer`](./08-retryer) for their exact shapes (boolean/number/predicate-function for `retry`; number-or-function-of-attempt-and-error for `retryDelay`) and the retry-loop behavior that consumes them.
+These are imported into `types.ts` (`import type { RetryDelayValue, RetryValue } from './retryer'`) and used on both `QueryOptions.retry`/`retryDelay` and `MutationOptions.retry`/`retryDelay`. See [`./12-retryer`](./12-retryer) for their exact shapes (boolean/number/predicate-function for `retry`; number-or-function-of-attempt-and-error for `retryDelay`) and the retry-loop behavior that consumes them.
 
 ### `NetworkMode`
 
@@ -714,7 +714,7 @@ interface DehydratedState {
 }
 ```
 
-The full serializable snapshot returned by `dehydrate(queryClient)` and consumed by `hydrate(queryClient, state)`. See [`./01-overview`](./01-overview#hydration--ssr) and [`./16-hydration`](./16-hydration).
+The full serializable snapshot returned by `dehydrate(queryClient)` and consumed by `hydrate(queryClient, state)`. See [`./01-overview`](./01-overview#hydration--ssr) and [`./13-hydration`](./13-hydration).
 
 ### `DehydrateOptions`
 

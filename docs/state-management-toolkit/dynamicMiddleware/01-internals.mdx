@@ -1,8 +1,8 @@
 # createDynamicMiddleware
 
-**File:** `src/dynamicMiddleware/index.ts`, `types.ts`
+**Folder:** `src/dynamicMiddleware/` · Files: `index.ts`, `types.ts`
 
-Lets you add middleware to the store **after** it's already been created — without calling `store.replaceReducer`/rebuilding the store, and without every other middleware needing to know about the new one in advance. Useful for the same "feature is code-split and loads later" scenarios [combineSlices](./08-combine-slices) solves for reducers, applied to middleware instead.
+Lets you add middleware to the store **after** it's already been created — without calling `store.replaceReducer`/rebuilding the store, and without every other middleware needing to know about the new one in advance. Useful for the same "feature is code-split and loads later" scenarios [combineSlices](../08-combine-slices) solves for reducers, applied to middleware instead.
 
 ## Signature
 

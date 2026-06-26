@@ -72,7 +72,7 @@ store.dispatch({ type: 'increment' });
 
 ## Advanced: writing a thunk middleware from scratch
 
-The single most common middleware lets you dispatch **functions**, not just plain objects — this is how async logic (API calls) typically enters a Redux app. `@headlesskit/state-management-toolkit`'s `configureStore` already wires this up via `redux-thunk` for you, but seeing it written out demystifies what "thunk" actually means:
+The single most common middleware lets you dispatch **functions**, not just plain objects — this is how async logic (API calls) typically enters an action/reducer-based app. `@headlesskit/state-management-toolkit`'s `configureStore` already wires this up for you via its built-in thunk middleware, but seeing it written out demystifies what "thunk" actually means:
 
 ```typescript
 import type { Middleware } from '@headlesskit/state-management';

@@ -1,7 +1,7 @@
 {
   "name": "@headlesskit/state-management-toolkit",
   "version": "2.3.0",
-  "description": "Redux Toolkit — ported as @headlesskit/state-management-toolkit",
+  "description": "Slices, async thunks, entities, listener middleware, and a data-fetching layer",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -22,9 +22,7 @@
     "@headlesskit/state-management": "workspace:*",
     "@standard-schema/spec": "^1.0.0",
     "@standard-schema/utils": "^0.3.0",
-    "immer": "^11.0.0",
-    "reselect": "^5.1.0",
-    "redux-thunk": "^3.1.0"
+    "immer": "^11.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

@@ -69,7 +69,7 @@ import {
   isRejected,
   isRejectedWithValue,
   SHOULD_AUTOBATCH,
-} from './rtkImports'
+} from './toolkitImports'
 import {
   parseWithSchema,
   NamedSchemaError,

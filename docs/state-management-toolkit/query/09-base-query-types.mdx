@@ -27,7 +27,7 @@ type QueryReturnValue<T, E, M> =
   | { error?: undefined; data: T; meta?: M };
 ```
 
-**Never throw** to signal failure — return `{ error: ... }` instead. RTK Query treats a thrown exception from a `baseQuery` as a genuinely unexpected internal failure (not a normal request error), so all the usual error-state UI/cache behavior expects the `{ error }` return shape, not a caught exception.
+**Never throw** to signal failure — return `{ error: ... }` instead. The query layer treats a thrown exception from a `baseQuery` as a genuinely unexpected internal failure (not a normal request error), so all the usual error-state UI/cache behavior expects the `{ error }` return shape, not a caught exception.
 
 ## `BaseQueryApi` — your function's second argument
 
@@ -92,5 +92,5 @@ const baseQueryWithReauth: BaseQueryFn = async (args, api, extraOptions) => {
 
 ## Common pitfalls
 
-- **Throwing instead of returning `{ error }` breaks RTK Query's error handling** — a thrown error from a `baseQuery` propagates as an unhandled rejection through the generated thunk rather than becoming a normal query error state; always catch and convert to `{ error: ... }`.
-- **Forgetting to wire `api.signal` into your actual request call** means cancellation (unmounting a component, `RTKQ`'s own internal abort-on-unsubscribe) stops being tracked by RTK Query but doesn't actually stop the underlying network/IO call — wasted work continues even though nothing is listening for the result anymore.
+- **Throwing instead of returning `{ error }` breaks the query layer's error handling** — a thrown error from a `baseQuery` propagates as an unhandled rejection through the generated thunk rather than becoming a normal query error state; always catch and convert to `{ error: ... }`.
+- **Forgetting to wire `api.signal` into your actual request call** means cancellation (unmounting a component, the query layer's own internal abort-on-unsubscribe) stops being tracked but doesn't actually stop the underlying network/IO call — wasted work continues even though nothing is listening for the result anymore.

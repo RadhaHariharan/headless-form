@@ -104,7 +104,7 @@ export interface CombinedSliceReducer<
   /**
    * Inject a slice.
    *
-   * Accepts an individual slice, RTKQ API instance, or a "slice-like" { reducerPath, reducer } object.
+   * Accepts an individual slice, query API instance, or a "slice-like" { reducerPath, reducer } object.
    *
    * ```ts
    * rootReducer.inject(booleanSlice)
@@ -125,7 +125,7 @@ export interface CombinedSliceReducer<
   /**
    * Inject a slice.
    *
-   * Accepts an individual slice, RTKQ API instance, or a "slice-like" { reducerPath, reducer } object.
+   * Accepts an individual slice, query API instance, or a "slice-like" { reducerPath, reducer } object.
    *
    * ```ts
    * rootReducer.inject(booleanSlice)
@@ -350,7 +350,7 @@ const getReducers = (slices: Array<AnySliceLike | ReducerMap>) =>
       : Object.entries(sliceOrMap),
   )
 
-const ORIGINAL_STATE = Symbol.for('rtk-state-proxy-original')
+const ORIGINAL_STATE = Symbol.for('headlesskit-state-proxy-original')
 
 const isStateProxy = (value: any) => !!value && !!value[ORIGINAL_STATE]
 

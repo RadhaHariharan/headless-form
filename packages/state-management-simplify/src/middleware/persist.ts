@@ -209,7 +209,7 @@ const persistImpl: PersistImpl = (config, baseOptions) => (set, get, api) => {
     return config(
       (...args) => {
         console.warn(
-          `[zustand persist middleware] Unable to update item '${options.name}', the given storage is currently unavailable.`,
+          `[headlesskit persist middleware] Unable to update item '${options.name}', the given storage is currently unavailable.`,
         )
         set(...(args as Parameters<typeof set>))
       },
@@ -380,13 +380,13 @@ type Persist = <
   Mcs extends [StoreMutatorIdentifier, unknown][] = [],
   U = T,
 >(
-  initializer: StateCreator<T, [...Mps, ['zustand/persist', unknown]], Mcs>,
+  initializer: StateCreator<T, [...Mps, ['headlesskit/persist', unknown]], Mcs>,
   options: PersistOptions<T, U>,
-) => StateCreator<T, Mps, [['zustand/persist', U], ...Mcs]>
+) => StateCreator<T, Mps, [['headlesskit/persist', U], ...Mcs]>
 
 declare module '../vanilla.js' {
   interface StoreMutators<S, A> {
-    'zustand/persist': WithPersist<S, A>
+    'headlesskit/persist': WithPersist<S, A>
   }
 }
 

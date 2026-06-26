@@ -10,7 +10,7 @@ import {
   prepareAutoBatched,
   SHOULD_AUTOBATCH,
   nanoid,
-} from './rtkImports'
+} from './toolkitImports'
 import type {
   QuerySubstateIdentifier,
   QuerySubState,
@@ -301,7 +301,7 @@ export function buildSlice({
           action: PayloadAction<
             ProcessedQueryUpsertEntry[],
             string,
-            { RTK_autoBatch: boolean; requestId: string; timestamp: number }
+            { headlesskit_autoBatch: boolean; requestId: string; timestamp: number }
           >,
         ) {
           for (const entry of action.payload) {
@@ -656,7 +656,7 @@ export function buildSlice({
       ) {
         // Dummy
       },
-      internal_getRTKQSubscriptions() {},
+      internal_getQuerySubscriptions() {},
     },
   })
 
@@ -704,7 +704,7 @@ export function buildSlice({
           state.focused = false
         })
         // update the state to be a new object to be picked up as a "state change"
-        // by redux-persist's `autoMergeLevel2`
+        // by state-persistence libraries that do shallow merging
         .addMatcher(hasRehydrationInfo, (draft) => ({ ...draft }))
     },
   })

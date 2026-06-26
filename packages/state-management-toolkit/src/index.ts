@@ -6,14 +6,14 @@ export * from '@headlesskit/state-management'
 export { freeze, original } from 'immer'
 export { createNextState, current, isDraft } from './immerImports'
 export type { Draft, WritableDraft } from 'immer'
-export { createSelector, lruMemoize } from 'reselect'
+export { createSelector, lruMemoize } from './reselect/index'
 export { createSelectorCreator, weakMapMemoize } from './reselectImports'
-export type { Selector, OutputSelector } from 'reselect'
+export type { Selector, OutputSelector } from './reselect/index'
 export {
   createDraftSafeSelector,
   createDraftSafeSelectorCreator,
 } from './createDraftSafeSelector'
-export type { ThunkAction, ThunkDispatch, ThunkMiddleware } from 'redux-thunk'
+export type { ThunkAction, ThunkDispatch, ThunkMiddleware } from './thunkMiddlewareTypes'
 
 export {
   // js
@@ -25,6 +25,7 @@ export type {
   EnhancedStore,
 } from './configureStore'
 export type { DevToolsEnhancerOptions } from './devtoolsExtension'
+export { composeWithDevTools } from './devtoolsExtension'
 export {
   // js
   createAction,
@@ -212,5 +213,5 @@ export type {
 
 export { formatProdErrorMessage } from './formatProdErrorMessage'
 
-// ─── RTK Query ───────────────────────────────────────────────────────────────
+// ─── the query layer ───────────────────────────────────────────────────────────────
 export * from './query/index'

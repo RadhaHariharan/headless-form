@@ -2,7 +2,7 @@
 
 **File:** `src/serializableStateInvariantMiddleware.ts` · Included by default via [getDefaultMiddleware](./10-get-default-middleware), development builds only.
 
-Warns when a dispatched action, or the state after it's processed, contains a value that isn't safely JSON-serializable (functions, `Map`/`Set`, class instances, `Symbol`s, etc). Redux's core design assumption is that state and actions are plain serializable data (important for time-travel debugging, persistence, and `postMessage`-based devtools) — this middleware catches violations early.
+Warns when a dispatched action, or the state after it's processed, contains a value that isn't safely JSON-serializable (functions, `Map`/`Set`, class instances, `Symbol`s, etc). This package's core design assumption is that state and actions are plain serializable data (important for time-travel debugging, persistence, and `postMessage`-based devtools) — this middleware catches violations early.
 
 ## Signature
 
@@ -71,5 +71,5 @@ dispatch({ type: 'file/upload', payload: fileInput.files[0] }); // no warning, e
 ## Common pitfalls
 
 - **A `Date` object fails this check by default** — a very common real-world trigger, since `Date` isn't covered by `isPlain`'s checks. Either convert to an ISO string before dispatching/storing, or widen `isSerializable` to explicitly allow `instanceof Date`.
-- **RTK Query's internals intentionally carry some non-plain metadata** (like `AbortController`s) inside `meta.arg`/`meta.baseQueryMeta` — this is exactly why those two paths are excluded by default; don't be alarmed that the defaults aren't `[]`, and don't widen `ignoredActionPaths` further without understanding what you're newly exempting.
+- **the query layer's internals intentionally carry some non-plain metadata** (like `AbortController`s) inside `meta.arg`/`meta.baseQueryMeta` — this is exactly why those two paths are excluded by default; don't be alarmed that the defaults aren't `[]`, and don't widen `ignoredActionPaths` further without understanding what you're newly exempting.
 - **This middleware is O(action/state size) per dispatch**, same caveat as the immutable-state check — use `ignoredPaths`/`ignoredActionPaths` surgically for known-large or known-non-plain branches rather than disabling the whole check.

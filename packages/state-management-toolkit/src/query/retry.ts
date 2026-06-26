@@ -205,7 +205,7 @@ const retryWithBackoff: BaseQueryEnhancer<
  *
  * ```ts
  * // codeblock-meta title="Retry every request 5 times by default"
- * import { createApi, fetchBaseQuery, retry } from '@reduxjs/toolkit/query/react'
+ * import { createApi, fetchBaseQuery, retry } from '@headlesskit/state-management-toolkit'
  * interface Post {
  *   id: number
  *   name: string

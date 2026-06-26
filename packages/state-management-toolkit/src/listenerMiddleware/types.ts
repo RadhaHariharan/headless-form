@@ -5,13 +5,13 @@ import type {
   MiddlewareAPI,
   UnknownAction,
 } from '@headlesskit/state-management'
-import type { ThunkDispatch } from 'redux-thunk'
+import type { ThunkDispatch } from '../thunkMiddlewareTypes'
 import type { BaseActionCreator, PayloadAction } from '../createAction'
 import type { TypedActionCreator } from '../mapBuilders'
 import type { TaskAbortError } from './exceptions'
 
 /**
- * Types copied from RTK
+ * Types for the listener middleware's forked task API.
  */
 
 /** @internal */
@@ -184,7 +184,7 @@ export interface ListenerEffectAPI<
    * ### Example
    *
    * ```ts
-   * import { createAction } from '@reduxjs/toolkit';
+   * import { createAction } from '@headlesskit/state-management-toolkit';
    *
    * const updateBy = createAction<number>('counter/updateBy');
    *
@@ -437,7 +437,7 @@ export type AddListenerOverloads<
     } & AdditionalOptions,
   ): Return
 
-  /** Accepts an RTK action creator, like `incrementByAmount` */
+  /** Accepts an action creator, like `incrementByAmount` */
   <ActionCreatorType extends TypedActionCreatorWithMatchFunction<any>>(
     options: {
       actionCreator: ActionCreatorType
@@ -464,7 +464,7 @@ export type AddListenerOverloads<
     } & AdditionalOptions,
   ): Return
 
-  /** Accepts an RTK matcher function, such as `incrementByAmount.match` */
+  /** Accepts a matcher function, such as `incrementByAmount.match` */
   <MatchFunctionType extends MatchFunction<Action>>(
     options: {
       actionCreator?: never
@@ -560,7 +560,7 @@ export type TypedAddListener<
      *
      * @example
      * ```ts
-     * import { addListener } from '@reduxjs/toolkit';
+     * import { addListener } from '@headlesskit/state-management-toolkit';
      *
      * export const addAppListener = addListener.withTypes<
      *   RootState,
@@ -625,7 +625,7 @@ export type TypedRemoveListener<
      *
      * @example
      * ```ts
-     * import { removeListener } from '@reduxjs/toolkit'
+     * import { removeListener } from '@headlesskit/state-management-toolkit'
      *
      * export const removeAppListener = removeListener.withTypes<
      *   RootState,
@@ -688,7 +688,7 @@ export type TypedStartListening<
    *
    * @example
    * ```ts
-   * import { createListenerMiddleware } from '@reduxjs/toolkit'
+   * import { createListenerMiddleware } from '@headlesskit/state-management-toolkit'
    *
    * const listenerMiddleware = createListenerMiddleware()
    *
@@ -747,7 +747,7 @@ export type TypedStopListening<
    *
    * @example
    * ```ts
-   * import { createListenerMiddleware } from '@reduxjs/toolkit'
+   * import { createListenerMiddleware } from '@headlesskit/state-management-toolkit'
    *
    * const listenerMiddleware = createListenerMiddleware()
    *
@@ -810,7 +810,7 @@ export type TypedCreateListenerEntry<
    *
    * @example
    * ```ts
-   * import { createListenerEntry } from '@reduxjs/toolkit'
+   * import { createListenerEntry } from '@headlesskit/state-management-toolkit'
    *
    * export const createAppListenerEntry = createListenerEntry.withTypes<
    *   RootState,

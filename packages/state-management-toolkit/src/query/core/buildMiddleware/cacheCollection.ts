@@ -1,7 +1,7 @@
 import { getEndpointDefinition } from '../../apiTypes'
 import type { QueryDefinition } from '../../endpointDefinitions'
 import type { ConfigState, QueryCacheKey, QuerySubState } from '../apiState'
-import { isAnyOf } from '../rtkImports'
+import { isAnyOf } from '../toolkitImports'
 import type {
   ApiMiddlewareInternalHandler,
   InternalHandlerBuilder,
@@ -16,7 +16,7 @@ export type ReferenceCacheCollection = never
  * @example
  * ```ts
  * // codeblock-meta title="keepUnusedDataFor example"
- * import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react'
+ * import { createApi, fetchBaseQuery } from '@headlesskit/state-management-toolkit'
  * interface Post {
  *   id: number
  *   name: string
@@ -40,7 +40,7 @@ export type CacheCollectionQueryExtraOptions = {
   /**
    * Overrides the api-wide definition of `keepUnusedDataFor` for this endpoint only. _(This value is in seconds.)_
    *
-   * This is how long RTK Query will keep your data cached for **after** the last component unsubscribes. For example, if you query an endpoint, then unmount the component, then mount another component that makes the same request within the given time frame, the most recent value will be served from the cache.
+   * This is how long the query layer will keep your data cached for **after** the last component unsubscribes. For example, if you query an endpoint, then unmount the component, then mount another component that makes the same request within the given time frame, the most recent value will be served from the cache.
    */
   keepUnusedDataFor?: number
 }

@@ -32,7 +32,7 @@ interface EntityState<T, Id extends EntityId> {
 }
 ```
 
-Storing collections this way (rather than a plain array) gives O(1) lookup-by-ID via `entities[id]`, while `ids` preserves ordering — the classic "normalized state" pattern recommended throughout Redux's own documentation, here fully automated.
+Storing collections this way (rather than a plain array) gives O(1) lookup-by-ID via `entities[id]`, while `ids` preserves ordering — the classic "normalized state" pattern, here fully automated.
 
 ## Basic usage with createSlice
 

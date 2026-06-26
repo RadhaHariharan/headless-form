@@ -33,7 +33,7 @@ export type ActionMatcherDescriptionCollection<S> = Array<
  * A *case reducer* is a reducer function for a specific action type. Case
  * reducers can be composed to full reducers using `createReducer()`.
  *
- * Unlike a normal Redux reducer, a case reducer is never called with an
+ * Unlike a normal reducer, a case reducer is never called with an
  * `undefined` state to determine the initial state. Instead, the initial
  * state is explicitly specified as an argument to `createReducer()`.
  *
@@ -96,8 +96,8 @@ export type ReducerWithInitialState<S extends NotFunction<any>> = Reducer<S> & {
  *   case reducers via calls to `builder.addCase(actionCreatorOrType, reducer)`.
  * @example
  * ```ts
- * import type { PayloadAction, UnknownAction } from '@reduxjs/toolkit';
- * import { createAction, createReducer } from '@reduxjs/toolkit';
+ * import type { PayloadAction, UnknownAction } from '@headlesskit/state-management-toolkit';
+ * import { createAction, createReducer } from '@headlesskit/state-management-toolkit';
  *
  * const increment = createAction<number>('increment');
  * const decrement = createAction<number>('decrement');
@@ -140,7 +140,7 @@ export function createReducer<S extends NotFunction<any>>(
   if (process.env.NODE_ENV !== 'production') {
     if (typeof mapOrBuilderCallback === 'object') {
       throw new Error(
-        "The object notation for `createReducer` has been removed. Please use the 'builder callback' notation instead: https://redux-toolkit.js.org/api/createReducer",
+        "The object notation for `createReducer` has been removed. Please use the 'builder callback' notation instead.",
       )
     }
   }

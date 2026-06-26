@@ -2,7 +2,7 @@
 
 **File:** `src/query/standardSchema.ts`
 
-Implements RTK Query's runtime schema validation — letting [endpoint definitions](./05-endpoint-definitions) declare `argSchema`/`responseSchema`/`errorResponseSchema`/`metaSchema`/`rawResponseSchema`/`rawErrorResponseSchema` using **any** validation library that implements the [Standard Schema](https://github.com/standard-schema/standard-schema) spec (Zod, Valibot, ArkType, and others all support it) — RTK Query itself depends on none of them directly.
+Implements this query layer's runtime schema validation — letting [endpoint definitions](./05-endpoint-definitions) declare `argSchema`/`responseSchema`/`errorResponseSchema`/`metaSchema`/`rawResponseSchema`/`rawErrorResponseSchema` using **any** validation library that implements the [Standard Schema](https://github.com/standard-schema/standard-schema) spec (Zod, Valibot, ArkType, and others all support it) — the query layer itself depends on none of them directly.
 
 ## `NamedSchemaError`
 

@@ -1,6 +1,6 @@
 import type { Middleware, UnknownAction } from '@headlesskit/state-management'
-import type { ThunkMiddleware } from 'redux-thunk'
-import { thunk as thunkMiddleware, withExtraArgument } from 'redux-thunk'
+import type { ThunkMiddleware } from './thunkMiddlewareTypes'
+import { thunk as thunkMiddleware, withExtraArgument } from './thunkMiddleware'
 import type { ActionCreatorInvariantMiddlewareOptions } from './actionCreatorInvariantMiddleware'
 import { createActionCreatorInvariantMiddleware } from './actionCreatorInvariantMiddleware'
 import type { ImmutableStateInvariantMiddlewareOptions } from './immutableStateInvariantMiddleware'

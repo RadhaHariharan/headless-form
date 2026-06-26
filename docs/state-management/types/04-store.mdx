@@ -68,7 +68,7 @@ interface Observable<T> {
 }
 ```
 
-The [TC39 Observable proposal](https://github.com/tc39/proposal-observable) shapes implemented by `store[Symbol.observable]()` — see the [$$observable](../utils/06-symbol-observable) doc for the full mechanism and an RxJS interop example. `Observer<T>.next` is optional because the spec technically allows observers with no `next` handler (e.g. one only interested in completion/error, which Redux's store never emits anyway since it never "completes").
+The [TC39 Observable proposal](https://github.com/tc39/proposal-observable) shapes implemented by `store[Symbol.observable]()` — see the [$$observable](../utils/06-symbol-observable) doc for the full mechanism and an RxJS interop example. `Observer<T>.next` is optional because the spec technically allows observers with no `next` handler (e.g. one only interested in completion/error, which this package's store never emits anyway since it never "completes").
 
 ## `Store<S, A, StateExt>`
 

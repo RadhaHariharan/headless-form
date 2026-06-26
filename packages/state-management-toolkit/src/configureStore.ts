@@ -13,7 +13,7 @@ import {
   compose,
   combineReducers,
   isPlainObject,
-} from './reduxImports'
+} from './stateManagementImports'
 import type { DevToolsEnhancerOptions as DevToolsOptions } from './devtoolsExtension'
 import { composeWithDevTools } from './devtoolsExtension'
 
@@ -51,18 +51,17 @@ export interface ConfigureStoreOptions<
   reducer: Reducer<S, A, P> | ReducersMapObject<S, A, P>
 
   /**
-   * An array of Redux middleware to install, or a callback receiving `getDefaultMiddleware` and returning a Tuple of middleware.
+   * An array of middleware to install, or a callback receiving `getDefaultMiddleware` and returning a Tuple of middleware.
    * If not supplied, defaults to the set of middleware returned by `getDefaultMiddleware()`.
    *
    * @example `middleware: (gDM) => gDM().concat(logger, apiMiddleware, yourCustomMiddleware)`
-   * @see https://redux-toolkit.js.org/api/getDefaultMiddleware#intended-usage
    */
   middleware?: (getDefaultMiddleware: GetDefaultMiddleware<S>) => M
 
   /**
-   * Whether to enable Redux DevTools integration. Defaults to `true`.
+   * Whether to enable DevTools integration. Defaults to `true`.
    *
-   * Additional configuration can be done by passing Redux DevTools options
+   * Additional configuration can be done by passing DevTools options
    */
   devTools?: boolean | DevToolsOptions
 
@@ -72,7 +71,7 @@ export interface ConfigureStoreOptions<
   duplicateMiddlewareCheck?: boolean
 
   /**
-   * The initial state, same as Redux's createStore.
+   * The initial state, same as `createStore`.
    * You may optionally specify it to hydrate the state
    * from the server in universal apps, or to restore a previously serialized
    * user session. If you use `combineReducers()` to produce the root reducer
@@ -83,7 +82,7 @@ export interface ConfigureStoreOptions<
   preloadedState?: P
 
   /**
-   * The store enhancers to apply. See Redux's `createStore()`.
+   * The store enhancers to apply. See `createStore()`.
    * All enhancers will be included before the DevTools Extension enhancer.
    * If you need to customize the order of enhancers, supply a callback
    * function that will receive a `getDefaultEnhancers` function that returns a Tuple,
@@ -98,7 +97,7 @@ export type Middlewares<S> = ReadonlyArray<Middleware<{}, S>>
 type Enhancers = ReadonlyArray<StoreEnhancer>
 
 /**
- * A Redux store returned by `configureStore()`. Supports dispatching
+ * A store returned by `configureStore()`. Supports dispatching
  * side-effectful _thunks_ in addition to plain actions.
  *
  * @public
@@ -111,10 +110,10 @@ export type EnhancedStore<
   Store<S, A, UnknownIfNonSpecific<ExtractStateExtensions<E>>>
 
 /**
- * A friendly abstraction over the standard Redux `createStore()` function.
+ * A friendly abstraction over the standard `createStore()` function.
  *
  * @param options The store configuration.
- * @returns A configured Redux store.
+ * @returns A configured store.
  *
  * @public
  */
@@ -198,10 +197,10 @@ export function configureStore<
 
   if (devTools) {
     finalCompose = composeWithDevTools({
-      // Enable capture of stack traces for dispatched Redux actions
+      // Enable capture of stack traces for dispatched actions
       trace: process.env.NODE_ENV !== 'production',
       ...(typeof devTools === 'object' && devTools),
-    })
+    }) as typeof compose
   }
 
   const middlewareEnhancer = applyMiddleware(...finalMiddleware)

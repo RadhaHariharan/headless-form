@@ -17,7 +17,7 @@ function createSlice<State, CaseReducers, Name extends string, Selectors, Reduce
 | Option | Type | Required | Description |
 |--------|------|----------|--------------|
 | `name` | `string` | yes | Namespaces every generated action's `type` as `` `${name}/${reducerKey}` ``. Throws if omitted/falsy. |
-| `reducerPath` | `string` | no, defaults to `name` | The key this slice's state is expected to live at in the root state, used by `selectSlice`/`selectors` and by [combineSlices](./06-combine-slices)'s lazy injection. Only needs to differ from `name` in advanced multi-instance scenarios. |
+| `reducerPath` | `string` | no, defaults to `name` | The key this slice's state is expected to live at in the root state, used by `selectSlice`/`selectors` and by [combineSlices](./08-combine-slices)'s lazy injection. Only needs to differ from `name` in advanced multi-instance scenarios. |
 | `initialState` | `State \| (() => State)` | yes | Same lazy-initializer behavior as [createReducer](./02-create-reducer). Logs a dev-mode console error (not a throw) if `undefined` — almost always a typo. |
 | `reducers` | object **or** `(creators) => object` | yes | See [the two reducers forms](#the-reducers-option) below. |
 | `extraReducers` | `(builder) => void` | no | A [createReducer](./02-create-reducer)-style builder callback for handling actions defined *outside* this slice (e.g. another slice's actions, or a thunk's lifecycle actions) — see [Advanced: extraReducers](#advanced-extrareducers-for-cross-slice-actions). |
@@ -92,7 +92,7 @@ todosSlice.actions.add('Buy milk'); // uses the prepare callback
 todosSlice.actions.fetchTodos('user-1'); // dispatchable thunk, same as createAsyncThunk's result
 ```
 
-`create.asyncThunk`'s second argument accepts `pending`/`fulfilled`/`rejected`/`settled` case-reducer hooks directly inline — equivalent to manually creating the thunk with [createAsyncThunk](./05-create-async-thunk) and then registering its three lifecycle actions via `extraReducers`, but co-located with the rest of the slice's reducers.
+`create.asyncThunk`'s second argument accepts `pending`/`fulfilled`/`rejected`/`settled` case-reducer hooks directly inline — equivalent to manually creating the thunk with [createAsyncThunk](./06-create-async-thunk) and then registering its three lifecycle actions via `extraReducers`, but co-located with the rest of the slice's reducers.
 
 > **Note:** `create.asyncThunk` requires the `asyncThunkCreator` injection to be enabled — pass it to a custom `buildCreateSlice({ creators: { asyncThunk: asyncThunkCreator } })` if you're using the lower-level slice builder; the package's default exported `createSlice` already has this wired up.
 
@@ -165,7 +165,7 @@ counterSlice.selectSlice({ counter: { value: 5 } }); // { value: 5 }
 
 ## `slice.injectInto()` — lazy-loaded slices
 
-Hands this slice off to a [combineSlices](./06-combine-slices)-produced combined reducer for runtime/lazy registration (code-splitting feature slices). See [combineSlices](./06-combine-slices) for the full pattern; `injectInto` returns an `InjectedSlice` whose selectors gracefully fall back to the slice's own initial state if the slice hasn't actually been injected yet (rather than throwing on `undefined`).
+Hands this slice off to a [combineSlices](./08-combine-slices)-produced combined reducer for runtime/lazy registration (code-splitting feature slices). See [combineSlices](./08-combine-slices) for the full pattern; `injectInto` returns an `InjectedSlice` whose selectors gracefully fall back to the slice's own initial state if the slice hasn't actually been injected yet (rather than throwing on `undefined`).
 
 ## Common pitfalls
 

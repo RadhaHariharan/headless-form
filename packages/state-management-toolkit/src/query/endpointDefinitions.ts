@@ -69,14 +69,14 @@ export type EndpointDefinitionWithQuery<
   RawResultType extends BaseQueryResult<BaseQuery>,
 > = {
   /**
-   * `query` can be a function that returns either a `string` or an `object` which is passed to your `baseQuery`. If you are using [fetchBaseQuery](./fetchBaseQuery), this can return either a `string` or an `object` of properties in `FetchArgs`. If you use your own custom [`baseQuery`](../../rtk-query/usage/customizing-queries), you can customize this behavior to your liking.
+   * `query` can be a function that returns either a `string` or an `object` which is passed to your `baseQuery`. If you are using [fetchBaseQuery](./fetchBaseQuery), this can return either a `string` or an `object` of properties in `FetchArgs`. If you use your own custom `baseQuery`, you can customize this behavior to your liking.
    *
    * @example
    *
    * ```ts
    * // codeblock-meta title="query example"
    *
-   * import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
+   * import { createApi, fetchBaseQuery } from '@headlesskit/state-management-toolkit';
    *
    * interface Post {
    *   id: number;
@@ -133,7 +133,7 @@ export type EndpointDefinitionWithQuery<
    * @example
    * ```ts
    * // codeblock-meta no-transpile
-   * import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
+   * import { createApi, fetchBaseQuery } from '@headlesskit/state-management-toolkit';
    * import * as v from 'valibot';
    *
    * const postSchema = v.object({ id: v.number(), name: v.string() });
@@ -159,7 +159,7 @@ export type EndpointDefinitionWithQuery<
    * @example
    * ```ts
    * // codeblock-meta no-transpile
-   * import { createApi } from '@reduxjs/toolkit/query/react';
+   * import { createApi } from '@headlesskit/state-management-toolkit';
    * import { baseQueryErrorSchema, customBaseQuery } from './customBaseQuery';
    *
    * interface Post {
@@ -194,7 +194,7 @@ export type EndpointDefinitionWithQueryFn<
    * ```ts
    * // codeblock-meta title="Basic queryFn example"
    *
-   * import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
+   * import { createApi, fetchBaseQuery } from '@headlesskit/state-management-toolkit';
    *
    * interface Post {
    *   id: number;
@@ -283,7 +283,7 @@ interface CommonEndpointDefinition<
    * @example
    * ```ts
    * // codeblock-meta no-transpile
-   * import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
+   * import { createApi, fetchBaseQuery } from '@headlesskit/state-management-toolkit';
    * import * as v from 'valibot';
    *
    * interface Post {
@@ -310,7 +310,7 @@ interface CommonEndpointDefinition<
    * @example
    * ```ts
    * // codeblock-meta no-transpile
-   * import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
+   * import { createApi, fetchBaseQuery } from '@headlesskit/state-management-toolkit';
    * import * as v from 'valibot';
    *
    * const postSchema = v.object({ id: v.number(), name: v.string() });
@@ -335,7 +335,7 @@ interface CommonEndpointDefinition<
    * @example
    * ```ts
    * // codeblock-meta no-transpile
-   * import { createApi } from '@reduxjs/toolkit/query/react';
+   * import { createApi } from '@headlesskit/state-management-toolkit';
    * import { baseQueryErrorSchema, customBaseQuery } from './customBaseQuery';
    *
    * interface Post {
@@ -362,7 +362,7 @@ interface CommonEndpointDefinition<
    * @example
    * ```ts
    * // codeblock-meta no-transpile
-   * import { createApi } from '@reduxjs/toolkit/query/react';
+   * import { createApi } from '@headlesskit/state-management-toolkit';
    * import { baseQueryMetaSchema, customBaseQuery } from './customBaseQuery';
    *
    * interface Post {
@@ -392,8 +392,6 @@ interface CommonEndpointDefinition<
    * every request will cause subscribed components to rerender, even when the data has not changed.
    *
    * @default true
-   *
-   * @see https://redux-toolkit.js.org/api/other-exports#copywithstructuralsharing
    */
   structuralSharing?: boolean
 
@@ -410,7 +408,7 @@ interface CommonEndpointDefinition<
    * @example
    * ```ts
    * // codeblock-meta no-transpile
-   * import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
+   * import { createApi, fetchBaseQuery } from '@headlesskit/state-management-toolkit';
    *
    * interface Post {
    *   id: number;
@@ -440,7 +438,7 @@ interface CommonEndpointDefinition<
    * @example
    * ```ts
    * // codeblock-meta no-transpile
-   * import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
+   * import { createApi, fetchBaseQuery } from '@headlesskit/state-management-toolkit';
    * import * as v from 'valibot';
    *
    * interface Post {
@@ -475,7 +473,7 @@ interface CommonEndpointDefinition<
    * @example
    * ```ts
    * // codeblock-meta no-transpile
-   * import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
+   * import { createApi, fetchBaseQuery } from '@headlesskit/state-management-toolkit';
    * import * as v from 'valibot';
    *
    * interface Post {
@@ -644,7 +642,7 @@ export interface QueryExtraOptions<
    * ```ts
    * // codeblock-meta title="providesTags example"
    *
-   * import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
+   * import { createApi, fetchBaseQuery } from '@headlesskit/state-management-toolkit';
    *
    * interface Post {
    *   id: number;
@@ -698,7 +696,7 @@ export interface QueryExtraOptions<
    * ```ts
    * // codeblock-meta title="serializeQueryArgs : exclude value"
    *
-   * import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
+   * import { createApi, fetchBaseQuery } from '@headlesskit/state-management-toolkit';
    *
    * interface Post {
    *   id: number;
@@ -752,7 +750,7 @@ export interface QueryExtraOptions<
    * If supplied, no automatic structural sharing will be applied - it's up to
    * you to update the cache appropriately.
    *
-   * Since RTKQ normally replaces cache entries with the new response, you will usually
+   * Since this query layer normally replaces cache entries with the new response, you will usually
    * need to use this with the `serializeQueryArgs` or `forceRefetch` options to keep
    * an existing cache entry so that it can be updated.
    *
@@ -772,7 +770,7 @@ export interface QueryExtraOptions<
    * ```ts
    * // codeblock-meta title="merge: pagination"
    *
-   * import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
+   * import { createApi, fetchBaseQuery } from '@headlesskit/state-management-toolkit';
    *
    * interface Post {
    *   id: number;
@@ -815,7 +813,7 @@ export interface QueryExtraOptions<
   /**
    * Check to see if the endpoint should force a refetch in cases where it normally wouldn't.
    * This is primarily useful for "infinite scroll" / pagination use cases where
-   * RTKQ is keeping a single cache entry that is added to over time, in combination
+   * This query layer keeps a single cache entry that is added to over time, in combination
    * with `serializeQueryArgs` returning a fixed cache key and a `merge` callback
    * set to add incoming data to the cache entry each time.
    *
@@ -823,7 +821,7 @@ export interface QueryExtraOptions<
    *
    * ```ts
    * // codeblock-meta title="forceRefresh: pagination"
-   * import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
+   * import { createApi, fetchBaseQuery } from '@headlesskit/state-management-toolkit';
    *
    * interface Post {
    *   id: number;
@@ -964,7 +962,7 @@ export interface InfiniteQueryExtraOptions<
    *
    * ```ts
    * // codeblock-meta title="infiniteQueryOptions example"
-   * import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
+   * import { createApi, fetchBaseQuery } from '@headlesskit/state-management-toolkit';
    *
    * type Pokemon = {
    *   id: string;
@@ -1015,7 +1013,7 @@ export interface InfiniteQueryExtraOptions<
    *
    * ```ts
    * // codeblock-meta title="serializeQueryArgs : exclude value"
-   * import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
+   * import { createApi, fetchBaseQuery } from '@headlesskit/state-management-toolkit';
    *
    * interface Post {
    *   id: number;
@@ -1162,7 +1160,7 @@ export interface MutationExtraOptions<
    *
    * ```ts
    * // codeblock-meta title="invalidatesTags example"
-   * import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
+   * import { createApi, fetchBaseQuery } from '@headlesskit/state-management-toolkit';
    *
    * interface Post {
    *   id: number;
@@ -1320,7 +1318,7 @@ export type EndpointBuilder<
    * @example
    * ```ts
    * // codeblock-meta title="Example of all query endpoint options"
-   * import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
+   * import { createApi, fetchBaseQuery } from '@headlesskit/state-management-toolkit';
    *
    * interface Post {
    *   id: number;
@@ -1407,7 +1405,7 @@ export type EndpointBuilder<
    * @example
    * ```ts
    * // codeblock-meta title="Example of all mutation endpoint options"
-   * import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
+   * import { createApi, fetchBaseQuery } from '@headlesskit/state-management-toolkit';
    *
    * interface Post {
    *   id: number;

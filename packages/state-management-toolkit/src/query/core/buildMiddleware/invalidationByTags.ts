@@ -3,7 +3,7 @@ import {
   isFulfilled,
   isRejected,
   isRejectedWithValue,
-} from '../rtkImports'
+} from '../toolkitImports'
 
 import type {
   EndpointDefinitions,

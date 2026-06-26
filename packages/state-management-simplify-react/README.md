@@ -2,8 +2,6 @@
 
 React bindings for `@headlesskit/state-management-simplify`.
 
-This is @headlesskit's port of [Zustand](https://github.com/pmndrs/zustand)'s React bindings — same `create`/`useStore` hook API, same behavior, published under the @headlesskit scope alongside this monorepo's other packages. The original work is by Paul Henschel and the pmndrs collective, MIT licensed. Consumers who already know Zustand can use this as a drop-in.
-
 ## Install
 
 ```bash
@@ -20,10 +18,10 @@ yarn add @headlesskit/state-management-simplify-react
 
 `@headlesskit/state-management-simplify-react` wraps `@headlesskit/state-management-simplify`'s vanilla store in React hooks, so you get a store and a hook in one call instead of wiring up `useSyncExternalStore` yourself:
 
-- **`create`** — the primary entry point. Pass a state-creator function and get back a hook (`useBoundStore`) that's also a store (`getState`/`setState`/`subscribe`), exactly like Zustand's `create`.
+- **`create`** — the primary entry point. Pass a state-creator function and get back a hook (`useBoundStore`) that's also a store (`getState`/`setState`/`subscribe`).
 - **`useStore`** — the lower-level hook for subscribing a component to an existing vanilla store created with `createStore`, with an optional selector for slicing state.
 - **`useShallow`** — a selector-wrapping hook that memoizes its result with shallow equality, so selecting multiple fields from state doesn't cause extra re-renders.
-- **`createWithEqualityFn` / `useStoreWithEqualityFn`** — the same `create`/`useStore` pattern, but accepting a custom equality function per-call instead of relying on `Object.is` reference equality, matching Zustand's `traditional` entry point for codebases migrating off `zustand/traditional`.
+- **`createWithEqualityFn` / `useStoreWithEqualityFn`** — the same `create`/`useStore` pattern, but accepting a custom equality function per-call instead of relying on `Object.is` reference equality.
 
 ## Quick start
 
@@ -81,5 +79,3 @@ const { count, increment } = useCounterStore(
 ## License
 
 MIT — see [LICENSE](../../LICENSE) for details.
-
-This package is a direct port of [Zustand](https://github.com/pmndrs/zustand)'s React bindings, copyright Paul Henschel and contributors, also MIT licensed — the original copyright and license terms are preserved per the MIT license's terms.

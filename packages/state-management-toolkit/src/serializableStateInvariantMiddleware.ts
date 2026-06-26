@@ -1,5 +1,5 @@
 import type { Middleware } from '@headlesskit/state-management'
-import { isAction, isPlainObject } from './reduxImports'
+import { isAction, isPlainObject } from './stateManagementImports'
 import { getTimeMeasureUtils } from './utils'
 
 /**
@@ -243,8 +243,6 @@ export function createSerializableStateInvariantMiddleware(
               value,
               '\nTake a look at the logic that dispatched this action: ',
               action,
-              '\n(See https://redux.js.org/faq/actions#why-should-type-be-a-string-or-at-least-serializable-why-should-my-action-types-be-constants)',
-              '\n(To allow non-serializable values see: https://redux-toolkit.js.org/usage/usage-guide#working-with-non-serializable-data)',
             )
           }
         })
@@ -270,8 +268,7 @@ export function createSerializableStateInvariantMiddleware(
               `A non-serializable value was detected in the state, in the path: \`${keyPath}\`. Value:`,
               value,
               `
-Take a look at the reducer(s) handling this action type: ${action.type}.
-(See https://redux.js.org/faq/organizing-state#can-i-put-functions-promises-or-other-non-serializable-items-in-my-store-state)`,
+Take a look at the reducer(s) handling this action type: ${action.type}.`,
             )
           }
         })

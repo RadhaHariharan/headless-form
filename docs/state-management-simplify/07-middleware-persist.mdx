@@ -10,9 +10,9 @@ import { persist, createJSONStorage } from '@headlesskit/state-management-simpli
 
 ```typescript
 persist<T, U = T>(
-  initializer: StateCreator<T, [...Mps, ['zustand/persist', unknown]], Mcs>,
+  initializer: StateCreator<T, [...Mps, ['headlesskit/persist', unknown]], Mcs>,
   options: PersistOptions<T, U>,
-): StateCreator<T, Mps, [['zustand/persist', U], ...Mcs]>
+): StateCreator<T, Mps, [['headlesskit/persist', U], ...Mcs]>
 ```
 
 | Parameter | Type | Required | Description |

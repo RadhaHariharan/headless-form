@@ -1,7 +1,7 @@
 {
   "name": "@headlesskit/query-core",
   "version": "0.1.0",
-  "description": "The framework agnostic core that powers TanStack Query — vendored in plain JS",
+  "description": "Framework-agnostic async state and cache management engine",
   "license": "MIT",
   "type": "module",
   "exports": {

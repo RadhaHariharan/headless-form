@@ -31,7 +31,7 @@ function getSwitchProps(form, path) {
 }
 ```
 
-Calls the underlying `getInputProps(path, { type: 'checkbox' })` and reads **whichever** of `checked`/`defaultChecked` is present (exactly one is, depending on the form's `mode` — see [createFormStore](../../forms/store/01-create-form-store)), then unconditionally exposes it as `value`. This is necessary because React Native's `<Switch>` component has **no uncontrolled mode at all** — there's no `defaultValue` prop on `<Switch>` the way there's `defaultChecked` on a DOM checkbox — so regardless of whether the *form* is in controlled or uncontrolled mode, the `<Switch>` component itself must always receive a `value`.
+Calls the underlying `getInputProps(path, { type: 'checkbox' })` and reads **whichever** of `checked`/`defaultChecked` is present (exactly one is, depending on the form's `mode` — see [createFormStore](../forms/store/01-create-form-store)), then unconditionally exposes it as `value`. This is necessary because React Native's `<Switch>` component has **no uncontrolled mode at all** — there's no `defaultValue` prop on `<Switch>` the way there's `defaultChecked` on a DOM checkbox — so regardless of whether the *form* is in controlled or uncontrolled mode, the `<Switch>` component itself must always receive a `value`.
 
 `withError: false, withFocus: false` are hardcoded — `getSwitchProps`'s result type (`GetSwitchPropsResult`) deliberately has no `error`/`onFocus`/`onBlur` fields at all (unlike [getTextInputProps](./02-get-text-input-props)), since a switch typically doesn't render an inline error/focus state the same way a text field does. If you need error display for a switch field, read `form.errors[path]` separately.
 

@@ -11,7 +11,7 @@ export {
 export { shallow } from './shallow.js'
 
 export {
-  redux,
+  reducerMiddleware,
   devtools,
   type DevtoolsOptions,
   type NamedSet,

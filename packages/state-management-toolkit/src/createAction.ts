@@ -1,4 +1,4 @@
-import { isAction } from './reduxImports'
+import { isAction } from './stateManagementImports'
 import type {
   IsUnknownOrNonInferrable,
   IfMaybeUndefined,
@@ -80,7 +80,7 @@ export type _ActionCreatorWithPreparedPayload<
 /**
  * Basic type for all action creators.
  *
- * @inheritdoc {redux#ActionCreator}
+ * @inheritdoc {@headlesskit/state-management#ActionCreator}
  */
 export type BaseActionCreator<P, T extends string, M = never, E = never> = {
   type: T
@@ -96,7 +96,7 @@ export type BaseActionCreator<P, T extends string, M = never, E = never> = {
  * @typeParam E optional `error` type
  * @typeParam M optional `meta` type
  *
- * @inheritdoc {redux#ActionCreator}
+ * @inheritdoc {@headlesskit/state-management#ActionCreator}
  *
  * @public
  */
@@ -108,7 +108,7 @@ export interface ActionCreatorWithPreparedPayload<
   M = never,
 > extends BaseActionCreator<P, T, M, E> {
   /**
-   * Calling this {@link redux#ActionCreator} with `Args` will return
+   * Calling this {@link @headlesskit/state-management#ActionCreator} with `Args` will return
    * an Action with a payload of type `P` and (depending on the `PrepareAction`
    * method used) a `meta`- and `error` property of types `M` and `E` respectively.
    */
@@ -118,14 +118,14 @@ export interface ActionCreatorWithPreparedPayload<
 /**
  * An action creator of type `T` that takes an optional payload of type `P`.
  *
- * @inheritdoc {redux#ActionCreator}
+ * @inheritdoc {@headlesskit/state-management#ActionCreator}
  *
  * @public
  */
 export interface ActionCreatorWithOptionalPayload<P, T extends string = string>
   extends BaseActionCreator<P, T> {
   /**
-   * Calling this {@link redux#ActionCreator} with an argument will
+   * Calling this {@link @headlesskit/state-management#ActionCreator} with an argument will
    * return a {@link PayloadAction} of type `T` with a payload of `P`.
    * Calling it without an argument will return a PayloadAction with a payload of `undefined`.
    */
@@ -135,14 +135,14 @@ export interface ActionCreatorWithOptionalPayload<P, T extends string = string>
 /**
  * An action creator of type `T` that takes no payload.
  *
- * @inheritdoc {redux#ActionCreator}
+ * @inheritdoc {@headlesskit/state-management#ActionCreator}
  *
  * @public
  */
 export interface ActionCreatorWithoutPayload<T extends string = string>
   extends BaseActionCreator<undefined, T> {
   /**
-   * Calling this {@link redux#ActionCreator} will
+   * Calling this {@link @headlesskit/state-management#ActionCreator} will
    * return a {@link PayloadAction} of type `T` with a payload of `undefined`
    */
   (noArgument: void): PayloadAction<undefined, T>
@@ -151,14 +151,14 @@ export interface ActionCreatorWithoutPayload<T extends string = string>
 /**
  * An action creator of type `T` that requires a payload of type P.
  *
- * @inheritdoc {redux#ActionCreator}
+ * @inheritdoc {@headlesskit/state-management#ActionCreator}
  *
  * @public
  */
 export interface ActionCreatorWithPayload<P, T extends string = string>
   extends BaseActionCreator<P, T> {
   /**
-   * Calling this {@link redux#ActionCreator} with an argument will
+   * Calling this {@link @headlesskit/state-management#ActionCreator} with an argument will
    * return a {@link PayloadAction} of type `T` with a payload of `P`
    */
   (payload: P): PayloadAction<P, T>
@@ -167,7 +167,7 @@ export interface ActionCreatorWithPayload<P, T extends string = string>
 /**
  * An action creator of type `T` whose `payload` type could not be inferred. Accepts everything as `payload`.
  *
- * @inheritdoc {redux#ActionCreator}
+ * @inheritdoc {@headlesskit/state-management#ActionCreator}
  *
  * @public
  */
@@ -175,7 +175,7 @@ export interface ActionCreatorWithNonInferrablePayload<
   T extends string = string,
 > extends BaseActionCreator<unknown, T> {
   /**
-   * Calling this {@link redux#ActionCreator} with an argument will
+   * Calling this {@link @headlesskit/state-management#ActionCreator} with an argument will
    * return a {@link PayloadAction} of type `T` with a payload
    * of exactly the type of the argument.
    */
@@ -286,7 +286,7 @@ export function createAction(type: string, prepareAction?: Function): any {
 }
 
 /**
- * Returns true if value is an RTK-like action creator, with a static type property and match method.
+ * Returns true if value is an matcher-style action creator, with a static type property and match method.
  */
 export function isActionCreator(
   action: unknown,

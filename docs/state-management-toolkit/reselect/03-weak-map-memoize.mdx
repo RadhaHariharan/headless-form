@@ -1,0 +1,35 @@
+# weakMapMemoize
+
+**File:** `src/reselect/weakMapMemoize.ts`
+
+The default memoization strategy used by `createSelector`. Caches results in a tree of nested `WeakMap`s keyed by each call's arguments (by reference), rather than in a fixed-size array of recent calls.
+
+```typescript
+import { weakMapMemoize } from '@headlesskit/state-management-toolkit';
+```
+
+## What it actually does
+
+Each argument position gets its own level of `WeakMap` nesting: for a function called as `fn(a, b, c)`, the cache is structurally `WeakMap<a, WeakMap<b, WeakMap<c, result>>>`. Looking up a previously-seen `(a, b, c)` combination is an O(1) walk down that chain, and because `WeakMap` keys are held weakly, entries for arguments that are no longer referenced anywhere else in the app are automatically garbage-collected — there's no manual cache eviction or `maxSize` to configure, unlike [`lruMemoize`](04-lru-memoize).
+
+This is why `weakMapMemoize` is the default for `createSelector`: it scales naturally to selectors that get called repeatedly with many different (but still object/array) argument combinations — e.g. a selector factory used once per list item — without the cache growing unbounded or needing manual tuning.
+
+## `WeakMapMemoizeOptions`
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `resultEqualityCheck` | `(a, b) => boolean` | If provided, a newly computed result is compared against the previous result with this function before being cached/returned. If they're considered equal, the *old* reference is returned instead of the new one — useful when `combiner` derives a new array/object each call (e.g. `todos.map(t => t.id)`) but the values inside are unchanged, so callers relying on reference equality (like React) don't see a "change." |
+
+```typescript
+import { createSelectorCreator, weakMapMemoize } from '@headlesskit/state-management-toolkit';
+import { shallowEqual } from '@headlesskit/state-management';
+
+const createShallowEqualSelector = createSelectorCreator(weakMapMemoize, {
+  resultEqualityCheck: shallowEqual,
+});
+```
+
+## Common pitfalls
+
+- **Only objects/functions can be `WeakMap` keys.** If a selector is called with primitive arguments (strings, numbers, booleans), `weakMapMemoize` falls back to a different internal cache layer for those positions — it still works, but the "automatically garbage-collected" property only applies to the object/array/function argument positions.
+- **Caching is per argument *reference*, not per value.** Two structurally identical but distinct objects (`{ id: 1 }` created twice) are different cache keys — this is the same reference-equality tradeoff that motivates `resultEqualityCheck` and that `createSelector`'s memoization model relies on throughout.

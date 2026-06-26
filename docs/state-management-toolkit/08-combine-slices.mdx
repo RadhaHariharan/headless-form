@@ -14,7 +14,7 @@ function combineSlices(
 
 Accepts any mix of:
 - `Slice` objects (from [createSlice](./05-create-slice)) — uses `slice.reducerPath` and `slice.reducer` automatically.
-- Plain `{ reducerPath, reducer }` "slice-like" objects — lets you combine hand-written reducers (or RTK Query API instances, which have this exact shape) alongside real slices.
+- Plain `{ reducerPath, reducer }` "slice-like" objects — lets you combine hand-written reducers (or query API instances, which have this exact shape) alongside real slices.
 
 **Returns:** a normal reducer function (drop straight into `configureStore({ reducer: combinedReducer })`), **plus** extra methods: `.inject(slice, config?)`, `.withLazyLoadedSlices<T>()`, `.selector(selectorFn, selectState?)`.
 
@@ -75,7 +75,7 @@ const selectCounterValue = rootReducer.inject(counterSlice).selector((state) => 
 });
 ```
 
-Internally, the first argument passed to `selectorFn` is wrapped in a `Proxy` that falls back to each injected slice's `getInitialState()` for any key that hasn't actually appeared in state yet (e.g. because no action has been dispatched since injection, or — in defensive/lazy-loading edge cases — injection hasn't run at all). Use `selector.original(proxiedState)` inside the selector body to get the real, un-proxied state object back for cases where you need exact reference equality (e.g. passing it into a memoized `reselect` selector that does its own caching).
+Internally, the first argument passed to `selectorFn` is wrapped in a `Proxy` that falls back to each injected slice's `getInitialState()` for any key that hasn't actually appeared in state yet (e.g. because no action has been dispatched since injection, or — in defensive/lazy-loading edge cases — injection hasn't run at all). Use `selector.original(proxiedState)` inside the selector body to get the real, un-proxied state object back for cases where you need exact reference equality (e.g. passing it into a memoized selector that does its own caching).
 
 If your combined reducer is nested inside a larger root reducer (not the literal root state), pass a second `selectState` callback so `.selector()` knows how to find this reducer's slice of root state:
 

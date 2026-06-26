@@ -8,11 +8,8 @@ export default function Details() {
         <a href="https://github.com/RadhaHariharan/headlesskit">Github</a>
       </nav>
       <div className="bottom">
-        <a href="https://zustand-demo.pmnd.rs/">
-          Layout inspired by the Zustand demo
-        </a>
         <div className="bottom-links">
-          <a href="https://github.com/RadhaHariharan/headlesskit/tree/main/examples/nextjs/src/app/zustand-demo">
+          <a href="https://github.com/RadhaHariharan/headlesskit/tree/main/examples/nextjs/src/app/state-demo">
             {"<Source />"}
           </a>
         </div>

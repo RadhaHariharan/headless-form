@@ -17,7 +17,7 @@ function formatProdErrorMessage(code: number): string
 **Returns:** a short string pointing to the public error code lookup table, e.g.:
 
 ```
-Minified Redux error #7; visit https://redux.js.org/Errors?code=7 for the full message or use the non-minified dev environment for full errors.
+Minified error #7; use the non-minified dev environment for the full message.
 ```
 
 ## Why error messages are minified in production at all
@@ -57,8 +57,8 @@ The long, helpful, multi-sentence messages (with full explanations and doc links
 
 ## Basic usage (you'll almost never call this directly)
 
-This exists purely to be the production half of the throw-site ternaries shown above — application code has no reason to call it directly. If you do see a minified message like `"Minified Redux error #7..."` in a production error report, the table above (or the live page at the printed URL) tells you exactly which validation failed without needing a development build to reproduce it.
+This exists purely to be the production half of the throw-site ternaries shown above — application code has no reason to call it directly. If you do see a minified message like `"Minified error #7..."` in a production error report, the table above (or the package source for that code) tells you exactly which validation failed without needing a development build to reproduce it.
 
 ## Advanced: mapping a production error code back to its cause during incident response
 
-If your error-reporting tool (Sentry, Datadog, etc.) captures a minified message like `Minified Redux error #9`, you now know — from the table above — that *some code path dispatched an action from inside a reducer*, without needing to redeploy a dev build or reproduce the bug locally first. This is the entire point of the numeric code scheme: it keeps production bundles small while still letting you diagnose the *exact* failure class from the number alone.
+If your error-reporting tool (Sentry, Datadog, etc.) captures a minified message like `Minified error #9`, you now know — from the table above — that *some code path dispatched an action from inside a reducer*, without needing to redeploy a dev build or reproduce the bug locally first. This is the entire point of the numeric code scheme: it keeps production bundles small while still letting you diagnose the *exact* failure class from the number alone.

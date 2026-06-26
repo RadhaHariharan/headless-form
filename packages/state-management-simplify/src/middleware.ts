@@ -1,4 +1,4 @@
-export { redux } from './middleware/redux.js'
+export { reducerMiddleware } from './middleware/reducer.js'
 export {
   devtools,
   type DevtoolsOptions,

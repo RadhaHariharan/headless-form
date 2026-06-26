@@ -1,14 +1,14 @@
-import { isPlainObject as _iPO } from '../core/rtkImports'
-
-// remove type guard
-const isPlainObject: (_: any) => boolean = _iPO
+import { isPlainObject } from '../core/toolkitImports'
 
 export function copyWithStructuralSharing<T>(oldObj: any, newObj: T): T
 export function copyWithStructuralSharing(oldObj: any, newObj: any): any {
+  // cast away the `obj is object` type guard so `oldObj`/`newObj` don't get
+  // narrowed to a no-index-signature `object` type below
+  const isPlain = isPlainObject as (_: any) => boolean
   if (
     oldObj === newObj ||
     !(
-      (isPlainObject(oldObj) && isPlainObject(newObj)) ||
+      (isPlain(oldObj) && isPlain(newObj)) ||
       (Array.isArray(oldObj) && Array.isArray(newObj))
     )
   ) {

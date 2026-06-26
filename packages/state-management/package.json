@@ -1,7 +1,7 @@
 {
   "name": "@headlesskit/state-management",
   "version": "5.0.1",
-  "description": "Redux: Predictable state container — ported as @headlesskit/state-management",
+  "description": "Predictable, action/reducer-based state container",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",

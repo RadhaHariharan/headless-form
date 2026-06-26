@@ -16,7 +16,7 @@ pnpm add @headlesskit/query-async-storage-persister
 yarn add @headlesskit/query-async-storage-persister
 ```
 
-This package depends on [`@headlesskit/query-core`](../query-core) and [`@headlesskit/query-persist-client-core`](../query-persist-client-core), and is **API-compatible with TanStack Query's async-storage-persister package**.
+This package depends on [`@headlesskit/query-core`](../query-core) and [`@headlesskit/query-persist-client-core`](../query-persist-client-core), and provides a persister backed by an async key-value store (e.g. `AsyncStorage`).
 
 ## Why this exists
 

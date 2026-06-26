@@ -1,0 +1,47 @@
+# reselect (vendored)
+
+**Folder:** `src/reselect/`
+
+This folder is a vendored, MIT-licensed selector-memoization module, included directly in this package instead of depended on via npm. It is **not** listed in `package.json`'s `dependencies` — every other file in this package that needs selector-memoization utilities imports from `./reselect/index` (or, for the two re-exports the rest of the package actually consumes, from [`reselectImports`](../utils/04-reselect-imports)) rather than from a published npm package.
+
+Its original license (MIT) is preserved as-is at `src/reselect/LICENSE`.
+
+## Why vendor it instead of depending on it
+
+This package's `createDraftSafeSelector` and several internal selector helpers only need a small slice of this module's surface (`createSelectorCreator`, `weakMapMemoize`, plus the `createSelector`/`lruMemoize`/`createStructuredSelector` exports re-exported from this package's own root). Vendoring removes the runtime dependency on a separately published package while keeping that exact behavior, so consumers of `@headlesskit/state-management-toolkit` don't need to resolve anything extra.
+
+## Folder layout
+
+Doc pages mirror the source folder one-for-one — subfolders in `src/reselect/` get their own subfolder under `docs/state-management-toolkit/reselect/`, same as the rest of this package's docs:
+
+| Path | Covers |
+|------|--------|
+| [`createSelectorCreator.ts`](./02-create-selector) | `createSelector`, `createSelectorCreator`, and the `CreateSelectorFunction` interface |
+| [`weakMapMemoize.ts`](./03-weak-map-memoize) | The default `WeakMap`-based memoization strategy |
+| [`lruMemoize.ts`](./04-lru-memoize) | The legacy size-bounded LRU memoization strategy (formerly `defaultMemoize`) |
+| [`createStructuredSelector.ts`](./05-create-structured-selector) | `createStructuredSelector` — builds one selector from a map of selectors |
+| [`types.ts` · `utils.ts`](./06-types-and-utils) | Shared TypeScript types and small internal assertion/array helpers used across the files above |
+| [`autotrackMemoize/`](./autotrackMemoize/01-internals) | An experimental, fine-grained-tracking memoization strategy (`unstable_autotrackMemoize`) |
+| [`devModeChecks/`](./devModeChecks/01-internals) | Development-only sanity checks (identity-function check, input-stability check) and their global on/off switch |
+| [`versionedTypes/`](./versionedTypes/01-internals) | A tiny version-gated type helper (`MergeParameters`) that `types.ts` depends on |
+
+## What's actually exported from this package
+
+Most application code never imports from `src/reselect/` directly — it goes through this package's own root export, which re-exports the pieces that are part of the public API:
+
+```typescript
+import {
+  createSelector,
+  createSelectorCreator,
+  weakMapMemoize,
+  lruMemoize,
+  createStructuredSelector,
+} from '@headlesskit/state-management-toolkit';
+```
+
+`createDraftSafeSelector`/`createDraftSafeSelectorCreator` (this package's own Immer-draft-aware wrapper around `createSelectorCreator(weakMapMemoize)`) are documented separately at [createDraftSafeSelector](../03-create-draft-safe-selector).
+
+## Common pitfalls
+
+- **This is vendored source, not a thin wrapper.** Bug-for-bug behavior matches whatever version was vendored at copy time — it won't pick up upstream releases automatically. If you need a newer upstream feature, the fix is to update the vendored files, not to add a published package back as a dependency.
+- **Don't hand-edit files here to add project-specific behavior.** Treat this folder the same as any other vendored package in this repo (see `AGENTS.md`'s "Vendored vs. native packages" section) — keep it close to upstream so future updates stay a clean diff.

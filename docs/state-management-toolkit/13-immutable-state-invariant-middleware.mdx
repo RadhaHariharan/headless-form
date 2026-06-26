@@ -2,7 +2,7 @@
 
 **File:** `src/immutableStateInvariantMiddleware.ts` · Included by default via [getDefaultMiddleware](./10-get-default-middleware), development builds only.
 
-Detects accidental **direct mutation** of state outside a reducer — the single most common category of subtle Redux bugs (mutating a nested object reference held elsewhere, then wondering why a `useSelector`/subscriber never re-ran).
+Detects accidental **direct mutation** of state outside a reducer — the single most common category of subtle action/reducer bugs (mutating a nested object reference held elsewhere, then wondering why a `useSelector`/subscriber never re-ran).
 
 ## Signature
 

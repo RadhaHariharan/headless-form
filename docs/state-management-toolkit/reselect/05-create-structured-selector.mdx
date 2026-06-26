@@ -1,0 +1,55 @@
+# createStructuredSelector
+
+**File:** `src/reselect/createStructuredSelector.ts`
+
+Builds a single memoized selector from an object map of selectors, where each key's value comes from running the corresponding selector against the same state.
+
+```typescript
+import { createStructuredSelector } from '@headlesskit/state-management-toolkit';
+```
+
+## What it actually does
+
+```typescript
+const selectUser = createStructuredSelector({
+  name: (state: RootState) => state.user.name,
+  email: (state: RootState) => state.user.email,
+  isAdmin: (state: RootState) => state.user.role === 'admin',
+});
+
+selectUser(state); // { name: '...', email: '...', isAdmin: false }
+```
+
+This is equivalent to writing `createSelector([selectName, selectEmail, selectIsAdmin], (name, email, isAdmin) => ({ name, email, isAdmin }))` by hand — `createStructuredSelector` exists purely to remove that boilerplate when you just want to assemble several independent selector results into one object, with the same memoization guarantees `createSelector` gives you (the combined selector only recomputes the output object when at least one of the underlying selector results changes).
+
+## Signature
+
+```typescript
+createStructuredSelector<SelectorMap>(
+  selectorMap: SelectorMap,
+  selectorCreator?: typeof createSelector,
+): (state, ...params) => { [K in keyof SelectorMap]: ReturnType<SelectorMap[K]> }
+```
+
+The optional second argument lets you pass a differently-configured `createSelector` (e.g. one built via `createSelectorCreator` with a custom memoization strategy) instead of the package's default:
+
+```typescript
+import { createStructuredSelector, createSelectorCreator, lruMemoize } from '@headlesskit/state-management-toolkit';
+
+const createSizedSelector = createSelectorCreator(lruMemoize, { maxSize: 10 });
+
+const selectUser = createStructuredSelector(
+  {
+    name: (state: RootState) => state.user.name,
+    email: (state: RootState) => state.user.email,
+  },
+  createSizedSelector,
+);
+```
+
+`.withTypes<RootState>()` is also available here, mirroring `createSelector.withTypes`, to pre-type the selector map's state argument once instead of annotating every selector in the map.
+
+## Common pitfalls
+
+- **Every selector in the map is called on every invocation** — `createStructuredSelector` only memoizes the *combined object*, not whether each individual selector runs. If one of the underlying selectors is itself expensive and rarely changes, memoize it separately with `createSelector` first, then reference that memoized selector in the map.
+- **The returned object is a new reference whenever any input changes**, same as any `createSelector` result — components reading the whole object (rather than destructuring specific keys) will re-render whenever *any* key changes, not just the one they use.

@@ -28,7 +28,7 @@ export function useShallow<S, U>(selector: (state: S) => U): (state: S) => U {
 
 `useShallow` holds one piece of state across renders: `prev`, a `useRef` storing the last value the wrapped selector returned. Every time the underlying hook's `getSnapshot` runs the wrapped selector:
 1. It runs your original `selector(state)` to compute `next`.
-2. It compares `next` against `prev.current` using [`shallow`](../state-management-simplify/01-overview) — Zustand's shallow-equality function (re-exported from `@headlesskit/state-management-simplify`), which checks `Object.is` on top-level keys/array-elements rather than deep-equality or reference equality on the whole object.
+2. It compares `next` against `prev.current` using [`shallow`](../state-management-simplify/01-overview) — a shallow-equality function (re-exported from `@headlesskit/state-management-simplify`), which checks `Object.is` on top-level keys/array-elements rather than deep-equality or reference equality on the whole object.
 3. If they're shallowly equal, it returns the **previous reference** (`prev.current`) instead of `next` — this is the entire trick. Because `useSyncExternalStore` (inside `useStore`) compares snapshots with `Object.is`, returning the same reference as last time means React sees "nothing changed" and skips the re-render, even though `selector` itself just built a fresh object.
 4. Only when the shallow comparison fails does it store and return the new `next`, updating `prev.current` as a side effect of the snapshot-reading call itself.
 

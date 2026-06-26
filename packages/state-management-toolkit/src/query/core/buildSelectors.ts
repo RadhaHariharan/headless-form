@@ -28,8 +28,8 @@ import type {
 } from './apiState'
 import { STATUS_UNINITIALIZED, getRequestStatusFlags } from './apiState'
 import { getMutationCacheKey } from './buildSlice'
-import type { createSelector as _createSelector } from './rtkImports'
-import { createNextState } from './rtkImports'
+import type { createSelector as _createSelector } from './toolkitImports'
+import { createNextState } from './toolkitImports'
 import {
   type AllQueryKeys,
   getNextPageParam,
@@ -59,7 +59,7 @@ export type SkipToken = typeof skipToken
  * If passed directly into a query or mutation selector, that selector will always
  * return an uninitialized state.
  */
-export const skipToken = /* @__PURE__ */ Symbol.for('RTKQ/skipToken')
+export const skipToken = /* @__PURE__ */ Symbol.for('headlesskit-query/skipToken')
 
 export type BuildSelectorsApiEndpointQuery<
   Definition extends QueryDefinition<any, any, any, any, any>,

@@ -29,7 +29,7 @@ const PACKAGE_META = {
     name: 'state-management',
     npm: '@headlesskit/state-management',
     group: 'State Management',
-    description: 'Predictable state container, API-compatible with Redux v5.',
+    description: 'Predictable, action/reducer-based state container.',
   },
   'state-management-toolkit': {
     name: 'state-management-toolkit',
@@ -41,7 +41,7 @@ const PACKAGE_META = {
     name: 'state-management-simplify',
     npm: '@headlesskit/state-management-simplify',
     group: 'State Management',
-    description: 'A small, fast, scalable bare-bones store — API-compatible with Zustand.',
+    description: 'A small, fast, scalable bare-bones store for simple global state.',
   },
   'state-management-simplify-react': {
     name: 'state-management-simplify-react',
@@ -553,7 +553,7 @@ function renderLanding() {
     <div class="home">
       <div class="home-hero">
         <h1>◈ HeadlessKit</h1>
-        <p>Framework-agnostic form state engine with first-class React bindings — plus integrated TanStack Query and state management support.</p>
+        <p>Framework-agnostic form state engine with first-class React bindings — plus integrated async query and state management support.</p>
       </div>
       ${cardsHtml}
     </div>

@@ -62,7 +62,7 @@ export function isAllOf<Matchers extends Matcher<any>[]>(
 }
 
 /**
- * @param action A redux action
+ * @param action An action
  * @param validStatus An array of valid meta.requestStatus values
  *
  * @internal

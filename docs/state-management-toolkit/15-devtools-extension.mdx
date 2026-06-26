@@ -2,7 +2,11 @@
 
 **File:** `src/devtoolsExtension.ts`
 
-Integrates with the [Redux DevTools browser extension](https://github.com/reduxjs/redux-devtools), if it's installed. [configureStore](./04-configure-store) uses this automatically (`devTools: true` by default) — most apps never import from this file directly.
+Integrates with headlesskit's own DevTools connector, if one is installed. [configureStore](./04-configure-store) uses this automatically (`devTools: true` by default) — most apps never import from this file directly.
+
+This file owns the connector types and the ambient `window.__HEADLESSKIT_DEVTOOLS_EXTENSION__`/`window.__HEADLESSKIT_DEVTOOLS_EXTENSION_COMPOSE__` global declarations for this package. [state-management-simplify's devtools middleware](../state-management-simplify/06-middleware-devtools) declares the same globals independently, since each package is built and type-checked on its own.
+
+These globals are **headlesskit's own** — they are not set by, and have no relation to, any third-party browser extension. No connector ships yet (a DevTools UI/connector that populates these globals is planned future work); until one exists, `devTools: true` is a safe no-op.
 
 ## `composeWithDevTools(options)`
 
@@ -11,11 +15,7 @@ function composeWithDevTools(...funcs: StoreEnhancer[]): StoreEnhancer
 function composeWithDevTools(options: DevToolsEnhancerOptions): Compose
 ```
 
-A drop-in alternative to plain `compose` from `@headlesskit/state-management` that also wires in the DevTools extension's enhancer, **if** `window.__REDUX_DEVTOOLS_EXTENSION_COMPOSE__` exists (set by the browser extension itself when installed). If the extension isn't installed, this silently falls back to plain `compose` — your app behaves identically whether or not the extension is present.
-
-## `devToolsEnhancer(options)`
-
-The raw enhancer itself (`window.__REDUX_DEVTOOLS_EXTENSION__`), with a safe no-op fallback (`(noop) => noop`) when the extension isn't present. `configureStore` doesn't call this directly — it uses `composeWithDevTools`, which already wraps this internally.
+A drop-in alternative to plain `compose` from `@headlesskit/state-management` that also wires in the DevTools connector's enhancer, **if** `window.__HEADLESSKIT_DEVTOOLS_EXTENSION_COMPOSE__` exists (populated by whatever installs a headlesskit DevTools connector). If nothing has populated it, this silently falls back to plain `compose` — your app behaves identically either way.
 
 ## `DevToolsEnhancerOptions` — selected options
 
@@ -43,7 +43,7 @@ const store = configureStore({
 });
 ```
 
-## Advanced: redacting sensitive state before it reaches the DevTools extension
+## Advanced: redacting sensitive state before it reaches the DevTools connector
 
 ```typescript
 const store = configureStore({
@@ -72,5 +72,6 @@ const store = createStore(
 
 ## Common pitfalls
 
-- **`devTools: true` (the default) does nothing if the browser extension isn't installed** — it's a no-op fallback, not an error; if you expect to see your store in the DevTools panel and don't, check that the extension is actually installed/enabled in that browser, before assuming `configureStore` is misconfigured.
-- **Sanitizers only affect what the DevTools panel *displays***, not what's actually stored in application state — `actionSanitizer`/`stateSanitizer` don't redact your real Redux state, only the copy shipped to the extension's UI.
+- **`devTools: true` (the default) does nothing until a connector populates `window.__HEADLESSKIT_DEVTOOLS_EXTENSION__`** — it's a no-op fallback, not an error. No connector ships in this package yet; this is wiring for future work, not something you can currently watch in a panel.
+- **No other browser extension will connect here.** This package only reads its own `__HEADLESSKIT_DEVTOOLS_EXTENSION__` globals — nothing else populates them.
+- **Sanitizers only affect what the DevTools panel *displays***, not what's actually stored in application state — `actionSanitizer`/`stateSanitizer` don't redact your real application state, only the copy shipped to the connector's UI.

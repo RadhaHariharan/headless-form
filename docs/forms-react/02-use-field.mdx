@@ -29,7 +29,7 @@ if (storeRef.current === null) {
 }
 ```
 
-`useField` doesn't reimplement any form logic — it builds a real [createFormStore](../../forms/store/01-create-form-store) instance whose `Values` type is the single-key object `{ field: Value }`, then exposes a narrower, field-shaped API over that one-field store. This is why `useField` gets validation debouncing, async validation generation-guarding, dirty/touched tracking, and the uncontrolled remount trick *for free* — it's all the exact same machinery [useForm](./01-use-form) uses, just pre-wired to operate on the single synthetic `'field'` path.
+`useField` doesn't reimplement any form logic — it builds a real [createFormStore](../forms/store/01-create-form-store) instance whose `Values` type is the single-key object `{ field: Value }`, then exposes a narrower, field-shaped API over that one-field store. This is why `useField` gets validation debouncing, async validation generation-guarding, dirty/touched tracking, and the uncontrolled remount trick *for free* — it's all the exact same machinery [useForm](./01-use-form) uses, just pre-wired to operate on the single synthetic `'field'` path.
 
 ```typescript
 const snapshot = useSyncExternalStore(
@@ -54,7 +54,7 @@ Same `useSyncExternalStore` bridging pattern as [useForm](./01-use-form) — eve
 | `initialValue` | `Value` | *(required)* | The field's starting value — becomes `{ field: initialValue }` internally. |
 | `validate` | `(value: Value) => TError \| null \| undefined \| Promise<...>` | none | A single-field rule — note the signature takes only `value` (no `values`/`path`, unlike core's `ValidationRule`), since there's no meaningful "whole form" or "other fields" in a standalone field. |
 | `validateOnChange` / `validateOnBlur` | `boolean` | `false` | Maps directly to the underlying store's `validateInputOnChange`/`validateInputOnBlur`. |
-| `resolveValidationError` | `(error: unknown) => TError` | none | Same semantics as [UseFormOptions](../../forms/types/01-store-types)'s option of the same name. |
+| `resolveValidationError` | `(error: unknown) => TError` | none | Same semantics as [UseFormOptions](../forms/types/01-store-types)'s option of the same name. |
 | `type` | `'input' \| 'checkbox' \| 'radio'` | `'input'` | Forwarded to the internal `getInputProps('field', { type })` call. |
 | `mode` | `FormMode` | `'controlled'` | **Note:** unlike [useForm](./01-use-form), `useField` does **not** override this to `'uncontrolled'` — it keeps core's own default. Pass `mode: 'uncontrolled'` explicitly if you want the same zero-re-render-on-typing behavior `useForm` gives you by default. |
 

@@ -42,7 +42,7 @@ Mathematically, `compose(f, g, h)` is `f(g(h(...)))` — read it right to left, 
 
 ## Why it exists in this package: composing store enhancers
 
-`compose`'s main real-world job in Redux is combining multiple [store enhancers](04-apply-middleware) into one, since `createStore` only accepts a single `enhancer` argument:
+`compose`'s main real-world job is combining multiple [store enhancers](04-apply-middleware) into one, since `createStore` only accepts a single `enhancer` argument:
 
 ```typescript
 import { createStore, applyMiddleware, compose } from '@headlesskit/state-management';
@@ -56,7 +56,7 @@ const store = createStore(
 );
 ```
 
-## Advanced: integrating the Redux DevTools enhancer
+## Advanced: integrating the DevTools enhancer
 
 A very common real-world snippet — DevTools expects to be the *outermost* enhancer (so it can observe everything, including actions handled entirely within other enhancers), which is why it goes first (leftmost) in the `compose` call:
 
@@ -65,12 +65,12 @@ import { createStore, applyMiddleware, compose } from '@headlesskit/state-manage
 
 declare global {
   interface Window {
-    __REDUX_DEVTOOLS_EXTENSION_COMPOSE__?: typeof compose;
+    __HEADLESSKIT_DEVTOOLS_EXTENSION_COMPOSE__?: typeof compose;
   }
 }
 
 const composeEnhancers =
-  (typeof window !== 'undefined' && window.__REDUX_DEVTOOLS_EXTENSION_COMPOSE__) || compose;
+  (typeof window !== 'undefined' && window.__HEADLESSKIT_DEVTOOLS_EXTENSION_COMPOSE__) || compose;
 
 const store = createStore(
   rootReducer,
@@ -82,7 +82,7 @@ const store = createStore(
 
 ## Advanced: composing reusable data-transform pipelines
 
-`compose` is generic — nothing about it is Redux-specific. It's useful any time you have a pipeline of single-argument transforms you want to name and reuse:
+`compose` is generic — nothing about it is specific to this package. It's useful any time you have a pipeline of single-argument transforms you want to name and reuse:
 
 ```typescript
 import { compose } from '@headlesskit/state-management';

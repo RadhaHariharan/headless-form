@@ -1,11 +1,11 @@
 # State Management Simplify
 
-`@headlesskit/state-management-simplify` is a line-for-line port of [Zustand's](https://github.com/pmndrs/zustand) vanilla (framework-agnostic) core and middleware — originally created by Paul Henschel and the [pmndrs](https://github.com/pmndrs) collective. The logic, types, and comments are unchanged from upstream Zustand; only the relative import paths were adapted from `.ts` to explicit `.js` extensions to match this monorepo's module resolution convention.
+`@headlesskit/state-management-simplify` is a small, fast, bare-bones vanilla (framework-agnostic) store core and middleware set, with no boilerplate.
 
 | Package | Description |
 |---------|-------------|
-| `@headlesskit/state-management` | Redux v5-compatible — predictable, action/reducer-based |
-| `@headlesskit/state-management-simplify` | Zustand-compatible — a small, fast, bare-bones store with no boilerplate |
+| `@headlesskit/state-management` | Predictable, action/reducer-based store |
+| `@headlesskit/state-management-simplify` | A small, fast, bare-bones store with no boilerplate |
 
 ---
 
@@ -27,11 +27,11 @@ pnpm add immer
 
 ## Core concepts
 
-Where `@headlesskit/state-management` (Redux) is built around dispatching plain-object actions through pure reducers, this package takes the opposite, more minimal approach:
+Where `@headlesskit/state-management` is built around dispatching plain-object actions through pure reducers, this package takes the opposite, more minimal approach:
 
 1. **One function, no boilerplate.** `createStore` takes a single initializer function `(set, get, api) => state` and returns a store. There are no action types, no switch statements, no reducers required.
 2. **`set` does a shallow merge by default.** Calling `set(partial)` merges `partial` into the current state with `Object.assign`. Pass `true` as the second argument to replace the state outright instead of merging.
-3. **Middleware wraps the initializer, not the store.** Every middleware in this package (`redux`, `devtools`, `persist`, `immer`, `combine`, `subscribeWithSelector`, `unstable_ssrSafe`) has the same shape: it receives your `StateCreator` and returns a new, wrapped `StateCreator`. They compose by nesting function calls.
+3. **Middleware wraps the initializer, not the store.** Every middleware in this package (`reducerMiddleware`, `devtools`, `persist`, `immer`, `combine`, `subscribeWithSelector`, `unstable_ssrSafe`) has the same shape: it receives your `StateCreator` and returns a new, wrapped `StateCreator`. They compose by nesting function calls.
 
 ```
 createStore(middlewareA(middlewareB(initializer))) → StoreApi<T>
@@ -42,8 +42,8 @@ This page covers concepts and how the pieces fit together. Each export below has
 - [createStore](02-create-store) — builds the store; covers `StoreApi`, `StateCreator`, `ExtractState`, `Mutate`
 - [shallow](03-shallow) — the shallow-equality comparator used for selector-based re-render checks
 - [combine](04-middleware-combine) — merges an initial state object into a `StateCreator`'s return value
-- [redux](05-middleware-redux) — Redux-style `dispatch`/reducer pattern layered on top of a vanilla store
-- [devtools](06-middleware-devtools) — Redux DevTools Extension integration
+- [reducerMiddleware](05-middleware-reducer) — `dispatch`/reducer pattern layered on top of a vanilla store
+- [devtools](06-middleware-devtools) — in-app DevTools overlay integration
 - [persist](07-middleware-persist) — persistence to `localStorage` (or any custom storage), with versioned migration
 - [subscribeWithSelector](08-middleware-subscribe-with-selector) — selector-scoped subscriptions with an equality function
 - [unstable_ssrSafe](09-middleware-ssr-safe) — guards against calling `setState` during server-side rendering
@@ -80,12 +80,12 @@ console.log(store.getState().count); // 1
 
 ---
 
-## When to reach for `state-management` (Redux) instead
+## When to reach for `state-management` instead
 
-This package's `createStore` is a single, ungoverned function call — there's no enforced separation between "actions" and "state changes," and any function defined on the state object can call `set` directly. That's the appeal (less ceremony, smaller surface area) but it also means there's no built-in action log, no time-travel debugging without the `devtools` middleware, and no `combineReducers`-style enforced modularity. Reach for `@headlesskit/state-management` instead when you want predictable, traceable state changes (every change is an inspectable action object) or you're integrating with existing Redux tooling; reach for this package when you want the smallest possible API surface for typical app or component state.
+This package's `createStore` is a single, ungoverned function call — there's no enforced separation between "actions" and "state changes," and any function defined on the state object can call `set` directly. That's the appeal (less ceremony, smaller surface area) but it also means there's no built-in action log, no time-travel debugging without the `devtools` middleware, and no `combineReducers`-style enforced modularity. Reach for `@headlesskit/state-management` instead when you want predictable, traceable state changes (every change is an inspectable action object) or you're integrating with existing action/reducer-based tooling; reach for this package when you want the smallest possible API surface for typical app or component state.
 
 ---
 
 ## License
 
-MIT — identical to Zustand upstream.
+MIT — see [LICENSE](../../LICENSE).

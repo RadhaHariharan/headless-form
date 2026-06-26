@@ -3,19 +3,21 @@
 **File:** `src/reselectImports.ts` · Internal, not exported from the package root.
 
 ```typescript
-export { createSelectorCreator, weakMapMemoize } from 'reselect'
+export { createSelectorCreator, weakMapMemoize } from './reselect/index'
 ```
 
-The smallest of the three dependency-isolation barrels (alongside [reduxImports](./02-redux-imports) and [immerImports](./03-immer-imports)) — re-exports exactly the two pieces of [reselect](https://github.com/reduxjs/reselect) that [createDraftSafeSelector](../03-create-draft-safe-selector) builds on:
+The smallest of the three dependency-isolation barrels (alongside [stateManagementImports](./02-state-management-imports) and [immerImports](./03-immer-imports)) — re-exports exactly the two pieces of the vendored [selector module](../reselect/01-overview) that [createDraftSafeSelector](../03-create-draft-safe-selector) builds on:
 
 | Re-export | Used for |
 |-----------|----------|
 | `createSelectorCreator` | Builds a custom-memoization-strategy version of `createSelector` — `createDraftSafeSelector` is exactly `createSelectorCreator(weakMapMemoize)` wrapped with draft-detection. |
-| `weakMapMemoize` | `reselect`'s `WeakMap`-based memoization strategy — chosen as the default for `createDraftSafeSelector` because it scales well across selectors instantiated repeatedly with different (but structurally similar) input combinations, without manual cache-size tuning. |
+| `weakMapMemoize` | The vendored module's `WeakMap`-based memoization strategy — chosen as the default for `createDraftSafeSelector` because it scales well across selectors instantiated repeatedly with different (but structurally similar) input combinations, without manual cache-size tuning. |
+
+This module is no longer pulled in as an npm dependency — its source lives directly under [`src/reselect/`](../reselect/01-overview), so this barrel and every other internal import resolve locally instead of through `node_modules`.
 
 ## Basic usage (you won't import this directly)
 
-Application code that needs `reselect`'s own exports directly (`createSelector`, other memoize strategies, etc.) should depend on and import from `reselect` itself; this file exists purely to centralize the toolkit's own internal dependency on those two specific exports.
+Application code that needs the vendored module's own exports directly (`createSelector`, other memoize strategies, etc.) should import from `@headlesskit/state-management-toolkit`'s root, which re-exports them — see [the selector module overview](../reselect/01-overview). This file exists purely to centralize the toolkit's own internal dependency on those two specific exports.
 
 ## Common pitfalls
 

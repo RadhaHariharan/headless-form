@@ -2,7 +2,7 @@
 
 **File:** `src/query/core/setupListeners.ts`
 
-Wires up the browser event listeners (`focus`, `visibilitychange`, `online`, `offline`) that [createApi](./01-create-api)'s `refetchOnFocus` and `refetchOnReconnect` options depend on. Without calling this once, those two options have no effect — RTK Query has no other way of knowing the window regained focus or the network reconnected.
+Wires up the browser event listeners (`focus`, `visibilitychange`, `online`, `offline`) that [createApi](./01-create-api)'s `refetchOnFocus` and `refetchOnReconnect` options depend on. Without calling this once, those two options have no effect — this query layer has no other way of knowing the window regained focus or the network reconnected.
 
 ## Signature
 

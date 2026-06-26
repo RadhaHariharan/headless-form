@@ -69,7 +69,7 @@ Wipes **all** cached data, subscriptions, and in-flight request tracking for thi
 
 ## `api.util.getRunningQueriesThunk()` / `getRunningMutationsThunk()` / `getRunningQueryThunk(name, arg)` / `getRunningMutationThunk(name, key)`
 
-Dispatchable thunks that return the actual in-flight `Promise`s for currently-running requests — primarily used by SSR frameworks' RTK Query integrations to `await` all queries a server-rendered page kicked off before sending the response.
+Dispatchable thunks that return the actual in-flight `Promise`s for currently-running requests — primarily used by SSR frameworks integrating with this query layer to `await` all queries a server-rendered page kicked off before sending the response.
 
 ## Common pitfalls
 

@@ -1,14 +1,9 @@
 /*
- * Adapted from Zustand's demo site (https://github.com/pmndrs/zustand/tree/main/examples/demo),
- * MIT licensed, Copyright (c) 2019 Paul Henschel — see /NOTICE.md at the repo root.
- *
- * The original demo's 3D parallax bear scene (react-three-fiber/drei/postprocessing) was
- * intentionally dropped here — it's pure decoration with no state-management logic in it.
- * Everything below is the layout/typography/syntax-highlighting CSS for the parts that DO
- * demonstrate the package: the counter, the code preview, and the nav/footer links.
+ * Layout/typography/syntax-highlighting CSS for the state management demo: the counter,
+ * the code preview, and the nav/footer links.
  */
 
-.zustandDemoPage {
+.stateDemoPage {
   position: relative;
   width: 100%;
   min-height: 100vh;
@@ -30,7 +25,7 @@
     sans-serif;
 }
 
-.zustandDemoPage a {
+.stateDemoPage a {
   font-family: inherit;
   font-weight: 400;
   font-size: 16px;
@@ -38,13 +33,13 @@
   text-decoration: none;
 }
 
-.zustandDemoPage .main {
+.stateDemoPage .main {
   position: relative;
   width: 100%;
   min-height: 100vh;
 }
 
-.zustandDemoPage .main > .code {
+.stateDemoPage .main > .code {
   position: relative;
   margin: 0 auto;
   padding: 160px 24px 220px;
@@ -55,12 +50,12 @@
   justify-content: center;
 }
 
-.zustandDemoPage .code-container {
+.stateDemoPage .code-container {
   position: relative;
   margin-bottom: 60px;
 }
 
-.zustandDemoPage .counter {
+.stateDemoPage .counter {
   position: absolute;
   top: -100px;
   right: -20px;
@@ -74,7 +69,7 @@
   font-size: 3em;
 }
 
-.zustandDemoPage .counter > span {
+.stateDemoPage .counter > span {
   position: absolute;
   left: 50%;
   top: 50%;
@@ -82,7 +77,7 @@
   transform: translate3d(-50%, -50%, 0);
 }
 
-.zustandDemoPage .counter > button {
+.stateDemoPage .counter > button {
   margin: 10px;
   padding: 5px 10px;
   position: absolute;
@@ -97,7 +92,7 @@
   cursor: pointer;
 }
 
-.zustandDemoPage .code-container pre[class*='language-'] {
+.stateDemoPage .code-container pre[class*='language-'] {
   margin-top: 0;
   display: inline-block;
   width: auto !important;
@@ -108,7 +103,7 @@
   white-space: pre-wrap !important;
 }
 
-.zustandDemoPage span.header-left {
+.stateDemoPage span.header-left {
   font-weight: 700;
   text-transform: uppercase;
   position: absolute;
@@ -120,7 +115,7 @@
   line-height: 1em;
 }
 
-.zustandDemoPage .nav {
+.stateDemoPage .nav {
   align-items: center;
   display: flex;
   gap: 16px;
@@ -131,12 +126,12 @@
   top: 40px;
 }
 
-.zustandDemoPage .nav a {
+.stateDemoPage .nav a {
   position: relative;
   flex: 0 0 auto;
 }
 
-.zustandDemoPage .bottom {
+.stateDemoPage .bottom {
   position: fixed;
   bottom: 40px;
   left: 40px;
@@ -144,21 +139,21 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 12px;
 }
 
-.zustandDemoPage .bottom a {
+.stateDemoPage .bottom a {
   position: static;
 }
 
-.zustandDemoPage .bottom-links {
+.stateDemoPage .bottom-links {
   display: flex;
   gap: 16px;
   align-items: center;
 }
 
-.zustandDemoPage .snippet-container {
+.stateDemoPage .snippet-container {
   display: flex;
   align-items: center;
   gap: 4px;
@@ -168,7 +163,7 @@
   padding: 5px;
 }
 
-.zustandDemoPage .snippet-lang {
+.stateDemoPage .snippet-lang {
   background-color: #272822;
   color: #fff;
   outline: 0;
@@ -176,7 +171,7 @@
   font: inherit;
 }
 
-.zustandDemoPage .copy-button {
+.stateDemoPage .copy-button {
   box-shadow: none;
   text-decoration: none;
   font-size: 14px;
@@ -192,30 +187,29 @@
   cursor: pointer;
 }
 
-.zustandDemoPage .copy-button:hover {
+.stateDemoPage .copy-button:hover {
   background-color: #5f5e5d;
 }
 
 @media only screen and (max-width: 700px) {
-  .zustandDemoPage span.header-left {
+  .stateDemoPage span.header-left {
     font-size: 1em;
   }
-  .zustandDemoPage .code-container > pre[class*='language-'] {
+  .stateDemoPage .code-container > pre[class*='language-'] {
     font-size: 0.6rem !important;
     border-radius: 10px 10px 0 0 !important;
   }
-  .zustandDemoPage .counter {
+  .stateDemoPage .counter {
     position: absolute;
     top: -120px;
   }
 }
 
 /*
- * Pmndrs Prism theme (loosely based on the VS Code "pmndrs" theme), unchanged from the
- * original demo — see attribution comment at the top of this file.
+ * Dark Prism syntax theme for the code preview.
  */
-.zustandDemoPage code[class*='language-'],
-.zustandDemoPage pre[class*='language-'] {
+.stateDemoPage code[class*='language-'],
+.stateDemoPage pre[class*='language-'] {
   color: #e4f0fb !important;
   background: none !important;
   text-shadow: 0 1px rgba(0, 0, 0, 0.3) !important;
@@ -236,93 +230,93 @@
   hyphens: none !important;
 }
 
-.zustandDemoPage pre[class*='language-'] {
+.stateDemoPage pre[class*='language-'] {
   padding: 3.75em !important;
   margin: -2.5em 0 !important;
   overflow: auto !important;
   border-radius: 0.75em !important;
 }
 
-.zustandDemoPage :not(pre) > code[class*='language-'],
-.zustandDemoPage pre[class*='language-'] {
+.stateDemoPage :not(pre) > code[class*='language-'],
+.stateDemoPage pre[class*='language-'] {
   background: #252b37 !important;
 }
 
-.zustandDemoPage :not(pre) > code[class*='language-'] {
+.stateDemoPage :not(pre) > code[class*='language-'] {
   padding: 0.1em !important;
   border-radius: 0.3em !important;
   white-space: normal !important;
 }
 
-.zustandDemoPage .token.comment,
-.zustandDemoPage .token.prolog,
-.zustandDemoPage .token.doctype,
-.zustandDemoPage .token.cdata {
+.stateDemoPage .token.comment,
+.stateDemoPage .token.prolog,
+.stateDemoPage .token.doctype,
+.stateDemoPage .token.cdata {
   color: #a6accd !important;
 }
 
-.zustandDemoPage .token.punctuation {
+.stateDemoPage .token.punctuation {
   color: #e4f0fb !important;
 }
 
-.zustandDemoPage .token.namespace {
+.stateDemoPage .token.namespace {
   opacity: 0.7 !important;
 }
 
-.zustandDemoPage .token.property,
-.zustandDemoPage .token.tag,
-.zustandDemoPage .token.constant,
-.zustandDemoPage .token.symbol,
-.zustandDemoPage .token.deleted {
+.stateDemoPage .token.property,
+.stateDemoPage .token.tag,
+.stateDemoPage .token.constant,
+.stateDemoPage .token.symbol,
+.stateDemoPage .token.deleted {
   color: #e4f0fb !important;
 }
 
-.zustandDemoPage .token.boolean,
-.zustandDemoPage .token.number {
+.stateDemoPage .token.boolean,
+.stateDemoPage .token.number {
   color: #5de4c7 !important;
 }
 
-.zustandDemoPage .token.selector,
-.zustandDemoPage .token.attr-value,
-.zustandDemoPage .token.string,
-.zustandDemoPage .token.char,
-.zustandDemoPage .token.builtin,
-.zustandDemoPage .token.inserted {
+.stateDemoPage .token.selector,
+.stateDemoPage .token.attr-value,
+.stateDemoPage .token.string,
+.stateDemoPage .token.char,
+.stateDemoPage .token.builtin,
+.stateDemoPage .token.inserted {
   color: #5de4c7 !important;
 }
 
-.zustandDemoPage .token.attr-name,
-.zustandDemoPage .token.operator,
-.zustandDemoPage .token.entity,
-.zustandDemoPage .token.url,
-.zustandDemoPage .token.variable {
+.stateDemoPage .token.attr-name,
+.stateDemoPage .token.operator,
+.stateDemoPage .token.entity,
+.stateDemoPage .token.url,
+.stateDemoPage .token.variable {
   color: #add7ff !important;
 }
 
-.zustandDemoPage .token.atrule,
-.zustandDemoPage .token.function,
-.zustandDemoPage .token.class-name {
+.stateDemoPage .token.atrule,
+.stateDemoPage .token.function,
+.stateDemoPage .token.class-name {
   color: #5de4c7 !important;
 }
 
-.zustandDemoPage .token.keyword {
+.stateDemoPage .token.keyword {
   color: #add7ff !important;
 }
 
-.zustandDemoPage .token.regex,
-.zustandDemoPage .token.important {
+.stateDemoPage .token.regex,
+.stateDemoPage .token.important {
   color: #fffac2 !important;
 }
 
-.zustandDemoPage .token.important,
-.zustandDemoPage .token.bold {
+.stateDemoPage .token.important,
+.stateDemoPage .token.bold {
   font-weight: bold !important;
 }
 
-.zustandDemoPage .token.italic {
+.stateDemoPage .token.italic {
   font-style: italic !important;
 }
 
-.zustandDemoPage .token.entity {
+.stateDemoPage .token.entity {
   cursor: help !important;
 }

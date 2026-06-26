@@ -1,5 +1,5 @@
 import type { Dispatch, UnknownAction } from '@headlesskit/state-management'
-import type { ThunkDispatch } from 'redux-thunk'
+import type { ThunkDispatch } from './thunkMiddlewareTypes'
 import type { ActionCreatorWithPreparedPayload } from './createAction'
 import { createAction } from './createAction'
 import { isAnyOf } from './matchers'
@@ -706,9 +706,7 @@ export const createAsyncThunk = /* @__PURE__ */ (() => {
             }
           }
           // We dispatch the result action _after_ the catch, to avoid having any errors
-          // here get swallowed by the try/catch block,
-          // per https://twitter.com/dan_abramov/status/770914221638942720
-          // and https://github.com/reduxjs/redux-toolkit/blob/e85eb17b39a2118d859f7b7746e0f3fee523e089/docs/tutorials/advanced-tutorial.md#async-error-handling-logic-in-thunks
+          // here get swallowed by the try/catch block.
 
           const skipDispatch =
             options &&

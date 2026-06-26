@@ -1,1 +1,1 @@
-export { createSelectorCreator, weakMapMemoize } from 'reselect'
+export { createSelectorCreator, weakMapMemoize } from './reselect/index'

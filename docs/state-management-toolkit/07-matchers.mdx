@@ -2,7 +2,7 @@
 
 **File:** `src/matchers.ts`
 
-A set of predicate-function builders for checking action shapes — both general-purpose (`isAnyOf`, `isAllOf`) and specifically tailored to the pending/fulfilled/rejected actions produced by [createAsyncThunk](./05-create-async-thunk). Heavily used in `createReducer`/`createSlice`'s `addMatcher` (see [createReducer](./02-create-reducer)).
+A set of predicate-function builders for checking action shapes — both general-purpose (`isAnyOf`, `isAllOf`) and specifically tailored to the pending/fulfilled/rejected actions produced by [createAsyncThunk](./06-create-async-thunk). Heavily used in `createReducer`/`createSlice`'s `addMatcher` (see [createReducer](./02-create-reducer)).
 
 ## `isAnyOf(...matchers)`
 
@@ -11,7 +11,7 @@ function isAnyOf<Matchers extends Matcher<any>[]>(...matchers: Matchers):
   (action: any) => action is ActionMatchingAnyOf<Matchers>
 ```
 
-Returns `true` if **any** of the supplied matchers accepts the action. Each "matcher" can be either a plain type-guard function (`(action) => boolean`) or anything with a `.match()` method (action creators from [createAction](./01-create-action), or thunk action creators from [createAsyncThunk](./05-create-async-thunk)).
+Returns `true` if **any** of the supplied matchers accepts the action. Each "matcher" can be either a plain type-guard function (`(action) => boolean`) or anything with a `.match()` method (action creators from [createAction](./01-create-action), or thunk action creators from [createAsyncThunk](./06-create-async-thunk)).
 
 ```typescript
 import { isAnyOf } from '@headlesskit/state-management-toolkit';
@@ -70,7 +70,7 @@ const isUserOrPostsLoading = isPending(fetchUser, fetchPosts);
 function isRejectedWithValue(...asyncThunks): (action) => boolean
 ```
 
-A narrower version of `isRejected` — only matches rejections that came from the thunk explicitly calling `rejectWithValue(...)` (see [createAsyncThunk](./05-create-async-thunk)), as opposed to an unexpected thrown error. Checks `action.meta.rejectedWithValue === true`, a flag only `rejectWithValue`-triggered rejections carry.
+A narrower version of `isRejected` — only matches rejections that came from the thunk explicitly calling `rejectWithValue(...)` (see [createAsyncThunk](./06-create-async-thunk)), as opposed to an unexpected thrown error. Checks `action.meta.rejectedWithValue === true`, a flag only `rejectWithValue`-triggered rejections carry.
 
 ## Basic usage: a generic "any request loading" reducer
 

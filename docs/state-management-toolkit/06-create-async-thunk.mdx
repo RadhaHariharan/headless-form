@@ -30,7 +30,7 @@ function createAsyncThunk<Returned, ThunkArg = void, ThunkApiConfig extends Asyn
 |-------|------|--------------|
 | `dispatch` | `Dispatch` | The store's dispatch function — for dispatching other actions/thunks from within this one. |
 | `getState` | `() => State` | Reads current store state. |
-| `extra` | your "extra argument" | Whatever was configured as the thunk middleware's extra argument (e.g. an API client instance) — see [getDefaultMiddleware](./09-get-default-middleware). |
+| `extra` | your "extra argument" | Whatever was configured as the thunk middleware's extra argument (e.g. an API client instance) — see [getDefaultMiddleware](./10-get-default-middleware). |
 | `requestId` | `string` | Unique ID for this specific dispatch — generated fresh on every call, shared by all three lifecycle actions for that call (so you can correlate them). |
 | `signal` | `AbortSignal` | Wired to the thunk's `.abort()` method — check `signal.aborted` (or pass `signal` straight into `fetch`) to support cancellation. |
 | `abort(reason?)` | `(reason?: string) => void` | Programmatically aborts from inside the payload creator itself. |

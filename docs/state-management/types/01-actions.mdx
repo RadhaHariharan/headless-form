@@ -53,7 +53,7 @@ interface AnyAction extends Action {
 }
 ```
 
-Identical to `UnknownAction` except extra fields are typed `any` instead of `unknown` — meaning TypeScript lets you access and use them with zero checking, which defeats much of the purpose of typing actions at all. Kept only for backward compatibility with code written against older Redux types; prefer `UnknownAction` (or your own specific action union) in new code.
+Identical to `UnknownAction` except extra fields are typed `any` instead of `unknown` — meaning TypeScript lets you access and use them with zero checking, which defeats much of the purpose of typing actions at all. Kept only for backward compatibility with code written against older action types; prefer `UnknownAction` (or your own specific action union) in new code.
 
 ## `ActionCreator<A, P>`
 

@@ -7,10 +7,10 @@ type SubscribeWithSelector = <
 >(
   initializer: StateCreator<
     T,
-    [...Mps, ['zustand/subscribeWithSelector', never]],
+    [...Mps, ['headlesskit/subscribeWithSelector', never]],
     Mcs
   >,
-) => StateCreator<T, Mps, [['zustand/subscribeWithSelector', never], ...Mcs]>
+) => StateCreator<T, Mps, [['headlesskit/subscribeWithSelector', never], ...Mcs]>
 
 type Write<T, U> = Omit<T, keyof U> & U
 
@@ -21,7 +21,7 @@ type WithSelectorSubscribe<S> = S extends { getState: () => infer T }
 declare module '../vanilla.js' {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   interface StoreMutators<S, A> {
-    ['zustand/subscribeWithSelector']: WithSelectorSubscribe<S>
+    ['headlesskit/subscribeWithSelector']: WithSelectorSubscribe<S>
   }
 }
 
